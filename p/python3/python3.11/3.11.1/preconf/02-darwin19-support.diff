@@ -1,0 +1,900 @@
+--- a/Doc/using/configure.rst	1670353527.000000000
++++ b/Doc/using/configure.rst	1672907401.515037053
+@@ -537,6 +537,8 @@
+    * ``intel``;
+    * ``intel-32``;
+    * ``intel-64``;
++   * ``iossim``;
++   * ``a12``;
+    * ``all``.
+ 
+ .. cmdoption:: --with-framework-name=FRAMEWORK
+--- a/Lib/distutils/unixccompiler.py	1670353527.000000000
++++ b/Lib/distutils/unixccompiler.py	1672909279.483340158
+@@ -305,7 +305,7 @@
+ 
+             if sys.platform == 'darwin' and (
+                 dir.startswith('/System/') or (
+-                dir.startswith('/usr/') and not dir.startswith('/usr/local/'))):
++                dir.startswith('/usr/'))):
+ 
+                 shared = os.path.join(sysroot, dir[1:], shared_f)
+                 dylib = os.path.join(sysroot, dir[1:], dylib_f)
+--- a/Lib/platform.py	1670353527.000000000
++++ b/Lib/platform.py	1672909389.635738488
+@@ -428,13 +428,19 @@
+     if machine in ('ppc', 'Power Macintosh'):
+         # Canonical name
+         machine = 'PowerPC'
++    # Neh, for those guys not using my uname patch
++    # Currently I only see arm64 devices returning model name when uname.machine
++    # If theres same thing happens to other archs, I will change the machine
++    # to 'Embedded' that I don't have to detect arch
++    if re.match(r'(?i)iPhone.*|iPad.*|iPod.*|Watch.*|AppleTV.*|AudioAccessory.*', machine):
++        machine = 'arm64'
+ 
+     return release, versioninfo, machine
+ 
+ 
+ def mac_ver(release='', versioninfo=('', '', ''), machine=''):
+ 
+-    """ Get macOS version information and return it as tuple (release,
++    """ Get Darwin version information and return it as tuple (release,
+         versioninfo, machine) with versioninfo being a tuple (version,
+         dev_stage, non_release_version).
+ 
+@@ -1214,11 +1220,16 @@
+         system, release, version = system_alias(system, release, version)
+ 
+     if system == 'Darwin':
+-        # macOS (darwin kernel)
+-        macos_release = mac_ver()[0]
+-        if macos_release:
+-            system = 'macOS'
+-            release = macos_release
++        # darwin kernel
++        darwin_release = mac_ver()[0]
++        if darwin_release:
++            # macOS stores DSCs at /System/Library/dyld
++            if not os.path.exists('/System/Library/Caches/com.apple.dyld'):
++                system = 'macOS'
++            else:
++                # This is terrible, we should read ProductName
++                system = 'iOS'
++            release = darwin_release
+ 
+     if system == 'Windows':
+         # MS platforms
+--- a/Lib/sysconfig.py	1670353527.000000000
++++ b/Lib/sysconfig.py	1672907025.699648792
+@@ -21,6 +21,7 @@
+ # Keys for get_config_var() that are never converted to Python integers.
+ _ALWAYS_STR = {
+     'MACOSX_DEPLOYMENT_TARGET',
++    'IPHONEOS_DEPLOYMENT_TARGET',
+ }
+ 
+ _INSTALL_SCHEMES = {
+--- a/Lib/test/pythoninfo.py	1670353527.000000000
++++ b/Lib/test/pythoninfo.py	1672906775.554085409
+@@ -275,6 +275,7 @@
+         "LD_LIBRARY_PATH",
+         "LINES",
+         "MACOSX_DEPLOYMENT_TARGET",
++        "IPHONEOS_DEPLOYMENT_TARGET",
+         "MAILCAPS",
+         "MAKEFLAGS",
+         "MIXERDEV",
+--- a/Lib/urllib/request.py	1670353527.000000000
++++ b/Lib/urllib/request.py	1672909028.102607471
+@@ -2562,7 +2562,7 @@
+     """
+     Return True iff this host shouldn't be accessed using a proxy
+ 
+-    This function uses the MacOSX framework SystemConfiguration
++    This function uses the SystemConfiguration.framework
+     to fetch the proxy information.
+ 
+     proxy_settings come from _scproxy._get_proxy_settings or get mocked ie:
+@@ -2633,7 +2633,7 @@
+     def getproxies_macosx_sysconf():
+         """Return a dictionary of scheme -> proxy server URL mappings.
+ 
+-        This function uses the MacOSX framework SystemConfiguration
++        This function uses the SystemConfiguration.framework
+         to fetch the proxy information.
+         """
+         return _get_proxies()
+@@ -2644,7 +2644,7 @@
+         """Return True, if host should be bypassed.
+ 
+         Checks proxy settings gathered from the environment, if specified,
+-        or from the MacOSX framework SystemConfiguration.
++        or from the SystemConfiguration.framework.
+ 
+         """
+         proxies = getproxies_environment()
+--- a/Modules/_ctypes/darwin/dlfcn.h	1670353527.000000000
++++ b/Modules/_ctypes/darwin/dlfcn.h	1672909661.194833691
+@@ -50,21 +50,11 @@
+ } Dl_info;
+ 
+ 
+-#if MAC_OS_X_VERSION_MIN_REQUIRED <= MAC_OS_X_VERSION_10_2
+-#warning CTYPES_DARWIN_DLFCN
+-#define CTYPES_DARWIN_DLFCN
+-extern void * (*ctypes_dlopen)(const char *path, int mode);
+-extern void * (*ctypes_dlsym)(void * handle, const char *symbol);
+-extern const char * (*ctypes_dlerror)(void);
+-extern int (*ctypes_dlclose)(void * handle);
+-extern int (*ctypes_dladdr)(const void *, Dl_info *);
+-#else
+ extern void * dlopen(const char *path, int mode);
+ extern void * dlsym(void * handle, const char *symbol);
+ extern const char * dlerror(void);
+ extern int dlclose(void * handle);
+ extern int dladdr(const void *, Dl_info *);
+-#endif
+ 
+ #define RTLD_LAZY	0x1
+ #define RTLD_NOW	0x2
+--- a/Modules/_ctypes/darwin/dlfcn_simple.c	1670353527.000000000
++++ b/Modules/_ctypes/darwin/dlfcn_simple.c	1672909759.159002262
+@@ -44,18 +44,12 @@
+ 
+ #define ERR_STR_LEN 256
+ 
+-#ifndef MAC_OS_X_VERSION_10_3
+-#define MAC_OS_X_VERSION_10_3 1030
+-#endif
+-
+-#if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_3
+ #define DARWIN_HAS_DLOPEN
+ extern void * dlopen(const char *path, int mode) __attribute__((weak_import));
+ extern void * dlsym(void * handle, const char *symbol) __attribute__((weak_import));
+ extern const char * dlerror(void) __attribute__((weak_import));
+ extern int dlclose(void * handle) __attribute__((weak_import));
+ extern int dladdr(const void *, Dl_info *) __attribute__((weak_import));
+-#endif /* MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_3 */
+ 
+ #ifndef DARWIN_HAS_DLOPEN
+ #define dlopen darwin_dlopen
+@@ -71,180 +65,6 @@
+ int (*ctypes_dlclose)(void * handle);
+ int (*ctypes_dladdr)(const void *, Dl_info *);
+ 
+-#if MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_3
+-/* Mac OS X 10.3+ has dlopen, so strip all this dead code to avoid warnings */
+-
+-static void *dlsymIntern(void *handle, const char *symbol);
+-
+-static const char *error(int setget, const char *str, ...);
+-
+-/* Set and get the error string for use by dlerror */
+-static const char *error(int setget, const char *str, ...)
+-{
+-    static char errstr[ERR_STR_LEN];
+-    static int err_filled = 0;
+-    const char *retval;
+-    va_list arg;
+-    if (setget == 0)
+-    {
+-        va_start(arg, str);
+-        strncpy(errstr, "dlcompat: ", ERR_STR_LEN);
+-        vsnprintf(errstr + 10, ERR_STR_LEN - 10, str, arg);
+-        va_end(arg);
+-        err_filled = 1;
+-        retval = NULL;
+-    }
+-    else
+-    {
+-        if (!err_filled)
+-            retval = NULL;
+-        else
+-            retval = errstr;
+-        err_filled = 0;
+-    }
+-    return retval;
+-}
+-
+-/* darwin_dlopen */
+-static void *darwin_dlopen(const char *path, int mode)
+-{
+-    void *module = 0;
+-    NSObjectFileImage ofi = 0;
+-    NSObjectFileImageReturnCode ofirc;
+-
+-    /* If we got no path, the app wants the global namespace, use -1 as the marker
+-       in this case */
+-    if (!path)
+-        return (void *)-1;
+-
+-    /* Create the object file image, works for things linked with the -bundle arg to ld */
+-    ofirc = NSCreateObjectFileImageFromFile(path, &ofi);
+-    switch (ofirc)
+-    {
+-        case NSObjectFileImageSuccess:
+-            /* It was okay, so use NSLinkModule to link in the image */
+-            module = NSLinkModule(ofi, path,
+-                                                      NSLINKMODULE_OPTION_RETURN_ON_ERROR
+-                                                      | (mode & RTLD_GLOBAL) ? 0 : NSLINKMODULE_OPTION_PRIVATE
+-                                                      | (mode & RTLD_LAZY) ? 0 : NSLINKMODULE_OPTION_BINDNOW);
+-            NSDestroyObjectFileImage(ofi);
+-            break;
+-        case NSObjectFileImageInappropriateFile:
+-            /* It may have been a dynamic library rather than a bundle, try to load it */
+-            module = (void *)NSAddImage(path, NSADDIMAGE_OPTION_RETURN_ON_ERROR);
+-            break;
+-        default:
+-            /* God knows what we got */
+-            error(0, "Can not open \"%s\"", path);
+-            return 0;
+-    }
+-    if (!module)
+-        error(0, "Can not open \"%s\"", path);
+-    return module;
+-
+-}
+-
+-/* dlsymIntern is used by dlsym to find the symbol */
+-static void *dlsymIntern(void *handle, const char *symbol)
+-{
+-    NSSymbol nssym = 0;
+-    /* If the handle is -1, if is the app global context */
+-    if (handle == (void *)-1)
+-    {
+-        /* Global context, use NSLookupAndBindSymbol */
+-        if (NSIsSymbolNameDefined(symbol))
+-        {
+-            nssym = NSLookupAndBindSymbol(symbol);
+-        }
+-
+-    }
+-    /* Now see if the handle is a struch mach_header* or not, use NSLookupSymbol in image
+-       for libraries, and NSLookupSymbolInModule for bundles */
+-    else
+-    {
+-        /* Check for both possible magic numbers depending on x86/ppc byte order */
+-        if ((((struct mach_header *)handle)->magic == MH_MAGIC) ||
+-            (((struct mach_header *)handle)->magic == MH_CIGAM))
+-        {
+-            if (NSIsSymbolNameDefinedInImage((struct mach_header *)handle, symbol))
+-            {
+-                nssym = NSLookupSymbolInImage((struct mach_header *)handle,
+-                                                                          symbol,
+-                                                                          NSLOOKUPSYMBOLINIMAGE_OPTION_BIND
+-                                                                          | NSLOOKUPSYMBOLINIMAGE_OPTION_RETURN_ON_ERROR);
+-            }
+-
+-        }
+-        else
+-        {
+-            nssym = NSLookupSymbolInModule(handle, symbol);
+-        }
+-    }
+-    if (!nssym)
+-    {
+-        error(0, "Symbol \"%s\" Not found", symbol);
+-        return NULL;
+-    }
+-    return NSAddressOfSymbol(nssym);
+-}
+-
+-static const char *darwin_dlerror(void)
+-{
+-    return error(1, (char *)NULL);
+-}
+-
+-static int darwin_dlclose(void *handle)
+-{
+-    if ((((struct mach_header *)handle)->magic == MH_MAGIC) ||
+-        (((struct mach_header *)handle)->magic == MH_CIGAM))
+-    {
+-        error(0, "Can't remove dynamic libraries on darwin");
+-        return 0;
+-    }
+-    if (!NSUnLinkModule(handle, 0))
+-    {
+-        error(0, "unable to unlink module %s", NSNameOfModule(handle));
+-        return 1;
+-    }
+-    return 0;
+-}
+-
+-
+-/* dlsym, prepend the underscore and call dlsymIntern */
+-static void *darwin_dlsym(void *handle, const char *symbol)
+-{
+-    static char undersym[257];          /* Saves calls to malloc(3) */
+-    int sym_len = strlen(symbol);
+-    void *value = NULL;
+-    char *malloc_sym = NULL;
+-
+-    if (sym_len < 256)
+-    {
+-        snprintf(undersym, 256, "_%s", symbol);
+-        value = dlsymIntern(handle, undersym);
+-    }
+-    else
+-    {
+-        malloc_sym = malloc(sym_len + 2);
+-        if (malloc_sym)
+-        {
+-            sprintf(malloc_sym, "_%s", symbol);
+-            value = dlsymIntern(handle, malloc_sym);
+-            free(malloc_sym);
+-        }
+-        else
+-        {
+-            error(0, "Unable to allocate memory");
+-        }
+-    }
+-    return value;
+-}
+-
+-static int darwin_dladdr(const void *handle, Dl_info *info) {
+-    return 0;
+-}
+-#endif /* MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_3 */
+-
+ #if __GNUC__ < 4
+ #pragma CALL_ON_LOAD ctypes_dlfcn_init
+ #else
+@@ -259,13 +79,6 @@
+         ctypes_dlclose = dlclose;
+         ctypes_dladdr = dladdr;
+     } else {
+-#if MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_3
+-        ctypes_dlsym = darwin_dlsym;
+-        ctypes_dlopen = darwin_dlopen;
+-        ctypes_dlerror = darwin_dlerror;
+-        ctypes_dlclose = darwin_dlclose;
+-        ctypes_dladdr = darwin_dladdr;
+-#endif /* MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_3 */
+     }
+ }
+ 
+--- a/Modules/socketmodule.c	1670353527.000000000
++++ b/Modules/socketmodule.c	1672909818.174831757
+@@ -94,14 +94,6 @@
+ #define __APPLE_USE_RFC_3542 1
+ #include <AvailabilityMacros.h>
+ /* for getaddrinfo thread safety test on old versions of OS X */
+-#ifndef MAC_OS_X_VERSION_10_5
+-#define MAC_OS_X_VERSION_10_5 1050
+-#endif
+-  /*
+-   * inet_aton is not available on OSX 10.3, yet we want to use a binary
+-   * that was build on 10.4 or later to work on that release, weak linking
+-   * comes to the rescue.
+-   */
+ # pragma weak inet_aton
+ #endif
+ 
+--- a/setup.py	1670353527.000000000
++++ b/setup.py	1672905733.384040968
+@@ -81,7 +81,7 @@
+ HOST_PLATFORM = get_platform()
+ MS_WINDOWS = (HOST_PLATFORM == 'win32')
+ CYGWIN = (HOST_PLATFORM == 'cygwin')
+-MACOS = (HOST_PLATFORM == 'darwin')
++DARWIN = (HOST_PLATFORM.startswith('darwin'))
+ AIX = (HOST_PLATFORM.startswith('aix'))
+ VXWORKS = ('vxworks' in HOST_PLATFORM)
+ EMSCRIPTEN = HOST_PLATFORM == 'emscripten-wasm32'
+@@ -179,11 +179,11 @@
+     return dirs
+ 
+ 
+-MACOS_SDK_ROOT = None
+-MACOS_SDK_SPECIFIED = None
++DARWIN_SDK_ROOT = None
++DARWIN_SDK_SPECIFIED = None
+ 
+-def macosx_sdk_root():
+-    """Return the directory of the current macOS SDK.
++def darwin_sdk_root():
++    """Return the directory of the current Darwin SDK.
+ 
+     If no SDK was explicitly configured, call the compiler to find which
+     include files paths are being searched by default.  Use '/' if the
+@@ -192,32 +192,32 @@
+     (The SDK may be supplied via Xcode or via the Command Line Tools).
+     The SDK paths used by Apple-supplied tool chains depend on the
+     setting of various variables; see the xcrun man page for more info.
+-    Also sets MACOS_SDK_SPECIFIED for use by macosx_sdk_specified().
++    Also sets DARWIN_SDK_SPECIFIED for use by darwin_sdk_specified().
+     """
+-    global MACOS_SDK_ROOT, MACOS_SDK_SPECIFIED
++    global DARWIN_SDK_ROOT, DARWIN_SDK_SPECIFIED
+ 
+     # If already called, return cached result.
+-    if MACOS_SDK_ROOT:
+-        return MACOS_SDK_ROOT
++    if DARWIN_SDK_ROOT:
++        return DARWIN_SDK_ROOT
+ 
+     cflags = sysconfig.get_config_var('CFLAGS')
+     m = re.search(r'-isysroot\s*(\S+)', cflags)
+     if m is not None:
+-        MACOS_SDK_ROOT = m.group(1)
+-        MACOS_SDK_SPECIFIED = MACOS_SDK_ROOT != '/'
++        DARWIN_SDK_ROOT = m.group(1)
++        DARWIN_SDK_SPECIFIED = DARWIN_SDK_ROOT != '/'
+     else:
+-        MACOS_SDK_ROOT = _osx_support._default_sysroot(
++        DARWIN_SDK_ROOT = _osx_support._default_sysroot(
+             sysconfig.get_config_var('CC'))
+-        MACOS_SDK_SPECIFIED = False
++        DARWIN_SDK_SPECIFIED = False
+ 
+-    return MACOS_SDK_ROOT
++    return DARWIN_SDK_ROOT
+ 
+ 
+-def is_macosx_sdk_path(path):
++def is_darwin_sdk_path(path):
+     """
+-    Returns True if 'path' can be located in a macOS SDK
++    Returns True if 'path' can be located in a Darwin SDK
+     """
+-    return ( (path.startswith('/usr/') and not path.startswith('/usr/local'))
++    return ( (path.startswith('/usr/') )
+                 or path.startswith('/System/Library')
+                 or path.startswith('/System/iOSSupport') )
+ 
+@@ -241,17 +241,17 @@
+     'paths' is a list of additional locations to check; if the file is
+         found in one of them, the resulting list will contain the directory.
+     """
+-    if MACOS:
+-        # Honor the MacOSX SDK setting when one was specified.
++    if DARWIN:
++        # Honor the SDK setting when one was specified.
+         # An SDK is a directory with the same structure as a real
+         # system, but with only header files and libraries.
+-        sysroot = macosx_sdk_root()
++        sysroot = darwin_sdk_root()
+ 
+     # Check the standard locations
+     for dir_ in std_dirs:
+         f = os.path.join(dir_, filename)
+ 
+-        if MACOS and is_macosx_sdk_path(dir_):
++        if DARWIN and is_darwin_sdk_path(dir_):
+             f = os.path.join(sysroot, dir_[1:], filename)
+ 
+         if os.path.exists(f): return []
+@@ -260,7 +260,7 @@
+     for dir_ in paths:
+         f = os.path.join(dir_, filename)
+ 
+-        if MACOS and is_macosx_sdk_path(dir_):
++        if DARWIN and is_darwin_sdk_path(dir_):
+             f = os.path.join(sysroot, dir_[1:], filename)
+ 
+         if os.path.exists(f):
+@@ -630,7 +630,7 @@
+                 ext.name)
+             return
+ 
+-        if MACOS and (
++        if DARWIN and (
+                 sys.maxsize > 2**32 and '-arch' in ext.extra_link_args):
+             # Don't bother doing an import check when an extension was
+             # build with an explicit '-arch' flag on OSX. That's currently
+@@ -898,7 +898,7 @@
+         if HOST_PLATFORM == 'hp-ux11':
+             self.lib_dirs += ['/usr/lib/hpux64', '/usr/lib/hpux32']
+ 
+-        if MACOS:
++        if DARWIN:
+             # This should work on any unixy platform ;-)
+             # If the user has bothered specifying additional -I and -L flags
+             # in OPT and LDFLAGS we might as well use them here.
+@@ -1085,19 +1085,6 @@
+         elif self.compiler.find_library_file(self.lib_dirs, 'curses'):
+             curses_library = 'curses'
+ 
+-        if MACOS:
+-            os_release = int(os.uname()[2].split('.')[0])
+-            dep_target = sysconfig.get_config_var('MACOSX_DEPLOYMENT_TARGET')
+-            if (dep_target and
+-                    (tuple(int(n) for n in dep_target.split('.')[0:2])
+-                        < (10, 5) ) ):
+-                os_release = 8
+-            if os_release < 9:
+-                # MacOSX 10.4 has a broken readline. Don't try to build
+-                # the readline module unless the user has installed a fixed
+-                # readline package
+-                if find_file('readline/rlconf.h', self.inc_dirs, []) is None:
+-                    do_readline = False
+         if do_readline:
+             readline_libs = [readline_lib]
+             if readline_termcap_library:
+@@ -1126,7 +1113,7 @@
+             # Bug 1464056: If _curses.so links with ncursesw,
+             # _curses_panel.so must link with panelw.
+             panel_library = 'panelw'
+-            if MACOS:
++            if DARWIN:
+                 # On OS X, there is no separate /usr/lib/libncursesw nor
+                 # libpanelw.  If we are here, we found a locally-supplied
+                 # version of libncursesw.  There should also be a
+@@ -1134,7 +1121,7 @@
+                 # for OS X but we need _XOPEN_SOURCE_EXTENDED here for
+                 # ncurses wide char support
+                 curses_defines.append(('_XOPEN_SOURCE_EXTENDED', '1'))
+-        elif MACOS and curses_library == 'ncurses':
++        elif DARWIN and curses_library == 'ncurses':
+             # Building with the system-suppied combined libncurses/libpanel
+             curses_defines.append(('HAVE_NCURSESW', '1'))
+             curses_defines.append(('_XOPEN_SOURCE_EXTENDED', '1'))
+@@ -1146,7 +1133,7 @@
+                                include_dirs=curses_includes,
+                                define_macros=curses_defines,
+                                libraries=curses_libs))
+-        elif curses_library == 'curses' and not MACOS:
++        elif curses_library == 'curses' and not DARWIN:
+                 # OSX has an old Berkeley curses, not good enough for
+                 # the _curses module.
+             if (self.compiler.find_library_file(self.lib_dirs, 'terminfo')):
+@@ -1276,7 +1263,7 @@
+         # linux/soundcard.h or sys/soundcard.h
+         self.addext(Extension('ossaudiodev', ['ossaudiodev.c']))
+ 
+-        # macOS-only, needs SystemConfiguration and CoreFoundation framework
++        # Darwin-only, needs SystemConfiguration and CoreFoundation framework
+         self.addext(Extension('_scproxy', ['_scproxy.c']))
+ 
+     def detect_compress_exts(self):
+@@ -1376,7 +1363,7 @@
+     def detect_ctypes(self):
+         # Thomas Heller's _ctypes module
+ 
+-        if (not sysconfig.get_config_var("LIBFFI_INCLUDEDIR") and MACOS):
++        if (not sysconfig.get_config_var("LIBFFI_INCLUDEDIR") and DARWIN):
+             self.use_system_libffi = True
+         else:
+             self.use_system_libffi = '--with-system-ffi' in sysconfig.get_config_var("CONFIG_ARGS")
+@@ -1390,7 +1377,7 @@
+                    '_ctypes/stgdict.c',
+                    '_ctypes/cfield.c']
+ 
+-        if MACOS:
++        if DARWIN:
+             sources.append('_ctypes/malloc_closure.c')
+             extra_compile_args.append('-DUSING_MALLOC_CLOSURE_DOT_C=1')
+             extra_compile_args.append('-DMACOSX')
+@@ -1421,18 +1408,12 @@
+         ffi_lib = None
+ 
+         ffi_inc_dirs = self.inc_dirs.copy()
+-        if MACOS:
+-            ffi_in_sdk = os.path.join(macosx_sdk_root(), "usr/include/ffi")
++        if DARWIN:
++            ffi_in_sdk = os.path.join(darwin_sdk_root(), "usr/include/ffi")
+ 
+-            if not ffi_inc:
+-                if os.path.exists(ffi_in_sdk):
+-                    ext.extra_compile_args.append("-DUSING_APPLE_OS_LIBFFI=1")
+-                    ffi_inc = ffi_in_sdk
+-                    ffi_lib = 'ffi'
+-                else:
+-                    # OS X 10.5 comes with libffi.dylib; the include files are
+-                    # in /usr/include/ffi
+-                    ffi_inc_dirs.append('/usr/include/ffi')
++            ext.extra_compile_args.append("-DUSING_APPLE_OS_LIBFFI=1")
++            ffi_inc = ffi_in_sdk
++            ffi_lib = 'ffi'
+ 
+         if not ffi_inc:
+             found = find_file('ffi.h', [], ffi_inc_dirs)
+--- a/Makefile.pre.in       1670353527.000000000
++++ b/Makefile.pre.in     1673083407.609935943
+@@ -181,11 +181,6 @@
+ PYTHONFRAMEWORKDIR=    @PYTHONFRAMEWORKDIR@
+ PYTHONFRAMEWORKPREFIX= @PYTHONFRAMEWORKPREFIX@
+ PYTHONFRAMEWORKINSTALLDIR= @PYTHONFRAMEWORKINSTALLDIR@
+-# Deployment target selected during configure, to be checked
+-# by distutils. The export statement is needed to ensure that the
+-# deployment target is active during build.
+-MACOSX_DEPLOYMENT_TARGET=@CONFIGURE_MACOSX_DEPLOYMENT_TARGET@
+-@EXPORT_MACOSX_DEPLOYMENT_TARGET@export MACOSX_DEPLOYMENT_TARGET
+ 
+ # Option to install to strip binaries
+ STRIPFLAG=-s
+--- a/Modules/posixmodule.c	1670353527.000000000
++++ b/Modules/posixmodule.c	1673085847.536018465
+@@ -7298,7 +7298,8 @@
+ #ifdef HAVE_UTMP_H
+ #include <utmp.h>
+ #endif /* HAVE_UTMP_H */
+-#elif defined(HAVE_LIBUTIL_H)
++#elif defined(HAVE_LIBUTIL_H) && !defined(__APPLE__)
++// pty prototypes do exist in BSD libutil.h, but not Apple
+ #include <libutil.h>
+ #elif defined(HAVE_UTIL_H)
+ #include <util.h>
+--- a/configure.ac	1670353527.000000000
++++ b/configure.ac	1673158793.721779124
+@@ -376,7 +376,7 @@
+                    [specify the kind of macOS universal binary that should be created.
+                     This option is only valid when --enable-universalsdk is set; options are:
+                     ("universal2", "intel-64", "intel-32", "intel", "32-bit",
+-                    "64-bit", "3-way", or "all")
++                    "64-bit", "3-way", "iossim", "a12" or "all")
+                     see Mac/README.rst]),
+ [
+ 	UNIVERSAL_ARCHS="$withval"
+@@ -545,6 +545,9 @@
+ 	*-*-cygwin*)
+ 		ac_sys_system=Cygwin
+ 		;;
++        *-*-darwin*)
++		ac_sys_system=Darwin
++		;;
+ 	*-*-vxworks*)
+ 	    ac_sys_system=VxWorks
+ 	    ;;
+@@ -600,7 +603,7 @@
+ 	*-*-cygwin*)
+ 		_host_cpu=
+ 		;;
+-	*-*-vxworks*)
++	*-*-vxworks* | *-*-darwin*)
+ 		_host_cpu=$host_cpu
+ 		;;
+ 	wasm32-*-* | wasm64-*-*)
+@@ -1626,13 +1629,6 @@
+ fi
+ 
+ AC_CHECK_TOOLS([READELF], [readelf], [:])
+-if test "$cross_compiling" = yes; then
+-    case "$READELF" in
+-	readelf|:)
+-	AC_MSG_ERROR([readelf for the host is required for cross builds])
+-	;;
+-    esac
+-fi
+ AC_SUBST(READELF)
+ 
+ 
+@@ -2385,8 +2381,18 @@
+                LIPO_32BIT_FLAGS="-extract ppc7400 -extract i386"
+                ARCH_RUN_32BIT="/usr/bin/arch -i386 -ppc"
+                ;;
++            iossim)
++               UNIVERSAL_ARCH_FLAGS="-arch arm64 -arch x86_64"
++               LIPO_32BIT_FLAGS=""
++               ARCH_RUN_32BIT=""
++               ;;
++            a12)
++               UNIVERSAL_ARCH_FLAGS="-arch arm64 -arch arm64e"
++               LIPO_32BIT_FLAGS=""
++               ARCH_RUN_32BIT=""
++               ;;
+             *)
+-               AC_MSG_ERROR([proper usage is --with-universal-arch=universal2|32-bit|64-bit|all|intel|3-way])
++               AC_MSG_ERROR([proper usage is --with-universal-arch=universal2|32-bit|64-bit|a12|all|intel|iossim|3-way])
+                ;;
+             esac
+ 
+@@ -3151,21 +3157,10 @@
+ 		# Use -undefined dynamic_lookup whenever possible (10.3 and later).
+ 		# This allows an extension to be used in any Python
+ 
+-		dep_target_major=`echo ${MACOSX_DEPLOYMENT_TARGET} | \
+-				sed 's/\([[0-9]]*\)\.\([[0-9]]*\).*/\1/'`
+-		dep_target_minor=`echo ${MACOSX_DEPLOYMENT_TARGET} | \
+-				sed 's/\([[0-9]]*\)\.\([[0-9]]*\).*/\2/'`
+-		if test ${dep_target_major} -eq 10 && \
+-		   test ${dep_target_minor} -le 2
+-		then
+-			# building for OS X 10.0 through 10.2
+-			AC_MSG_ERROR([MACOSX_DEPLOYMENT_TARGET too old ($MACOSX_DEPLOYMENT_TARGET), only 10.3 or later is supported])
+-		else
+-			# building for OS X 10.3 and later
+-			LDSHARED='$(CC) -bundle -undefined dynamic_lookup'
+-			LDCXXSHARED='$(CXX) -bundle -undefined dynamic_lookup'
+-			BLDSHARED="$LDSHARED"
+-		fi
++		# building for OS X 10.3 and later
++		LDSHARED='$(CC) -bundle -undefined dynamic_lookup'
++		LDCXXSHARED='$(CXX) -bundle -undefined dynamic_lookup'
++		BLDSHARED="$LDSHARED"
+ 		;;
+ 	Emscripten|WASI)
+ 		LDSHARED='$(CC) -shared'
+@@ -3705,7 +3700,7 @@
+ if test "$libmpdec_system" = Darwin; then
+     # universal here means: build libmpdec with the same arch options
+     # the python interpreter was built with
+-    libmpdec_machine=universal
++    libmpdec_machine=uint128
+ elif test $ac_cv_sizeof_size_t -eq 8; then
+     if test "$ac_cv_gcc_asm_for_x64" = yes; then
+         libmpdec_machine=x64
+--- a/Lib/_osx_support.py	1670353527.000000000
++++ b/Lib/_osx_support.py	1673249515.573332721
+@@ -84,7 +84,7 @@
+ _SYSTEM_VERSION = None
+ 
+ def _get_system_version():
+-    """Return the OS X system version as a string"""
++    """Return the Darwin system version as a string"""
+     # Reading this plist is a documented way to get the system
+     # version (see the documentation for the Gestalt Manager)
+     # We avoid using platform.mac_ver to avoid possible bootstrap issues during
+@@ -103,7 +103,7 @@
+             pass
+         else:
+             try:
+-                m = re.search(r'<key>ProductUserVisibleVersion</key>\s*'
++                m = re.search(r'<key>ProductVersion</key>\s*'
+                               r'<string>(.*?)</string>', f.read())
+             finally:
+                 f.close()
+@@ -116,17 +116,17 @@
+ _SYSTEM_VERSION_TUPLE = None
+ def _get_system_version_tuple():
+     """
+-    Return the macOS system version as a tuple
++    Return the Darwin system version as a tuple
+ 
+     The return value is safe to use to compare
+     two version numbers.
+     """
+     global _SYSTEM_VERSION_TUPLE
+     if _SYSTEM_VERSION_TUPLE is None:
+-        osx_version = _get_system_version()
+-        if osx_version:
++        darwin_version = _get_system_version()
++        if darwin_version:
+             try:
+-                _SYSTEM_VERSION_TUPLE = tuple(int(i) for i in osx_version.split('.'))
++                _SYSTEM_VERSION_TUPLE = tuple(int(i) for i in darwin_version.split('.'))
+             except ValueError:
+                 _SYSTEM_VERSION_TUPLE = ()
+ 
+@@ -182,8 +182,8 @@
+     # builds, in particular -isysroot and -arch arguments to the compiler. This
+     # is in support of allowing 10.4 universal builds to run on 10.3.x systems.
+ 
+-    osx_version = _get_system_version_tuple()
+-    return bool(osx_version >= (10, 4)) if osx_version else False
++    # Torrekie only want Darwin 19+ support
++    return True
+ 
+ def _supports_arm64_builds():
+     """Returns True if arm64 builds are supported on this system"""
+@@ -191,9 +191,9 @@
+     # 1. macOS 11 and later, unconditionally
+     # 2. macOS 10.15 with Xcode 12.2 or later
+     # For now the second category is ignored.
+-    osx_version = _get_system_version_tuple()
+-    return osx_version >= (11, 0) if osx_version else False
+ 
++    # Of course we are on arm64 if iOS
++    return True
+ 
+ def _find_appropriate_compiler(_config_vars):
+     """Find appropriate C compiler for extension module builds"""
+@@ -507,12 +507,17 @@
+     # MACOSX_DEPLOYMENT_TARGET.
+ 
+     macver = _config_vars.get('MACOSX_DEPLOYMENT_TARGET', '')
+-    macrelease = _get_system_version() or macver
+-    macver = macver or macrelease
+-
+-    if macver:
+-        release = macver
+-        osname = "macosx"
++    iosver = _config_vars.get('IPHONEOS_DEPLOYMENT_TARGET', '')
++    osver = macver or iosver
++    osrelease = _get_system_version() or osver
++    osver = osver or osrelease
++
++    if osver:
++        release = osver
++        if macver:
++            osname = "macosx"
++        elif iosver:
++            osname = "iphoneos"
+ 
+         # Use the original CFLAGS value, if available, so that we
+         # return the same machine type for the platform string.
+@@ -520,16 +525,16 @@
+         # case and disallow installs.
+         cflags = _config_vars.get(_INITPRE+'CFLAGS',
+                                     _config_vars.get('CFLAGS', ''))
+-        if macrelease:
++        if osrelease and macver:
+             try:
+-                macrelease = tuple(int(i) for i in macrelease.split('.')[0:2])
++                osrelease = tuple(int(i) for i in osrelease.split('.')[0:2])
+             except ValueError:
+-                macrelease = (10, 3)
++                osrelease = (10, 3)
+         else:
+             # assume no universal support
+-            macrelease = (10, 3)
++            osrelease = (10, 3)
+ 
+-        if (macrelease >= (10, 4)) and '-arch' in cflags.strip():
++        if (macver and osrelease >= (10, 4)) and '-arch' in cflags.strip():
+             # The universal build will build fat binaries, but not on
+             # systems before 10.4
+ 
+@@ -554,6 +559,26 @@
+                 machine = 'universal'
+             else:
+                 raise ValueError(
++                   "Don't know machine value for archs=%r" % (archs,))
++
++        elif iosver and '-arch' in cflags.strip():
++            machine = 'fat'
++
++            archs = re.findall(r'-arch\s+(\S+)', cflags)
++            archs = tuple(sorted(set(archs)))
++
++            if len(archs) == 1:
++                machine = archs[0]
++            elif archs == ('arm64', 'arm64e'):
++                machine = 'a12'
++            elif archs == ('arm64', 'x86_64'):
++                machine = 'iossim'
++            elif archs == ('i386', 'x86_64'):
++                machine = 'intel'
++            elif archs == ('arm64', 'armv7'):
++                machine = 'universal'
++            else:
++                raise ValueError(
+                    "Don't know machine value for archs=%r" % (archs,))
+ 
+         elif machine == 'i386':
+--- a/Lib/distutils/spawn.py	1670353527.000000000
++++ b/Lib/distutils/spawn.py	1673252924.434742011
+@@ -51,14 +51,17 @@
+ 
+     env = None
+     if sys.platform == 'darwin':
+-        global _cfg_target, _cfg_target_split
++        global _cfg_target, _cfg_target_split, _cfg_target_mac, _cfg_target_ios
+         if _cfg_target is None:
+             from distutils import sysconfig
+-            _cfg_target = sysconfig.get_config_var(
++            _cfg_target_mac = sysconfig.get_config_var(
+                                   'MACOSX_DEPLOYMENT_TARGET') or ''
+-            if _cfg_target:
++            _cfg_target_ios = sysconfig.get_config_var(
++                                  'IPHONEOS_DEPLOYMENT_TARGET') or ''
++            if _cfg_target_mac or _cfg_target_ios:
++                _cfg_target = _cfg_target_mac or _cfg_target_ios
+                 _cfg_target_split = [int(x) for x in _cfg_target.split('.')]
+-        if _cfg_target:
++        if _cfg_target_mac:
+             # Ensure that the deployment target of the build process is not
+             # less than 10.3 if the interpreter was built for 10.3 or later.
+             # This ensures extension modules are built with correct
+@@ -74,6 +77,20 @@
+                 raise DistutilsPlatformError(my_msg)
+             env = dict(os.environ,
+                        MACOSX_DEPLOYMENT_TARGET=cur_target)
++        elif _cfg_target_ios:
++            cur_target = os.environ.get('IPHONEOS_DEPLOYMENT_TARGET', _cfg_target)
++            cur_target_split = [int(x) for x in cur_target.split('.')]
++            # Torrekie's repo now targets Darwin19+
++            # Warning if user attempts to target older iOS versions
++            if _cfg_target_split[:2] >= [13, 0] and cur_target_split[:2] < [13, 0]:
++                my_msg = ('$IPHONEOS_DEPLOYMENT_TARGET mismatch: '
++                          'now "%s" but "%s" during configure;'
++                          'may use 13.0 or later'
++                               % (cur_target, _cfg_target))
++                log.warn(my_msg)
++            # But still let'em set env anyway, none of my bussiness
++            env = dict(os.environ,
++                       IPHONEOS_DEPLOYMENT_TARGET=cur_target)
+ 
+     try:
+         proc = subprocess.Popen(cmd, env=env)

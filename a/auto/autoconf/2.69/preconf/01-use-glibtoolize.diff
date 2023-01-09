@@ -1,0 +1,40 @@
+Author: Torrekie <me@torrekie.dev>
+* The reason I am doing this patch is that, I don't like
+* such a rudeness patching way how other Darwin dists do.
+* I just want it to be accurate and effective.
+
+--- a/bin/autoreconf.in	1335304828.000000000
++++ b/bin/autoreconf.in	1672998215.339703856
+@@ -111,7 +111,7 @@
+ my $autom4te   = $ENV{'AUTOM4TE'}   || '@bindir@/@autom4te-name@';
+ my $automake   = $ENV{'AUTOMAKE'}   || 'automake';
+ my $aclocal    = $ENV{'ACLOCAL'}    || 'aclocal';
+-my $libtoolize = $ENV{'LIBTOOLIZE'} || 'libtoolize';
++my $libtoolize = $ENV{'LIBTOOLIZE'} || 'glibtoolize';
+ my $autopoint  = $ENV{'AUTOPOINT'}  || 'autopoint';
+ my $make       = $ENV{'MAKE'}       || 'make';
+ 
+@@ -519,7 +519,7 @@
+   # Setting up the source tree.  #
+   # ---------------------------- #
+ 
+-  # libtoolize, automake --add-missing etc. will drop files in the
++  # (g)libtoolize, automake --add-missing etc. will drop files in the
+   # $AUX_DIR.  But these tools fail to install these files if the
+   # directory itself does not exist, which valid: just imagine a CVS
+   # repository with hand written code only (there is not even a need
+@@ -547,12 +547,12 @@
+ 	{
+ 	  $libtoolize .= " --ltdl";
+ 	}
+-      xsystem_hint ("libtoolize is needed because this package uses Libtool", $libtoolize);
++      xsystem_hint ("(g)libtoolize is needed because this package uses Libtool", $libtoolize);
+       $rerun_aclocal = 1;
+     }
+   else
+     {
+-      verb "$configure_ac: not running libtoolize: --install not given";
++      verb "$configure_ac: not running (g)libtoolize: --install not given";
+     }
+ 
+ 
