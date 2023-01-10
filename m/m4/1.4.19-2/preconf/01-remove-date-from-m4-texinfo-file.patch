@@ -1,0 +1,16 @@
+From: Vagrant Cascadian <vagrant@reproducible-builds.org>
+Subject: Remove date from m4 texinfo file
+Bug-Debian: https://bugs.debian.org/950419
+X-Debian-version: 1.4.18-5
+
+--- a/doc/m4.texi
++++ b/doc/m4.texi
+@@ -39,7 +39,7 @@
+ 
+ @copying
+ 
+-This manual (@value{UPDATED}) is for GNU M4 (version
++This manual is for GNU M4 (version
+ @value{VERSION}), a package containing an implementation of the m4 macro
+ language.
+ 
