@@ -1,0 +1,3039 @@
+--- a/Doc/library/cgi.rst	1587330819.000000000
++++ b/Doc/library/cgi.rst	1673603070.795088855
+@@ -285,12 +285,13 @@ These are useful if you want more contro
+ algorithms implemented in this module in other circumstances.
+ 
+ 
+-.. function:: parse(fp[, environ[, keep_blank_values[, strict_parsing]]])
+-
+-   Parse a query in the environment or from a file (the file defaults to
+-   ``sys.stdin`` and environment defaults to ``os.environ``).  The *keep_blank_values* and *strict_parsing* parameters are
+-   passed to :func:`urlparse.parse_qs` unchanged.
++.. function:: parse(fp[, environ[, keep_blank_values[, strict_parsing[, separator]]]])
+ 
++   Parse a query in the environment or from a file (the file
++   defaults to ``sys.stdin`` and environment defaults to
++   ``os.environ``).  The *keep_blank_values*, *strict_parsing*,
++   and *separator* parameters are passed to
++   :func:`urlparse.parse_qs` unchanged.
+ 
+ .. function:: parse_qs(qs[, keep_blank_values[, strict_parsing[, max_num_fields]]])
+ 
+--- a/Include/pymactoolbox.h	1587330819.000000000
++++ b/Include/pymactoolbox.h	1673604038.095060014
+@@ -7,7 +7,7 @@
+ 	extern "C" {
+ #endif
+ 
+-#include <Carbon/Carbon.h>
++#include <CoreFoundation/CoreFoundation.h>
+ 
+ /*
+ ** Issue #27806: Workaround for gcc 4.x which does not have _has_include.
+--- a/Include/stringobject.h	1587330819.000000000
++++ b/Include/stringobject.h	1673603070.796020851
+@@ -170,9 +170,9 @@ PyAPI_FUNC(PyObject*) PyString_AsDecoded
+    cause an exception).  */
+ 
+ PyAPI_FUNC(int) PyString_AsStringAndSize(
+-    register PyObject *obj,	/* string or Unicode object */
+-    register char **s,		/* pointer to buffer variable */
+-    register Py_ssize_t *len	/* pointer to length variable or NULL
++    PyObject *obj,	/* string or Unicode object */
++    char **s,		/* pointer to buffer variable */
++    Py_ssize_t *len	/* pointer to length variable or NULL
+ 				   (only possible for 0-terminated
+ 				   strings) */
+     );
+--- a/Include/unicodeobject.h	1587330819.000000000
++++ b/Include/unicodeobject.h	1673603070.796963930
+@@ -531,7 +531,7 @@ PyAPI_FUNC(int) PyUnicode_Resize(
+ */
+ 
+ PyAPI_FUNC(PyObject*) PyUnicode_FromEncodedObject(
+-    register PyObject *obj,     /* Object */
++    PyObject *obj,     /* Object */
+     const char *encoding,       /* encoding */
+     const char *errors          /* error handling */
+     );
+@@ -550,7 +550,7 @@ PyAPI_FUNC(PyObject*) PyUnicode_FromEnco
+ */
+ 
+ PyAPI_FUNC(PyObject*) PyUnicode_FromObject(
+-    register PyObject *obj      /* Object */
++    PyObject *obj      /* Object */
+     );
+ 
+ PyAPI_FUNC(PyObject *) PyUnicode_FromFormatV(const char*, va_list);
+@@ -572,7 +572,7 @@ PyAPI_FUNC(PyObject *) _PyUnicode_Format
+    The buffer is copied into the new object. */
+ 
+ PyAPI_FUNC(PyObject*) PyUnicode_FromWideChar(
+-    register const wchar_t *w,  /* wchar_t buffer */
++    const wchar_t *w,  /* wchar_t buffer */
+     Py_ssize_t size             /* size of buffer */
+     );
+ 
+@@ -590,7 +590,7 @@ PyAPI_FUNC(PyObject*) PyUnicode_FromWide
+ 
+ PyAPI_FUNC(Py_ssize_t) PyUnicode_AsWideChar(
+     PyUnicodeObject *unicode,   /* Unicode object */
+-    register wchar_t *w,        /* wchar_t buffer */
++    wchar_t *w,        /* wchar_t buffer */
+     Py_ssize_t size             /* size of buffer */
+     );
+ 
+--- a/Lib/_osx_support.py	1673687351.132304230
++++ b/Lib/_osx_support.py	1673603070.797945593
+@@ -15,7 +15,7 @@ __all__ = [
+ # like "-arch" or "-isdkroot", that may need customization for
+ # the user environment
+ _UNIVERSAL_CONFIG_VARS = ('CFLAGS', 'LDFLAGS', 'CPPFLAGS', 'BASECFLAGS',
+-                            'BLDSHARED', 'LDSHARED', 'CC', 'CXX',
++                            'BLDSHARED', 'LDSHARED', 'CC', 'CCSHARED', 'CXX',
+                             'PY_CFLAGS', 'PY_LDFLAGS', 'PY_CPPFLAGS',
+                             'PY_CORE_CFLAGS')
+ 
+@@ -81,7 +81,7 @@ def _find_build_tool(toolname):
+ _SYSTEM_VERSION = None
+ 
+ def _get_system_version():
+-    """Return the OS X system version as a string"""
++    """Return the Darwin system version as a string"""
+     # Reading this plist is a documented way to get the system
+     # version (see the documentation for the Gestalt Manager)
+     # We avoid using platform.mac_ver to avoid possible bootstrap issues during
+@@ -100,7 +100,7 @@ def _get_system_version():
+             pass
+         else:
+             try:
+-                m = re.search(r'<key>ProductUserVisibleVersion</key>\s*'
++                m = re.search(r'<key>ProductVersion</key>\s*'
+                               r'<string>(.*?)</string>', f.read())
+             finally:
+                 f.close()
+@@ -127,18 +127,9 @@ def _save_modified_value(_config_vars, c
+ 
+ def _supports_universal_builds():
+     """Returns True if universal builds are supported on this system"""
+-    # As an approximation, we assume that if we are running on 10.4 or above,
+-    # then we are running with an Xcode environment that supports universal
+-    # builds, in particular -isysroot and -arch arguments to the compiler. This
+-    # is in support of allowing 10.4 universal builds to run on 10.3.x systems.
+ 
+-    osx_version = _get_system_version()
+-    if osx_version:
+-        try:
+-            osx_version = tuple(int(i) for i in osx_version.split('.'))
+-        except ValueError:
+-            osx_version = ''
+-    return bool(osx_version >= (10, 4)) if osx_version else False
++    # Torrekie: Make universal always come true
++    return True
+ 
+ 
+ def _find_appropriate_compiler(_config_vars):
+@@ -371,7 +362,7 @@ def compiler_fixup(compiler_so, cc_args)
+         from distutils import log
+         log.warn("Compiling with an SDK that doesn't seem to exist: %s",
+                 sysroot)
+-        log.warn("Please check your Xcode installation")
++        log.warn("Please check your compiler installation")
+ 
+     return compiler_so
+ 
+@@ -448,12 +439,17 @@ def get_platform_osx(_config_vars, osnam
+     # MACOSX_DEPLOYMENT_TARGET.
+ 
+     macver = _config_vars.get('MACOSX_DEPLOYMENT_TARGET', '')
+-    macrelease = _get_system_version() or macver
+-    macver = macver or macrelease
+-
+-    if macver:
+-        release = macver
+-        osname = "macosx"
++    iosver = _config_vars.get('IPHONEOS_DEPLOYMENT_TARGET', '')
++    osver = macver or iosver
++    osrelease = _get_system_version() or osver
++    osver = osver or osrelease
++
++    if osver:
++        release = osver
++        if macver:
++            osname = "macosx"
++        elif iosver:
++            osname = "iphoneos"
+ 
+         # Use the original CFLAGS value, if available, so that we
+         # return the same machine type for the platform string.
+@@ -461,16 +457,16 @@ def get_platform_osx(_config_vars, osnam
+         # case and disallow installs.
+         cflags = _config_vars.get(_INITPRE+'CFLAGS',
+                                     _config_vars.get('CFLAGS', ''))
+-        if macrelease:
++        if osrelease and macver:
+             try:
+                 macrelease = tuple(int(i) for i in macrelease.split('.')[0:2])
+             except ValueError:
+                 macrelease = (10, 0)
+         else:
+             # assume no universal support
+-            macrelease = (10, 0)
++            osrelease = (10, 3)
+ 
+-        if (macrelease >= (10, 4)) and '-arch' in cflags.strip():
++        if (macver and osrelease >= (10, 4)) and '-arch' in cflags.strip():
+             # The universal build will build fat binaries, but not on
+             # systems before 10.4
+ 
+@@ -497,8 +493,28 @@ def get_platform_osx(_config_vars, osnam
+                 raise ValueError(
+                    "Don't know machine value for archs=%r" % (archs,))
+ 
++        elif iosver and '-arch' in cflags.strip():
++            machine = 'fat'
++
++            archs = re.findall('-arch\s+(\S+)', cflags)
++            archs = tuple(sorted(set(archs)))
++
++            if len(archs) == 1:
++                machine = archs[0]
++            elif archs == ('arm64', 'arm64e'):
++                machine = 'a12'
++            elif archs == ('arm64', 'x86_64'):
++                machine = 'iossim'
++            elif archs == ('i386', 'x86_64'):
++                 machine = 'intel'
++            elif archs == ('arm64', 'armv7'):
++                 machine = 'universal'
++            else:
++                raise ValueError(
++                   "Don't know machine value for archs=%r" % (archs,))
++
+         elif machine == 'arm':
+-            # No 32-bit arm support on macOS
++            # No 32-bit arm support on Darwin19+
+             machine = 'arm64'
+ 
+         elif machine == 'i386':
+--- a/Lib/cgi.py	1673687351.134181451
++++ b/Lib/cgi.py	1673603070.798919006
+@@ -114,7 +114,8 @@ log = initlog           # The current lo
+ # 0 ==> unlimited input
+ maxlen = 0
+ 
+-def parse(fp=None, environ=os.environ, keep_blank_values=0, strict_parsing=0):
++def parse(fp=None, environ=os.environ, keep_blank_values=0,
++          strict_parsing=0, separator='&'):
+     """Parse a query in the environment or from a file (default stdin)
+ 
+         Arguments, all optional:
+@@ -133,6 +134,9 @@ def parse(fp=None, environ=os.environ, k
+         strict_parsing: flag indicating what to do with parsing errors.
+             If false (the default), errors are silently ignored.
+             If true, errors raise a ValueError exception.
++
++        separator: str. The symbol to use for separating the query arguments.
++            Defaults to &.
+     """
+     if fp is None:
+         fp = sys.stdin
+@@ -164,7 +168,8 @@ def parse(fp=None, environ=os.environ, k
+         else:
+             qs = ""
+         environ['QUERY_STRING'] = qs    # XXX Shouldn't, really
+-    return urlparse.parse_qs(qs, keep_blank_values, strict_parsing)
++    return urlparse.parse_qs(qs, keep_blank_values, strict_parsing,
++                             separator=separator)
+ 
+ 
+ # parse query string function called from urlparse,
+@@ -388,7 +393,7 @@ class FieldStorage:
+ 
+     def __init__(self, fp=None, headers=None, outerboundary="",
+                  environ=os.environ, keep_blank_values=0, strict_parsing=0,
+-                 max_num_fields=None):
++                 max_num_fields=None, separator='&'):
+         """Constructor.  Read multipart/* until last part.
+ 
+         Arguments, all optional:
+@@ -423,6 +428,7 @@ class FieldStorage:
+         self.keep_blank_values = keep_blank_values
+         self.strict_parsing = strict_parsing
+         self.max_num_fields = max_num_fields
++        self.separator = separator
+         if 'REQUEST_METHOD' in environ:
+             method = environ['REQUEST_METHOD'].upper()
+         self.qs_on_post = None
+@@ -606,7 +612,9 @@ class FieldStorage:
+         if self.qs_on_post:
+             qs += '&' + self.qs_on_post
+         query = urlparse.parse_qsl(qs, self.keep_blank_values,
+-                                   self.strict_parsing, self.max_num_fields)
++                                   self.strict_parsing,
++                                   self.max_num_fields,
++                                   separator=self.separator)
+         self.list = [MiniFieldStorage(key, value) for key, value in query]
+         self.skip_lines()
+ 
+@@ -622,7 +630,8 @@ class FieldStorage:
+             query = urlparse.parse_qsl(self.qs_on_post,
+                                        self.keep_blank_values,
+                                        self.strict_parsing,
+-                                       self.max_num_fields)
++                                       self.max_num_fields,
++                                       self.separator)
+             self.list.extend(MiniFieldStorage(key, value)
+                              for key, value in query)
+             FieldStorageClass = None
+@@ -635,7 +644,8 @@ class FieldStorage:
+         klass = self.FieldStorageClass or self.__class__
+         part = klass(self.fp, {}, ib,
+                      environ, keep_blank_values, strict_parsing,
+-                     max_num_fields)
++                     max_num_fields,
++                     self.separator)
+ 
+         # Throw first part away
+         while not part.done:
+--- a/Lib/ctypes/test/test_parameters.py	1673687355.723982556
++++ b/Lib/ctypes/test/test_parameters.py	1673858630.107803393
+@@ -249,6 +249,92 @@ class SimpleTypesTestCase(unittest.TestC
+         self.assertRegexpMatches(repr(c_wchar_p.from_param('hihi')), "^<cparam 'Z' \(0x[A-Fa-f0-9]+\)>$")
+         self.assertRegexpMatches(repr(c_void_p.from_param(0x12)), r"^<cparam 'P' \(0x0*12\)>$")
+ 
++    def test_parameter_repr(self):
++        from ctypes import (
++            c_bool,
++            c_char,
++            c_wchar,
++            c_byte,
++            c_ubyte,
++            c_short,
++            c_ushort,
++            c_int,
++            c_uint,
++            c_long,
++            c_ulong,
++            c_longlong,
++            c_ulonglong,
++            c_float,
++            c_double,
++            c_longdouble,
++            c_char_p,
++            c_wchar_p,
++            c_void_p,
++        )
++        self.assertRegexpMatches(repr(c_bool.from_param(True)), r"^<cparam '\?' at 0x[A-Fa-f0-9]+>$")
++        self.assertEqual(repr(c_char.from_param('a')), "<cparam 'c' ('a')>")
++        self.assertRegexpMatches(repr(c_wchar.from_param('a')), r"^<cparam 'u' at 0x[A-Fa-f0-9]+>$")
++        self.assertEqual(repr(c_byte.from_param(98)), "<cparam 'b' (98)>")
++        self.assertEqual(repr(c_ubyte.from_param(98)), "<cparam 'B' (98)>")
++        self.assertEqual(repr(c_short.from_param(511)), "<cparam 'h' (511)>")
++        self.assertEqual(repr(c_ushort.from_param(511)), "<cparam 'H' (511)>")
++        self.assertRegexpMatches(repr(c_int.from_param(20000)), r"^<cparam '[li]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_uint.from_param(20000)), r"^<cparam '[LI]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_long.from_param(20000)), r"^<cparam '[li]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_ulong.from_param(20000)), r"^<cparam '[LI]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_longlong.from_param(20000)), r"^<cparam '[liq]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_ulonglong.from_param(20000)), r"^<cparam '[LIQ]' \(20000\)>$")
++        self.assertEqual(repr(c_float.from_param(1.5)), "<cparam 'f' (1.5)>")
++        self.assertEqual(repr(c_double.from_param(1.5)), "<cparam 'd' (1.5)>")
++        self.assertEqual(repr(c_double.from_param(1e300)), "<cparam 'd' (1e+300)>")
++        self.assertRegexpMatches(repr(c_longdouble.from_param(1.5)), r"^<cparam ('d' \(1.5\)|'g' at 0x[A-Fa-f0-9]+)>$")
++        self.assertRegexpMatches(repr(c_char_p.from_param(b'hihi')), "^<cparam 'z' \(0x[A-Fa-f0-9]+\)>$")
++        self.assertRegexpMatches(repr(c_wchar_p.from_param('hihi')), "^<cparam 'Z' \(0x[A-Fa-f0-9]+\)>$")
++        self.assertRegexpMatches(repr(c_void_p.from_param(0x12)), r"^<cparam 'P' \(0x0*12\)>$")
++
++    def test_parameter_repr(self):
++        from ctypes import (
++            c_bool,
++            c_char,
++            c_wchar,
++            c_byte,
++            c_ubyte,
++            c_short,
++            c_ushort,
++            c_int,
++            c_uint,
++            c_long,
++            c_ulong,
++            c_longlong,
++            c_ulonglong,
++            c_float,
++            c_double,
++            c_longdouble,
++            c_char_p,
++            c_wchar_p,
++            c_void_p,
++        )
++        self.assertRegexpMatches(repr(c_bool.from_param(True)), r"^<cparam '\?' at 0x[A-Fa-f0-9]+>$")
++        self.assertEqual(repr(c_char.from_param('a')), "<cparam 'c' (a)>")
++        self.assertRegexpMatches(repr(c_wchar.from_param('a')), r"^<cparam 'u' at 0x[A-Fa-f0-9]+>$")
++        self.assertEqual(repr(c_byte.from_param(98)), "<cparam 'b' (98)>")
++        self.assertEqual(repr(c_ubyte.from_param(98)), "<cparam 'B' (98)>")
++        self.assertEqual(repr(c_short.from_param(511)), "<cparam 'h' (511)>")
++        self.assertEqual(repr(c_ushort.from_param(511)), "<cparam 'H' (511)>")
++        self.assertRegexpMatches(repr(c_int.from_param(20000)), r"^<cparam '[li]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_uint.from_param(20000)), r"^<cparam '[LI]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_long.from_param(20000)), r"^<cparam '[li]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_ulong.from_param(20000)), r"^<cparam '[LI]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_longlong.from_param(20000)), r"^<cparam '[liq]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_ulonglong.from_param(20000)), r"^<cparam '[LIQ]' \(20000\)>$")
++        self.assertEqual(repr(c_float.from_param(1.5)), "<cparam 'f' (1.5)>")
++        self.assertEqual(repr(c_double.from_param(1.5)), "<cparam 'd' (1.5)>")
++        self.assertEqual(repr(c_double.from_param(1e300)), "<cparam 'd' (1e+300)>")
++        self.assertRegexpMatches(repr(c_longdouble.from_param(1.5)), r"^<cparam ('d' \(1.5\)|'g' at 0x[A-Fa-f0-9]+)>$")
++        self.assertRegexpMatches(repr(c_char_p.from_param(b'hihi')), "^<cparam 'z' \(0x[A-Fa-f0-9]+\)>$")
++        self.assertRegexpMatches(repr(c_wchar_p.from_param('hihi')), "^<cparam 'Z' \(0x[A-Fa-f0-9]+\)>$")
++        self.assertRegexpMatches(repr(c_void_p.from_param(0x12)), r"^<cparam 'P' \(0x0*12\)>$")
++
+ ################################################################
+ 
+ if __name__ == '__main__':
+--- a/Lib/distutils/ccompiler.py	1587330819.000000000
++++ b/Lib/distutils/ccompiler.py	1673681398.871516354
+@@ -843,9 +843,9 @@ int main (int argc, char **argv) {
+     def library_filename(self, libname, lib_type='static',     # or 'shared'
+                          strip_dir=0, output_dir=''):
+         assert output_dir is not None
+-        if lib_type not in ("static", "shared", "dylib", "xcode_stub"):
++        if lib_type not in ("static", "shared", "dylib", "xcode_stub", "tbd", "api", "spi"):
+             raise ValueError, ("""'lib_type' must be "static", "shared", """
+-                               """"dylib", or "xcode_stub".""")
++                               """"dylib", "xcode_stub". "tbd", "api", or "spi""")
+         fmt = getattr(self, lib_type + "_lib_format")
+         ext = getattr(self, lib_type + "_lib_extension")
+ 
+--- a/Lib/distutils/file_util.py	1587330819.000000000
++++ b/Lib/distutils/file_util.py	1673603070.800244958
+@@ -88,7 +88,7 @@ def copy_file(src, dst, preserve_mode=1,
+     linking is available. If hardlink fails, falls back to
+     _copy_file_contents().
+ 
+-    Under Mac OS, uses the native file copy function in macostools; on
++    Under Darwin, uses the native file copy function in macostools; on
+     other systems, uses '_copy_file_contents()' to copy file contents.
+ 
+     Return a tuple (dest_name, copied): 'dest_name' is the actual name of
+--- a/Lib/distutils/spawn.py	1587330819.000000000
++++ b/Lib/distutils/spawn.py	1673603070.800856581
+@@ -121,13 +121,16 @@ def _spawn_posix(cmd, search_path=1, ver
+     exec_fn = search_path and os.execvp or os.execv
+     env = None
+     if sys.platform == 'darwin':
+-        global _cfg_target, _cfg_target_split
++        global _cfg_target, _cfg_target_split, _cfg_target_mac, _cfg_target_ios
+         if _cfg_target is None:
+-            _cfg_target = sysconfig.get_config_var(
++            _cfg_target_mac = sysconfig.get_config_var(
+                                   'MACOSX_DEPLOYMENT_TARGET') or ''
+-            if _cfg_target:
++            _cfg_target_ios = sysconfig.get_config_var(
++                                  'IPHONEOS_DEPLOYMENT_TARGET') or ''
++            if _cfg_target_mac or _cfg_target_ios:
++                _cfg_target = _cfg_target_mac or _cfg_target_ios
+                 _cfg_target_split = [int(x) for x in _cfg_target.split('.')]
+-        if _cfg_target:
++        if _cfg_target_mac:
+             # ensure that the deployment target of build process is not less
+             # than that used when the interpreter was built. This ensures
+             # extension modules are built with correct compatibility values
+@@ -140,6 +143,19 @@ def _spawn_posix(cmd, search_path=1, ver
+             env = dict(os.environ,
+                        MACOSX_DEPLOYMENT_TARGET=cur_target)
+             exec_fn = search_path and os.execvpe or os.execve
++        elif _cfg_target_ios:
++            cur_target = os.environ.get('IPHONEOS_DEPLOYMENT_TARGET', _cfg_target)
++            if _cfg_target_split > [int(x) for x in cur_target.split('.')]:
++                my_msg = ('$IPHONEOS_DEPLOYMENT_TARGET mismatch: '
++                          'now "%s" but "%s" during configure;'
++                          'may use 13.0 or later'
++                                % (cur_target, _cfg_target))
++                log.warn(my_msg)
++            # But still let'em set env anyway, none of my bussiness
++            env = dict(os.environ,
++                       IPHONEOS_DEPLOYMENT_TARGET=cur_target)
++            exec_fn = search_path and os.execvpe or os.execve
++
+     pid = os.fork()
+ 
+     if pid == 0:  # in the child
+--- a/Lib/distutils/unixccompiler.py	1673687351.138366560
++++ b/Lib/distutils/unixccompiler.py	1673603070.801712577
+@@ -80,7 +80,10 @@ class UnixCCompiler(CCompiler):
+     shared_lib_extension = ".so"
+     dylib_lib_extension = ".dylib"
+     xcode_stub_lib_extension = ".tbd"
+-    static_lib_format = shared_lib_format = dylib_lib_format = "lib%s%s"
++    tbd_lib_extension = ".tbd"
++    api_lib_extension = ".api"
++    spi_lib_extension = ".spi"
++    static_lib_format = shared_lib_format = dylib_lib_format = tbd_lib_format = api_lib_format = spi_lib_format = "lib%s%s"
+     xcode_stub_lib_format = dylib_lib_format
+     if sys.platform == "cygwin":
+         exe_extension = ".exe"
+@@ -249,10 +252,15 @@ class UnixCCompiler(CCompiler):
+     def find_library_file(self, dirs, lib, debug=0):
+         shared_f = self.library_filename(lib, lib_type='shared')
+         dylib_f = self.library_filename(lib, lib_type='dylib')
++        tbd_f = self.library_filename(lib, lib_type='tbd')
++        api_f = self.library_filename(lib, lib_type='api')
++        spi_f = self.library_filename(lib, lib_type='spi')
+         xcode_stub_f = self.library_filename(lib, lib_type='xcode_stub')
+         static_f = self.library_filename(lib, lib_type='static')
+ 
+         if sys.platform == 'darwin':
++          sysroot = os.environ.get('SDKROOT')
++          if sysroot is None:
+             # On OSX users can specify an alternate SDK using
+             # '-isysroot', calculate the SDK root if it is specified
+             # (and use it further on)
+@@ -283,6 +291,9 @@ class UnixCCompiler(CCompiler):
+         for dir in dirs:
+             shared = os.path.join(dir, shared_f)
+             dylib = os.path.join(dir, dylib_f)
++            tbd = os.path.join(dir, tbd_f)
++            api = os.path.join(dir, api_f)
++            spi = os.path.join(dir, spi_f)
+             static = os.path.join(dir, static_f)
+             xcode_stub = os.path.join(dir, xcode_stub_f)
+ 
+@@ -292,6 +303,9 @@ class UnixCCompiler(CCompiler):
+ 
+                 shared = os.path.join(sysroot, dir[1:], shared_f)
+                 dylib = os.path.join(sysroot, dir[1:], dylib_f)
++                tbd = os.path.join(sysroot, dir[1:], tbd_f)
++                api = os.path.join(sysroot, dir[1:], api_f)
++                spi = os.path.join(sysroot, dir[1:], spi_f)
+                 static = os.path.join(sysroot, dir[1:], static_f)
+                 xcode_stub = os.path.join(sysroot, dir[1:], xcode_stub_f)
+ 
+@@ -299,6 +313,12 @@ class UnixCCompiler(CCompiler):
+             # data to go on: GCC seems to prefer the shared library, so I'm
+             # assuming that *all* Unix C compilers do.  And of course I'm
+             # ignoring even GCC's "-static" option.  So sue me.
++            if os.path.exists(tbd):
++                return tbd
++            if os.path.exists(api):
++                return api
++            if os.path.exists(spi):
++                return spi
+             if os.path.exists(dylib):
+                 return dylib
+             elif os.path.exists(xcode_stub):
+--- a/Lib/httplib.py	1587330819.000000000
++++ b/Lib/httplib.py	1673603070.802697282
+@@ -257,6 +257,10 @@ _contains_disallowed_url_pchar_re = re.c
+ #  _is_allowed_url_pchars_re = re.compile(r"^[/!$&'()*+,;=:@%a-zA-Z0-9._~-]+$")
+ # We are more lenient for assumed real world compatibility purposes.
+ 
++# These characters are not allowed within HTTP method names
++# to prevent http header injection.
++_contains_disallowed_method_pchar_re = re.compile('[\x00-\x1f]')
++
+ # We always set the Content-Length header for these methods because some
+ # servers will otherwise respond with a 411
+ _METHODS_EXPECTING_BODY = {'PATCH', 'POST', 'PUT'}
+@@ -935,6 +939,8 @@ class HTTPConnection:
+         else:
+             raise CannotSendRequest()
+ 
++        self._validate_method(method)
++
+         # Save the method for use later in the response phase
+         self._method = method
+ 
+@@ -1042,6 +1048,13 @@ class HTTPConnection:
+             ).format(matched=match.group(), host=host)
+             raise InvalidURL(msg)
+ 
++    def _validate_method(self, method):
++        """Validate a method name for putrequest."""
++        # prevent http header injection
++        match = _contains_disallowed_method_pchar_re.search(method)
++        if match:
++            raise ValueError('method can\'t contain control characters. %r (found at least %r)' % (method, match.group(),))
++
+     def putheader(self, header, *values):
+         """Send a request header line to the server.
+ 
+--- a/Lib/logging/handlers.py	1587330819.000000000
++++ b/Lib/logging/handlers.py	1673603070.803505653
+@@ -737,7 +737,8 @@ class SysLogHandler(logging.Handler):
+         "CRITICAL" : "critical"
+     }
+ 
+-    def __init__(self, address=('localhost', SYSLOG_UDP_PORT),
++    # On Darwin, use /var/run/syslog by default
++    def __init__(self, address='/var/run/syslog',
+                  facility=LOG_USER, socktype=None):
+         """
+         Initialize a handler.
+--- a/Lib/platform.py	1673687355.741537873
++++ b/Lib/platform.py	1673603070.804332525
+@@ -1143,13 +1143,13 @@ def architecture(executable=sys.executab
+         return bits,linkage
+ 
+     # Bits
+-    if '32-bit' in fileout:
+-        bits = '32bit'
+-    elif 'N32' in fileout:
+-        # On Irix only
+-        bits = 'n32bit'
+-    elif '64-bit' in fileout:
+-        bits = '64bit'
++#    if '32-bit' in fileout:
++#        bits = '32bit'
++#    elif 'N32' in fileout:
++#        # On Irix only
++#        bits = 'n32bit'
++#    elif '64-bit' in fileout:
++#        bits = '64bit'
+ 
+     # Linkage
+     if 'ELF' in fileout:
+--- a/Lib/pydoc.py	1673687355.743194592
++++ b/Lib/pydoc.py	1673685742.015751301
+@@ -391,7 +391,7 @@ class Doc:
+             (object.__name__ in ('errno', 'exceptions', 'gc', 'imp',
+                                  'marshal', 'posix', 'signal', 'sys',
+                                  'thread', 'zipimport') or
+-             (file.startswith(basedir) and
++            (file.startswith(basedir) and
+               not file.startswith(os.path.join(basedir, 'dist-packages')) and
+               not file.startswith(os.path.join(basedir, 'site-packages')))) and
+             object.__name__ not in ('xml.etree', 'test.pydoc_mod')):
+--- a/Lib/rlcompleter.py	1587330819.000000000
++++ b/Lib/rlcompleter.py	1673707973.238074554
+@@ -101,18 +101,20 @@ class Completer:
+ 
+         """
+         import keyword
+-        matches = []
++        hash = {}
+         seen = {"__builtins__"}
+         n = len(text)
+         for word in keyword.kwlist:
+             if word[:n] == text:
+                 seen.add(word)
+-                matches.append(word)
++                hash[word] = 1
+         for nspace in [self.namespace, __builtin__.__dict__]:
+             for word, val in nspace.items():
+                 if word[:n] == text and word not in seen:
+                     seen.add(word)
+-                    matches.append(self._callable_postfix(val, word))
++                    hash[self._callable_postfix(val, word)] = 1
++        matches = hash.keys()
++        matches.sort()
+         return matches
+ 
+     def attr_matches(self, text):
+@@ -144,7 +146,7 @@ class Completer:
+         if hasattr(thisobject, '__class__'):
+             words.add('__class__')
+             words.update(get_class_members(thisobject.__class__))
+-        matches = []
++        hash = {}
+         n = len(attr)
+         for word in words:
+             if word[:n] == attr:
+@@ -153,7 +155,9 @@ class Completer:
+                 except Exception:
+                     continue  # Exclude properties that are not set
+                 word = self._callable_postfix(val, "%s.%s" % (expr, word))
+-                matches.append(word)
++                hash[word] = 1
++        matches.sort()
++        matches = hash.keys()
+         matches.sort()
+         return matches
+ 
+--- a/Lib/test/pythoninfo.py	1587330819.000000000
++++ b/Lib/test/pythoninfo.py	1673603070.806042434
+@@ -237,6 +237,7 @@ def collect_os(info_add):
+         "LD_LIBRARY_PATH",
+         "LINES",
+         "MACOSX_DEPLOYMENT_TARGET",
++        "IPHONEOS_DEPLOYMENT_TARGET",
+         "MAILCAPS",
+         "MAKEFLAGS",
+         "MIXERDEV",
+--- a/Lib/test/test__locale.py	1587330819.000000000
++++ b/Lib/test/test__locale.py	1673603070.806545224
+@@ -6,11 +6,12 @@ except ImportError:
+     nl_langinfo = None
+ 
+ import unittest
++import re
+ import sys
+ from platform import uname
+ 
+ if uname()[0] == "Darwin":
+-    maj, min, mic = [int(part) for part in uname()[2].split(".")]
++    maj, min, mic = [int(part) for part in re.split('[.A-Za-z]', uname()[2])[:3]]
+     if (maj, min, mic) < (8, 0, 0):
+         raise unittest.SkipTest("locale support broken for OS X < 10.4")
+ 
+--- a/Lib/test/test_cgi.py	1587330819.000000000
++++ b/Lib/test/test_cgi.py	1673603070.807261554
+@@ -61,12 +61,9 @@ parse_strict_test_cases = [
+     ("", ValueError("bad query field: ''")),
+     ("&", ValueError("bad query field: ''")),
+     ("&&", ValueError("bad query field: ''")),
+-    (";", ValueError("bad query field: ''")),
+-    (";&;", ValueError("bad query field: ''")),
+     # Should the next few really be valid?
+     ("=", {}),
+     ("=&=", {}),
+-    ("=;=", {}),
+     # This rest seem to make sense
+     ("=a", {'': ['a']}),
+     ("&=a", ValueError("bad query field: ''")),
+@@ -81,8 +78,6 @@ parse_strict_test_cases = [
+     ("a=a+b&b=b+c", {'a': ['a b'], 'b': ['b c']}),
+     ("a=a+b&a=b+a", {'a': ['a b', 'b a']}),
+     ("x=1&y=2.0&z=2-3.%2b0", {'x': ['1'], 'y': ['2.0'], 'z': ['2-3.+0']}),
+-    ("x=1;y=2.0&z=2-3.%2b0", {'x': ['1'], 'y': ['2.0'], 'z': ['2-3.+0']}),
+-    ("x=1;y=2.0;z=2-3.%2b0", {'x': ['1'], 'y': ['2.0'], 'z': ['2-3.+0']}),
+     ("Hbc5161168c542333633315dee1182227:key_store_seqid=400006&cuyer=r&view=bustomer&order_id=0bb2e248638833d48cb7fed300000f1b&expire=964546263&lobale=en-US&kid=130003.300038&ss=env",
+      {'Hbc5161168c542333633315dee1182227:key_store_seqid': ['400006'],
+       'cuyer': ['r'],
+@@ -188,6 +183,30 @@ class CgiTests(unittest.TestCase):
+             self.assertEqual(expect[k], v)
+         self.assertItemsEqual(expect.values(), d.values())
+ 
++    def test_separator(self):
++        parse_semicolon = [
++            ("x=1;y=2.0", {'x': ['1'], 'y': ['2.0']}),
++            ("x=1;y=2.0;z=2-3.%2b0", {'x': ['1'], 'y': ['2.0'], 'z': ['2-3.+0']}),
++            (";", ValueError("bad query field: ''")),
++            (";;", ValueError("bad query field: ''")),
++            ("=;a", ValueError("bad query field: 'a'")),
++            (";b=a", ValueError("bad query field: ''")),
++            ("b;=a", ValueError("bad query field: 'b'")),
++            ("a=a+b;b=b+c", {'a': ['a b'], 'b': ['b c']}),
++            ("a=a+b;a=b+a", {'a': ['a b', 'b a']}),
++        ]
++        for orig, expect in parse_semicolon:
++            env = {'QUERY_STRING': orig}
++            fs = cgi.FieldStorage(separator=';', environ=env)
++            if isinstance(expect, dict):
++                for key in expect.keys():
++                    expect_val = expect[key]
++                    self.assertIn(key, fs)
++                    if len(expect_val) > 1:
++                        self.assertEqual(fs.getvalue(key), expect_val)
++                    else:
++                        self.assertEqual(fs.getvalue(key), expect_val[0])
++
+     def test_log(self):
+         cgi.log("Testing")
+ 
+--- a/Lib/test/test_httplib.py	1587330819.000000000
++++ b/Lib/test/test_httplib.py	1673603070.808014093
+@@ -385,6 +385,28 @@ class HeaderTests(TestCase):
+                 conn.putheader(name, value)
+ 
+ 
++class HttpMethodTests(TestCase):
++    def test_invalid_method_names(self):
++        methods = (
++            'GET\r',
++            'POST\n',
++            'PUT\n\r',
++            'POST\nValue',
++            'POST\nHOST:abc',
++            'GET\nrHost:abc\n',
++            'POST\rRemainder:\r',
++            'GET\rHOST:\n',
++            '\nPUT'
++        )
++
++        for method in methods:
++            with self.assertRaisesRegex(
++                    ValueError, "method can't contain control characters"):
++                conn = httplib.HTTPConnection('example.com')
++                conn.sock = FakeSocket(None)
++                conn.request(method, '/')
++
++
+ class BasicTest(TestCase):
+     def test_status_lines(self):
+         # Test HTTP status lines
+--- a/Lib/test/test_urlparse.py	1587330819.000000000
++++ b/Lib/test/test_urlparse.py	1673603070.808846173
+@@ -24,16 +24,10 @@ parse_qsl_test_cases = [
+     ("&a=b", [('a', 'b')]),
+     ("a=a+b&b=b+c", [('a', 'a b'), ('b', 'b c')]),
+     ("a=1&a=2", [('a', '1'), ('a', '2')]),
+-    (";", []),
+-    (";;", []),
+-    (";a=b", [('a', 'b')]),
+-    ("a=a+b;b=b+c", [('a', 'a b'), ('b', 'b c')]),
+-    ("a=1;a=2", [('a', '1'), ('a', '2')]),
+-    (b";", []),
+-    (b";;", []),
+-    (b";a=b", [(b'a', b'b')]),
+-    (b"a=a+b;b=b+c", [(b'a', b'a b'), (b'b', b'b c')]),
+-    (b"a=1;a=2", [(b'a', b'1'), (b'a', b'2')]),
++    (";a=b", [(';a', 'b')]),
++    ("a=a+b;b=b+c", [('a', 'a b;b=b c')]),
++    (b";a=b", [(b';a', b'b')]),
++    (b"a=a+b;b=b+c", [(b'a', b'a b;b=b c')]),
+ ]
+ 
+ parse_qs_test_cases = [
+@@ -57,16 +51,10 @@ parse_qs_test_cases = [
+     (b"&a=b", {b'a': [b'b']}),
+     (b"a=a+b&b=b+c", {b'a': [b'a b'], b'b': [b'b c']}),
+     (b"a=1&a=2", {b'a': [b'1', b'2']}),
+-    (";", {}),
+-    (";;", {}),
+-    (";a=b", {'a': ['b']}),
+-    ("a=a+b;b=b+c", {'a': ['a b'], 'b': ['b c']}),
+-    ("a=1;a=2", {'a': ['1', '2']}),
+-    (b";", {}),
+-    (b";;", {}),
+-    (b";a=b", {b'a': [b'b']}),
+-    (b"a=a+b;b=b+c", {b'a': [b'a b'], b'b': [b'b c']}),
+-    (b"a=1;a=2", {b'a': [b'1', b'2']}),
++    (";a=b", {';a': ['b']}),
++    ("a=a+b;b=b+c", {'a': ['a b;b=b c']}),
++    (b";a=b", {b';a': [b'b']}),
++    (b"a=a+b;b=b+c", {b'a':[ b'a b;b=b c']}),
+ ]
+ 
+ class UrlParseTestCase(unittest.TestCase):
+@@ -665,6 +653,43 @@ class UrlParseTestCase(unittest.TestCase
+                          "under NFKC normalization")
+         self.assertIsInstance(cm.exception.args[0], str)
+ 
++    def test_parse_qs_separator(self):
++        parse_qs_semicolon_cases = [
++            (";", {}),
++            (";;", {}),
++            (";a=b", {'a': ['b']}),
++            ("a=a+b;b=b+c", {'a': ['a b'], 'b': ['b c']}),
++            ("a=1;a=2", {'a': ['1', '2']}),
++            (b";", {}),
++            (b";;", {}),
++            (b";a=b", {b'a': [b'b']}),
++            (b"a=a+b;b=b+c", {b'a': [b'a b'], b'b': [b'b c']}),
++            (b"a=1;a=2", {b'a': [b'1', b'2']}),
++        ]
++        for orig, expect in parse_qs_semicolon_cases:
++            result = urlparse.parse_qs(orig, separator=';')
++            self.assertEqual(result, expect, "Error parsing %r" % orig)
++
++
++    def test_parse_qsl_separator(self):
++        parse_qsl_semicolon_cases = [
++            (";", []),
++            (";;", []),
++            (";a=b", [('a', 'b')]),
++            ("a=a+b;b=b+c", [('a', 'a b'), ('b', 'b c')]),
++            ("a=1;a=2", [('a', '1'), ('a', '2')]),
++            (b";", []),
++            (b";;", []),
++            (b";a=b", [(b'a', b'b')]),
++            (b"a=a+b;b=b+c", [(b'a', b'a b'), (b'b', b'b c')]),
++            (b"a=1;a=2", [(b'a', b'1'), (b'a', b'2')]),
++        ]
++        for orig, expect in parse_qsl_semicolon_cases:
++            result = urlparse.parse_qsl(orig, separator=';')
++            self.assertEqual(result, expect, "Error parsing %r" % orig)
++
++
++
+ def test_main():
+     test_support.run_unittest(UrlParseTestCase)
+ 
+--- a/Lib/urllib.py	1587330819.000000000
++++ b/Lib/urllib.py	1673603070.809757211
+@@ -1451,7 +1451,7 @@ if sys.platform == 'darwin':
+         """
+         Return True iff this host shouldn't be accessed using a proxy
+ 
+-        This function uses the MacOSX framework SystemConfiguration
++        This function uses the SystemConfiguration.framework
+         to fetch the proxy information.
+         """
+         import re
+@@ -1509,7 +1509,7 @@ if sys.platform == 'darwin':
+     def getproxies_macosx_sysconf():
+         """Return a dictionary of scheme -> proxy server URL mappings.
+ 
+-        This function uses the MacOSX framework SystemConfiguration
++        This function uses the SystemConfiguration.framework
+         to fetch the proxy information.
+         """
+         return _get_proxies()
+@@ -1518,7 +1518,7 @@ if sys.platform == 'darwin':
+         """Return True, if a host should be bypassed.
+ 
+         Checks proxy settings gathered from the environment, if specified, or
+-        from the MacOSX framework SystemConfiguration.
++        from the SystemConfiguration.framework.
+         """
+         proxies = getproxies_environment()
+         if proxies:
+--- a/Lib/urlparse.py	1587330819.000000000
++++ b/Lib/urlparse.py	1673603070.810423666
+@@ -382,7 +382,8 @@ def unquote(s):
+             append(item)
+     return ''.join(res)
+ 
+-def parse_qs(qs, keep_blank_values=0, strict_parsing=0, max_num_fields=None):
++def parse_qs(qs, keep_blank_values=0, strict_parsing=0,
++             max_num_fields=None, separator='&'):
+     """Parse a query given as a string argument.
+ 
+         Arguments:
+@@ -402,17 +403,21 @@ def parse_qs(qs, keep_blank_values=0, st
+ 
+         max_num_fields: int. If set, then throws a ValueError if there
+             are more than n fields read by parse_qsl().
++
++        separator: str. The symbol to use for separating the query arguments.
++            Defaults to &.
+     """
+     dict = {}
+     for name, value in parse_qsl(qs, keep_blank_values, strict_parsing,
+-                                 max_num_fields):
++                                 max_num_fields, separator=separator):
+         if name in dict:
+             dict[name].append(value)
+         else:
+             dict[name] = [value]
+     return dict
+ 
+-def parse_qsl(qs, keep_blank_values=0, strict_parsing=0, max_num_fields=None):
++def parse_qsl(qs, keep_blank_values=0, strict_parsing=0,
++              max_num_fields=None, separator='&'):
+     """Parse a query given as a string argument.
+ 
+     Arguments:
+@@ -432,17 +437,23 @@ def parse_qsl(qs, keep_blank_values=0, s
+     max_num_fields: int. If set, then throws a ValueError if there
+         are more than n fields read by parse_qsl().
+ 
++    separator: str. The symbol to use for separating the query arguments.
++        Defaults to &.
++
+     Returns a list, as G-d intended.
+     """
+     # If max_num_fields is defined then check that the number of fields
+     # is less than max_num_fields. This prevents a memory exhaustion DOS
+     # attack via post bodies with many fields.
++    if not separator or (not isinstance(separator, (str, bytes))):
++        raise ValueError("Separator must be of type string or bytes.")
++
+     if max_num_fields is not None:
+-        num_fields = 1 + qs.count('&') + qs.count(';')
++        num_fields = 1 + qs.count(separator)
+         if max_num_fields < num_fields:
+             raise ValueError('Max number of fields exceeded')
+ 
+-    pairs = [s2 for s1 in qs.split('&') for s2 in s1.split(';')]
++    pairs = [s1 for s1 in qs.split(separator)]
+     r = []
+     for name_value in pairs:
+         if not name_value and not strict_parsing:
+--- a/Mac/Modules/cf/_CFmodule.c	1587330819.000000000
++++ b/Mac/Modules/cf/_CFmodule.c	1673603070.814514691
+@@ -235,7 +235,7 @@ static PyObject *CFTypeRefObj_CFEqual(CF
+         return NULL;
+     _rv = CFEqual(_self->ob_itself,
+                   cf2);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("B",
+                          _rv);
+     return _res;
+ }
+@@ -378,6 +378,12 @@ static PyMethodDef CFTypeRefObj_methods[
+ 
+ #define CFTypeRefObj_getsetlist NULL
+ 
++#ifdef __LP64__
++#define PRN_PTRFMT	"%016lx"
++#else // !__LP64__
++#define PRN_PTRFMT	"%08lx"
++#endif // !__LP64__
++#define PRN_PTRTYPE	long
+ 
+ static int CFTypeRefObj_compare(CFTypeRefObject *self, CFTypeRefObject *other)
+ {
+@@ -390,14 +396,14 @@ static int CFTypeRefObj_compare(CFTypeRe
+ static PyObject * CFTypeRefObj_repr(CFTypeRefObject *self)
+ {
+     char buf[100];
+-    sprintf(buf, "<CFTypeRef type-%d object at 0x%8.8x for 0x%8.8x>", (int)CFGetTypeID(self->ob_itself), (unsigned)self, (unsigned)self->ob_itself);
++    sprintf(buf, "<CFTypeRef type-%d object at 0x" PRN_PTRFMT " for 0x" PRN_PTRFMT ">", (int)CFGetTypeID(self->ob_itself), (PRN_PTRTYPE)self, (PRN_PTRTYPE)self->ob_itself);
+     return PyString_FromString(buf);
+ }
+ 
+ static int CFTypeRefObj_hash(CFTypeRefObject *self)
+ {
+     /* XXXX Or should we use CFHash?? */
+-    return (int)self->ob_itself;
++    return (int)(long)self->ob_itself;
+ }
+ static int CFTypeRefObj_tp_init(PyObject *_self, PyObject *_args, PyObject *_kwds)
+ {
+@@ -594,14 +600,14 @@ static int CFArrayRefObj_compare(CFArray
+ static PyObject * CFArrayRefObj_repr(CFArrayRefObject *self)
+ {
+     char buf[100];
+-    sprintf(buf, "<CFArrayRef object at 0x%8.8x for 0x%8.8x>", (unsigned)self, (unsigned)self->ob_itself);
++    sprintf(buf, "<CFArrayRef object at 0x" PRN_PTRFMT " for 0x" PRN_PTRFMT ">", (PRN_PTRTYPE)self, (PRN_PTRTYPE)self->ob_itself);
+     return PyString_FromString(buf);
+ }
+ 
+ static int CFArrayRefObj_hash(CFArrayRefObject *self)
+ {
+     /* XXXX Or should we use CFHash?? */
+-    return (int)self->ob_itself;
++    return (int)(long)self->ob_itself;
+ }
+ static int CFArrayRefObj_tp_init(PyObject *_self, PyObject *_args, PyObject *_kwds)
+ {
+@@ -834,14 +840,14 @@ static int CFMutableArrayRefObj_compare(
+ static PyObject * CFMutableArrayRefObj_repr(CFMutableArrayRefObject *self)
+ {
+     char buf[100];
+-    sprintf(buf, "<CFMutableArrayRef object at 0x%8.8x for 0x%8.8x>", (unsigned)self, (unsigned)self->ob_itself);
++    sprintf(buf, "<CFMutableArrayRef object at 0x" PRN_PTRFMT " for 0x" PRN_PTRFMT ">", (PRN_PTRTYPE)self, (PRN_PTRTYPE)self->ob_itself);
+     return PyString_FromString(buf);
+ }
+ 
+ static int CFMutableArrayRefObj_hash(CFMutableArrayRefObject *self)
+ {
+     /* XXXX Or should we use CFHash?? */
+-    return (int)self->ob_itself;
++    return (int)(long)self->ob_itself;
+ }
+ static int CFMutableArrayRefObj_tp_init(PyObject *_self, PyObject *_args, PyObject *_kwds)
+ {
+@@ -1027,14 +1033,14 @@ static int CFDictionaryRefObj_compare(CF
+ static PyObject * CFDictionaryRefObj_repr(CFDictionaryRefObject *self)
+ {
+     char buf[100];
+-    sprintf(buf, "<CFDictionaryRef object at 0x%8.8x for 0x%8.8x>", (unsigned)self, (unsigned)self->ob_itself);
++    sprintf(buf, "<CFDictionaryRef object at 0x" PRN_PTRFMT " for 0x" PRN_PTRFMT ">", (PRN_PTRTYPE)self, (PRN_PTRTYPE)self->ob_itself);
+     return PyString_FromString(buf);
+ }
+ 
+ static int CFDictionaryRefObj_hash(CFDictionaryRefObject *self)
+ {
+     /* XXXX Or should we use CFHash?? */
+-    return (int)self->ob_itself;
++    return (int)(long)self->ob_itself;
+ }
+ static int CFDictionaryRefObj_tp_init(PyObject *_self, PyObject *_args, PyObject *_kwds)
+ {
+@@ -1204,14 +1210,14 @@ static int CFMutableDictionaryRefObj_com
+ static PyObject * CFMutableDictionaryRefObj_repr(CFMutableDictionaryRefObject *self)
+ {
+     char buf[100];
+-    sprintf(buf, "<CFMutableDictionaryRef object at 0x%8.8x for 0x%8.8x>", (unsigned)self, (unsigned)self->ob_itself);
++    sprintf(buf, "<CFMutableDictionaryRef object at 0x" PRN_PTRFMT " for 0x" PRN_PTRFMT ">", (PRN_PTRTYPE)self, (PRN_PTRTYPE)self->ob_itself);
+     return PyString_FromString(buf);
+ }
+ 
+ static int CFMutableDictionaryRefObj_hash(CFMutableDictionaryRefObject *self)
+ {
+     /* XXXX Or should we use CFHash?? */
+-    return (int)self->ob_itself;
++    return (int)(long)self->ob_itself;
+ }
+ static int CFMutableDictionaryRefObj_tp_init(PyObject *_self, PyObject *_args, PyObject *_kwds)
+ {
+@@ -1386,7 +1392,7 @@ static PyObject *CFDataRefObj_CFStringCr
+     PyObject *_res = NULL;
+     CFStringRef _rv;
+     CFStringEncoding encoding;
+-    if (!PyArg_ParseTuple(_args, "l",
++    if (!PyArg_ParseTuple(_args, "I",
+                           &encoding))
+         return NULL;
+     _rv = CFStringCreateFromExternalRepresentation((CFAllocatorRef)NULL,
+@@ -1401,7 +1407,7 @@ static PyObject *CFDataRefObj_CFDataGetD
+ {
+     PyObject *_res = NULL;
+ 
+-    int size = CFDataGetLength(_self->ob_itself);
++    int size = (int)CFDataGetLength(_self->ob_itself);
+     char *data = (char *)CFDataGetBytePtr(_self->ob_itself);
+ 
+     _res = (PyObject *)PyString_FromStringAndSize(data, size);
+@@ -1435,14 +1441,14 @@ static int CFDataRefObj_compare(CFDataRe
+ static PyObject * CFDataRefObj_repr(CFDataRefObject *self)
+ {
+     char buf[100];
+-    sprintf(buf, "<CFDataRef object at 0x%8.8x for 0x%8.8x>", (unsigned)self, (unsigned)self->ob_itself);
++    sprintf(buf, "<CFDataRef object at 0x" PRN_PTRFMT " for 0x" PRN_PTRFMT ">", (PRN_PTRTYPE)self, (PRN_PTRTYPE)self->ob_itself);
+     return PyString_FromString(buf);
+ }
+ 
+ static int CFDataRefObj_hash(CFDataRefObject *self)
+ {
+     /* XXXX Or should we use CFHash?? */
+-    return (int)self->ob_itself;
++    return (int)(long)self->ob_itself;
+ }
+ static int CFDataRefObj_tp_init(PyObject *_self, PyObject *_args, PyObject *_kwds)
+ {
+@@ -1700,14 +1706,14 @@ static int CFMutableDataRefObj_compare(C
+ static PyObject * CFMutableDataRefObj_repr(CFMutableDataRefObject *self)
+ {
+     char buf[100];
+-    sprintf(buf, "<CFMutableDataRef object at 0x%8.8x for 0x%8.8x>", (unsigned)self, (unsigned)self->ob_itself);
++    sprintf(buf, "<CFMutableDataRef object at 0x" PRN_PTRFMT " for 0x" PRN_PTRFMT ">", (PRN_PTRTYPE)self, (PRN_PTRTYPE)self->ob_itself);
+     return PyString_FromString(buf);
+ }
+ 
+ static int CFMutableDataRefObj_hash(CFMutableDataRefObject *self)
+ {
+     /* XXXX Or should we use CFHash?? */
+-    return (int)self->ob_itself;
++    return (int)(long)self->ob_itself;
+ }
+ static int CFMutableDataRefObj_tp_init(PyObject *_self, PyObject *_args, PyObject *_kwds)
+ {
+@@ -1917,7 +1923,7 @@ static PyObject *CFStringRefObj_CFString
+ #ifndef CFStringGetBytes
+     PyMac_PRECHECK(CFStringGetBytes);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "O&lbll",
++    if (!PyArg_ParseTuple(_args, "O&IBBl",
+                           CFRange_Convert, &range,
+                           &encoding,
+                           &lossByte,
+@@ -1932,7 +1938,7 @@ static PyObject *CFStringRefObj_CFString
+                            &buffer,
+                            maxBufLen,
+                            &usedBufLen);
+-    _res = Py_BuildValue("lbl",
++    _res = Py_BuildValue("lBl",
+                          _rv,
+                          buffer,
+                          usedBufLen);
+@@ -1945,7 +1951,7 @@ static PyObject *CFStringRefObj_CFString
+     CFDataRef _rv;
+     CFStringEncoding encoding;
+     UInt8 lossByte;
+-    if (!PyArg_ParseTuple(_args, "lb",
++    if (!PyArg_ParseTuple(_args, "IB",
+                           &encoding,
+                           &lossByte))
+         return NULL;
+@@ -1968,7 +1974,7 @@ static PyObject *CFStringRefObj_CFString
+     if (!PyArg_ParseTuple(_args, ""))
+         return NULL;
+     _rv = CFStringGetSmallestEncoding(_self->ob_itself);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("I",
+                          _rv);
+     return _res;
+ }
+@@ -1983,7 +1989,7 @@ static PyObject *CFStringRefObj_CFString
+     if (!PyArg_ParseTuple(_args, ""))
+         return NULL;
+     _rv = CFStringGetFastestEncoding(_self->ob_itself);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("I",
+                          _rv);
+     return _res;
+ }
+@@ -2054,7 +2060,7 @@ static PyObject *CFStringRefObj_CFString
+                                   rangeToSearch,
+                                   searchOptions,
+                                   &result);
+-    _res = Py_BuildValue("lO&",
++    _res = Py_BuildValue("BO&",
+                          _rv,
+                          CFRange_New, result);
+     return _res;
+@@ -2116,7 +2122,7 @@ static PyObject *CFStringRefObj_CFString
+         return NULL;
+     _rv = CFStringHasPrefix(_self->ob_itself,
+                             prefix);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("B",
+                          _rv);
+     return _res;
+ }
+@@ -2134,7 +2140,7 @@ static PyObject *CFStringRefObj_CFString
+         return NULL;
+     _rv = CFStringHasSuffix(_self->ob_itself,
+                             suffix);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("B",
+                          _rv);
+     return _res;
+ }
+@@ -2220,7 +2226,7 @@ static PyObject *CFStringRefObj_CFString
+     if (!PyArg_ParseTuple(_args, ""))
+         return NULL;
+     _rv = CFStringConvertIANACharSetNameToEncoding(_self->ob_itself);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("I",
+                          _rv);
+     return _res;
+ }
+@@ -2261,7 +2267,7 @@ static PyObject *CFStringRefObj_CFURLCre
+     CFURLRef _rv;
+     CFURLPathStyle pathStyle;
+     Boolean isDirectory;
+-    if (!PyArg_ParseTuple(_args, "ll",
++    if (!PyArg_ParseTuple(_args, "lB",
+                           &pathStyle,
+                           &isDirectory))
+         return NULL;
+@@ -2281,7 +2287,7 @@ static PyObject *CFStringRefObj_CFURLCre
+     CFURLPathStyle pathStyle;
+     Boolean isDirectory;
+     CFURLRef baseURL;
+-    if (!PyArg_ParseTuple(_args, "llO&",
++    if (!PyArg_ParseTuple(_args, "lBO&",
+                           &pathStyle,
+                           &isDirectory,
+                           OptionalCFURLRefObj_Convert, &baseURL))
+@@ -2319,7 +2325,7 @@ static PyObject *CFStringRefObj_CFURLCre
+     CFStringRef charactersToLeaveUnescaped;
+     CFStringRef legalURLCharactersToBeEscaped;
+     CFStringEncoding encoding;
+-    if (!PyArg_ParseTuple(_args, "O&O&l",
++    if (!PyArg_ParseTuple(_args, "O&O&I",
+                           CFStringRefObj_Convert, &charactersToLeaveUnescaped,
+                           CFStringRefObj_Convert, &legalURLCharactersToBeEscaped,
+                           &encoding))
+@@ -2338,7 +2344,7 @@ static PyObject *CFStringRefObj_CFString
+ {
+     PyObject *_res = NULL;
+ 
+-    int size = CFStringGetLength(_self->ob_itself)+1;
++    int size = (int)CFStringGetLength(_self->ob_itself)+1;
+     char *data = malloc(size);
+ 
+     if( data == NULL ) return PyErr_NoMemory();
+@@ -2357,7 +2363,7 @@ static PyObject *CFStringRefObj_CFString
+ {
+     PyObject *_res = NULL;
+ 
+-    int size = CFStringGetLength(_self->ob_itself)+1;
++    int size = (int)CFStringGetLength(_self->ob_itself)+1;
+     Py_UNICODE *data = malloc(size*sizeof(Py_UNICODE));
+     CFRange range;
+ 
+@@ -2443,14 +2449,14 @@ static int CFStringRefObj_compare(CFStri
+ static PyObject * CFStringRefObj_repr(CFStringRefObject *self)
+ {
+     char buf[100];
+-    sprintf(buf, "<CFStringRef object at 0x%8.8x for 0x%8.8x>", (unsigned)self, (unsigned)self->ob_itself);
++    sprintf(buf, "<CFStringRef object at 0x" PRN_PTRFMT " for 0x" PRN_PTRFMT ">", (PRN_PTRTYPE)self, (PRN_PTRTYPE)self->ob_itself);
+     return PyString_FromString(buf);
+ }
+ 
+ static int CFStringRefObj_hash(CFStringRefObject *self)
+ {
+     /* XXXX Or should we use CFHash?? */
+-    return (int)self->ob_itself;
++    return (int)(long)self->ob_itself;
+ }
+ static int CFStringRefObj_tp_init(PyObject *_self, PyObject *_args, PyObject *_kwds)
+ {
+@@ -2631,7 +2637,7 @@ static PyObject *CFMutableStringRefObj_C
+ #ifndef CFStringAppendPascalString
+     PyMac_PRECHECK(CFStringAppendPascalString);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "O&l",
++    if (!PyArg_ParseTuple(_args, "O&I",
+                           PyMac_GetStr255, pStr,
+                           &encoding))
+         return NULL;
+@@ -2651,7 +2657,7 @@ static PyObject *CFMutableStringRefObj_C
+ #ifndef CFStringAppendCString
+     PyMac_PRECHECK(CFStringAppendCString);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "sl",
++    if (!PyArg_ParseTuple(_args, "sI",
+                           &cStr,
+                           &encoding))
+         return NULL;
+@@ -2831,14 +2837,14 @@ static int CFMutableStringRefObj_compare
+ static PyObject * CFMutableStringRefObj_repr(CFMutableStringRefObject *self)
+ {
+     char buf[100];
+-    sprintf(buf, "<CFMutableStringRef object at 0x%8.8x for 0x%8.8x>", (unsigned)self, (unsigned)self->ob_itself);
++    sprintf(buf, "<CFMutableStringRef object at 0x" PRN_PTRFMT " for 0x" PRN_PTRFMT ">", (PRN_PTRTYPE)self, (PRN_PTRTYPE)self->ob_itself);
+     return PyString_FromString(buf);
+ }
+ 
+ static int CFMutableStringRefObj_hash(CFMutableStringRefObject *self)
+ {
+     /* XXXX Or should we use CFHash?? */
+-    return (int)self->ob_itself;
++    return (int)(long)self->ob_itself;
+ }
+ static int CFMutableStringRefObj_tp_init(PyObject *_self, PyObject *_args, PyObject *_kwds)
+ {
+@@ -2980,7 +2986,7 @@ static PyObject *CFURLRefObj_CFURLCreate
+     CFDataRef _rv;
+     CFStringEncoding encoding;
+     Boolean escapeWhitespace;
+-    if (!PyArg_ParseTuple(_args, "ll",
++    if (!PyArg_ParseTuple(_args, "IB",
+                           &encoding,
+                           &escapeWhitespace))
+         return NULL;
+@@ -3003,7 +3009,7 @@ static PyObject *CFURLRefObj_CFURLGetFil
+ #ifndef CFURLGetFileSystemRepresentation
+     PyMac_PRECHECK(CFURLGetFileSystemRepresentation);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "ll",
++    if (!PyArg_ParseTuple(_args, "Bl",
+                           &resolveAgainstBase,
+                           &maxBufLen))
+         return NULL;
+@@ -3011,7 +3017,7 @@ static PyObject *CFURLRefObj_CFURLGetFil
+                                            resolveAgainstBase,
+                                            &buffer,
+                                            maxBufLen);
+-    _res = Py_BuildValue("lb",
++    _res = Py_BuildValue("BB",
+                          _rv,
+                          buffer);
+     return _res;
+@@ -3072,7 +3078,7 @@ static PyObject *CFURLRefObj_CFURLCanBeD
+     if (!PyArg_ParseTuple(_args, ""))
+         return NULL;
+     _rv = CFURLCanBeDecomposed(_self->ob_itself);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("B",
+                          _rv);
+     return _res;
+ }
+@@ -3134,7 +3140,7 @@ static PyObject *CFURLRefObj_CFURLCopySt
+         return NULL;
+     _rv = CFURLCopyStrictPath(_self->ob_itself,
+                               &isAbsolute);
+-    _res = Py_BuildValue("O&l",
++    _res = Py_BuildValue("O&B",
+                          CFStringRefObj_New, _rv,
+                          isAbsolute);
+     return _res;
+@@ -3168,7 +3174,7 @@ static PyObject *CFURLRefObj_CFURLHasDir
+     if (!PyArg_ParseTuple(_args, ""))
+         return NULL;
+     _rv = CFURLHasDirectoryPath(_self->ob_itself);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("B",
+                          _rv);
+     return _res;
+ }
+@@ -3338,7 +3344,7 @@ static PyObject *CFURLRefObj_CFURLCreate
+     CFURLRef _rv;
+     CFStringRef pathComponent;
+     Boolean isDirectory;
+-    if (!PyArg_ParseTuple(_args, "O&l",
++    if (!PyArg_ParseTuple(_args, "O&B",
+                           CFStringRefObj_Convert, &pathComponent,
+                           &isDirectory))
+         return NULL;
+@@ -3405,7 +3411,7 @@ static PyObject *CFURLRefObj_CFURLGetFSR
+         return NULL;
+     _rv = CFURLGetFSRef(_self->ob_itself,
+                         &fsRef);
+-    _res = Py_BuildValue("lO&",
++    _res = Py_BuildValue("BO&",
+                          _rv,
+                          PyMac_BuildFSRef, &fsRef);
+     return _res;
+@@ -3483,14 +3489,14 @@ static int CFURLRefObj_compare(CFURLRefO
+ static PyObject * CFURLRefObj_repr(CFURLRefObject *self)
+ {
+     char buf[100];
+-    sprintf(buf, "<CFURL object at 0x%8.8x for 0x%8.8x>", (unsigned)self, (unsigned)self->ob_itself);
++    sprintf(buf, "<CFURL object at 0x" PRN_PTRFMT " for 0x" PRN_PTRFMT ">", (PRN_PTRTYPE)self, (PRN_PTRTYPE)self->ob_itself);
+     return PyString_FromString(buf);
+ }
+ 
+ static int CFURLRefObj_hash(CFURLRefObject *self)
+ {
+     /* XXXX Or should we use CFHash?? */
+-    return (int)self->ob_itself;
++    return (int)(long)self->ob_itself;
+ }
+ static int CFURLRefObj_tp_init(PyObject *_self, PyObject *_args, PyObject *_kwds)
+ {
+@@ -3891,7 +3897,7 @@ static PyObject *CF_CFPreferencesGetAppB
+     _rv = CFPreferencesGetAppBooleanValue(key,
+                                           applicationID,
+                                           &keyExistsAndHasValidFormat);
+-    _res = Py_BuildValue("ll",
++    _res = Py_BuildValue("BB",
+                          _rv,
+                          keyExistsAndHasValidFormat);
+     return _res;
+@@ -3914,7 +3920,7 @@ static PyObject *CF_CFPreferencesGetAppI
+     _rv = CFPreferencesGetAppIntegerValue(key,
+                                           applicationID,
+                                           &keyExistsAndHasValidFormat);
+-    _res = Py_BuildValue("ll",
++    _res = Py_BuildValue("lB",
+                          _rv,
+                          keyExistsAndHasValidFormat);
+     return _res;
+@@ -3992,7 +3998,7 @@ static PyObject *CF_CFPreferencesAppSync
+                           CFStringRefObj_Convert, &applicationID))
+         return NULL;
+     _rv = CFPreferencesAppSynchronize(applicationID);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("B",
+                          _rv);
+     return _res;
+ }
+@@ -4123,7 +4129,7 @@ static PyObject *CF_CFPreferencesSynchro
+     _rv = CFPreferencesSynchronize(applicationID,
+                                    userName,
+                                    hostName);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("B",
+                          _rv);
+     return _res;
+ }
+@@ -4195,7 +4201,7 @@ static PyObject *CF_CFStringCreateWithPa
+ #ifndef CFStringCreateWithPascalString
+     PyMac_PRECHECK(CFStringCreateWithPascalString);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "O&l",
++    if (!PyArg_ParseTuple(_args, "O&I",
+                           PyMac_GetStr255, pStr,
+                           &encoding))
+         return NULL;
+@@ -4216,7 +4222,7 @@ static PyObject *CF_CFStringCreateWithCS
+ #ifndef CFStringCreateWithCString
+     PyMac_PRECHECK(CFStringCreateWithCString);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "sl",
++    if (!PyArg_ParseTuple(_args, "sI",
+                           &cStr,
+                           &encoding))
+         return NULL;
+@@ -4258,7 +4264,7 @@ static PyObject *CF_CFStringCreateWithPa
+ #ifndef CFStringCreateWithPascalStringNoCopy
+     PyMac_PRECHECK(CFStringCreateWithPascalStringNoCopy);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "O&l",
++    if (!PyArg_ParseTuple(_args, "O&I",
+                           PyMac_GetStr255, pStr,
+                           &encoding))
+         return NULL;
+@@ -4280,7 +4286,7 @@ static PyObject *CF_CFStringCreateWithCS
+ #ifndef CFStringCreateWithCStringNoCopy
+     PyMac_PRECHECK(CFStringCreateWithCStringNoCopy);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "sl",
++    if (!PyArg_ParseTuple(_args, "sI",
+                           &cStr,
+                           &encoding))
+         return NULL;
+@@ -4366,7 +4372,7 @@ static PyObject *CF_CFStringCreateWithBy
+ #ifndef CFStringCreateWithBytes
+     PyMac_PRECHECK(CFStringCreateWithBytes);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "s#ll",
++    if (!PyArg_ParseTuple(_args, "s#IB",
+                           &bytes__in__, &bytes__in_len__,
+                           &encoding,
+                           &isExternalRepresentation))
+@@ -4391,7 +4397,7 @@ static PyObject *CF_CFStringGetSystemEnc
+     if (!PyArg_ParseTuple(_args, ""))
+         return NULL;
+     _rv = CFStringGetSystemEncoding();
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("I",
+                          _rv);
+     return _res;
+ }
+@@ -4405,7 +4411,7 @@ static PyObject *CF_CFStringGetMaximumSi
+ #ifndef CFStringGetMaximumSizeForEncoding
+     PyMac_PRECHECK(CFStringGetMaximumSizeForEncoding);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "ll",
++    if (!PyArg_ParseTuple(_args, "lI",
+                           &length,
+                           &encoding))
+         return NULL;
+@@ -4424,11 +4430,11 @@ static PyObject *CF_CFStringIsEncodingAv
+ #ifndef CFStringIsEncodingAvailable
+     PyMac_PRECHECK(CFStringIsEncodingAvailable);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "l",
++    if (!PyArg_ParseTuple(_args, "I",
+                           &encoding))
+         return NULL;
+     _rv = CFStringIsEncodingAvailable(encoding);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("B",
+                          _rv);
+     return _res;
+ }
+@@ -4441,7 +4447,7 @@ static PyObject *CF_CFStringGetNameOfEnc
+ #ifndef CFStringGetNameOfEncoding
+     PyMac_PRECHECK(CFStringGetNameOfEncoding);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "l",
++    if (!PyArg_ParseTuple(_args, "I",
+                           &encoding))
+         return NULL;
+     _rv = CFStringGetNameOfEncoding(encoding);
+@@ -4458,11 +4464,11 @@ static PyObject *CF_CFStringConvertEncod
+ #ifndef CFStringConvertEncodingToNSStringEncoding
+     PyMac_PRECHECK(CFStringConvertEncodingToNSStringEncoding);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "l",
++    if (!PyArg_ParseTuple(_args, "I",
+                           &encoding))
+         return NULL;
+-    _rv = CFStringConvertEncodingToNSStringEncoding(encoding);
+-    _res = Py_BuildValue("l",
++    _rv = (UInt32)CFStringConvertEncodingToNSStringEncoding(encoding);
++    _res = Py_BuildValue("I",
+                          _rv);
+     return _res;
+ }
+@@ -4475,7 +4481,7 @@ static PyObject *CF_CFStringConvertNSStr
+ #ifndef CFStringConvertNSStringEncodingToEncoding
+     PyMac_PRECHECK(CFStringConvertNSStringEncodingToEncoding);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "l",
++    if (!PyArg_ParseTuple(_args, "I",
+                           &encoding))
+         return NULL;
+     _rv = CFStringConvertNSStringEncodingToEncoding(encoding);
+@@ -4492,11 +4498,11 @@ static PyObject *CF_CFStringConvertEncod
+ #ifndef CFStringConvertEncodingToWindowsCodepage
+     PyMac_PRECHECK(CFStringConvertEncodingToWindowsCodepage);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "l",
++    if (!PyArg_ParseTuple(_args, "I",
+                           &encoding))
+         return NULL;
+     _rv = CFStringConvertEncodingToWindowsCodepage(encoding);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("I",
+                          _rv);
+     return _res;
+ }
+@@ -4509,11 +4515,11 @@ static PyObject *CF_CFStringConvertWindo
+ #ifndef CFStringConvertWindowsCodepageToEncoding
+     PyMac_PRECHECK(CFStringConvertWindowsCodepageToEncoding);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "l",
++    if (!PyArg_ParseTuple(_args, "I",
+                           &codepage))
+         return NULL;
+     _rv = CFStringConvertWindowsCodepageToEncoding(codepage);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("I",
+                          _rv);
+     return _res;
+ }
+@@ -4526,7 +4532,7 @@ static PyObject *CF_CFStringConvertEncod
+ #ifndef CFStringConvertEncodingToIANACharSetName
+     PyMac_PRECHECK(CFStringConvertEncodingToIANACharSetName);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "l",
++    if (!PyArg_ParseTuple(_args, "I",
+                           &encoding))
+         return NULL;
+     _rv = CFStringConvertEncodingToIANACharSetName(encoding);
+@@ -4547,7 +4553,7 @@ static PyObject *CF_CFStringGetMostCompa
+                           &encoding))
+         return NULL;
+     _rv = CFStringGetMostCompatibleMacStringEncoding(encoding);
+-    _res = Py_BuildValue("l",
++    _res = Py_BuildValue("I",
+                          _rv);
+     return _res;
+ }
+@@ -4596,7 +4602,7 @@ static PyObject *CF_CFURLCreateWithBytes
+ #ifndef CFURLCreateWithBytes
+     PyMac_PRECHECK(CFURLCreateWithBytes);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "s#lO&",
++    if (!PyArg_ParseTuple(_args, "s#IO&",
+                           &URLBytes__in__, &URLBytes__in_len__,
+                           &encoding,
+                           OptionalCFURLRefObj_Convert, &baseURL))
+@@ -4622,7 +4628,7 @@ static PyObject *CF_CFURLCreateFromFileS
+ #ifndef CFURLCreateFromFileSystemRepresentation
+     PyMac_PRECHECK(CFURLCreateFromFileSystemRepresentation);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "s#l",
++    if (!PyArg_ParseTuple(_args, "s#B",
+                           &buffer__in__, &buffer__in_len__,
+                           &isDirectory))
+         return NULL;
+@@ -4647,7 +4653,7 @@ static PyObject *CF_CFURLCreateFromFileS
+ #ifndef CFURLCreateFromFileSystemRepresentationRelativeToBase
+     PyMac_PRECHECK(CFURLCreateFromFileSystemRepresentationRelativeToBase);
+ #endif
+-    if (!PyArg_ParseTuple(_args, "s#lO&",
++    if (!PyArg_ParseTuple(_args, "s#BO&",
+                           &buffer__in__, &buffer__in_len__,
+                           &isDirectory,
+                           OptionalCFURLRefObj_Convert, &baseURL))
+--- a/Mac/Tools/pythonw.c	1673687351.142082333
++++ b/Mac/Tools/pythonw.c	1673603070.815078647
+@@ -152,6 +152,12 @@ int
+ main(int argc, char **argv) {
+     char* exec_path = get_python_path();
+ 
++    if (getenv("SYSTEM_VERSION_COMPAT") == NULL) {
++        setenv("SYSTEM_VERSION_COMPAT", "1", 1);
++        setenv("PYTHON_UNSET_SYSTEM_VERSION_COMPAT", "1", 1);
++    }
++    setenv("PYTHON_LAUNCHED_FROM_WRAPPER", "1", 1);
++
+     /*
+      * Let argv[0] refer to the new interpreter. This is needed to
+      * get the effect we want on OSX 10.5 or earlier. That is, without
+--- a/Makefile.pre.in	1673687355.753865533
++++ b/Makefile.pre.in	1673603070.815892894
+@@ -147,11 +147,6 @@ PYTHONFRAMEWORK=	@PYTHONFRAMEWORK@
+ PYTHONFRAMEWORKDIR=	@PYTHONFRAMEWORKDIR@
+ PYTHONFRAMEWORKPREFIX=	@PYTHONFRAMEWORKPREFIX@
+ PYTHONFRAMEWORKINSTALLDIR= @PYTHONFRAMEWORKINSTALLDIR@
+-# Deployment target selected during configure, to be checked
+-# by distutils. The export statement is needed to ensure that the
+-# deployment target is active during build.
+-MACOSX_DEPLOYMENT_TARGET=@CONFIGURE_MACOSX_DEPLOYMENT_TARGET@
+-@EXPORT_MACOSX_DEPLOYMENT_TARGET@export MACOSX_DEPLOYMENT_TARGET
+ 
+ # Options to enable prebinding (for fast startup prior to Mac OS X 10.3)
+ OTHER_LIBTOOL_OPT=@OTHER_LIBTOOL_OPT@
+--- a/Modules/_ctypes/darwin/dlfcn.h	1587330819.000000000
++++ b/Modules/_ctypes/darwin/dlfcn.h	1673603070.816379558
+@@ -50,21 +50,11 @@ typedef struct dl_info {
+ } Dl_info;
+ 
+ 
+-#if MAC_OS_X_VERSION_MIN_REQUIRED <= MAC_OS_X_VERSION_10_2
+-#warning CTYPES_DARWIN_DLFCN
+-#define CTYPES_DARWIN_DLFCN
+-extern void * (*ctypes_dlopen)(const char *path, int mode);
+-extern void * (*ctypes_dlsym)(void * handle, const char *symbol);
+-extern const char * (*ctypes_dlerror)(void);
+-extern int (*ctypes_dlclose)(void * handle);
+-extern int (*ctypes_dladdr)(const void *, Dl_info *);
+-#else
+ extern void * dlopen(const char *path, int mode);
+ extern void * dlsym(void * handle, const char *symbol);
+ extern const char * dlerror(void);
+ extern int dlclose(void * handle);
+ extern int dladdr(const void *, Dl_info *);
+-#endif
+ 
+ #define RTLD_LAZY	0x1
+ #define RTLD_NOW	0x2
+--- a/Modules/_ctypes/darwin/dlfcn_simple.c	1587330819.000000000
++++ b/Modules/_ctypes/darwin/dlfcn_simple.c	1673603070.817246555
+@@ -44,18 +44,12 @@ WITH THE SOFTWARE OR THE USE OR OTHER DE
+ 
+ #define ERR_STR_LEN 256
+ 
+-#ifndef MAC_OS_X_VERSION_10_3
+-#define MAC_OS_X_VERSION_10_3 1030
+-#endif
+-
+-#if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_3
+ #define DARWIN_HAS_DLOPEN
+ extern void * dlopen(const char *path, int mode) __attribute__((weak_import));
+ extern void * dlsym(void * handle, const char *symbol) __attribute__((weak_import));
+ extern const char * dlerror(void) __attribute__((weak_import));
+ extern int dlclose(void * handle) __attribute__((weak_import));
+ extern int dladdr(const void *, Dl_info *) __attribute__((weak_import));
+-#endif /* MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_3 */
+ 
+ #ifndef DARWIN_HAS_DLOPEN
+ #define dlopen darwin_dlopen
+@@ -71,180 +65,6 @@ const char * (*ctypes_dlerror)(void);
+ int (*ctypes_dlclose)(void * handle);
+ int (*ctypes_dladdr)(const void *, Dl_info *);
+ 
+-#if MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_3
+-/* Mac OS X 10.3+ has dlopen, so strip all this dead code to avoid warnings */
+-
+-static void *dlsymIntern(void *handle, const char *symbol);
+-
+-static const char *error(int setget, const char *str, ...);
+-
+-/* Set and get the error string for use by dlerror */
+-static const char *error(int setget, const char *str, ...)
+-{
+-    static char errstr[ERR_STR_LEN];
+-    static int err_filled = 0;
+-    const char *retval;
+-    va_list arg;
+-    if (setget == 0)
+-    {
+-        va_start(arg, str);
+-        strncpy(errstr, "dlcompat: ", ERR_STR_LEN);
+-        vsnprintf(errstr + 10, ERR_STR_LEN - 10, str, arg);
+-        va_end(arg);
+-        err_filled = 1;
+-        retval = NULL;
+-    }
+-    else
+-    {
+-        if (!err_filled)
+-            retval = NULL;
+-        else
+-            retval = errstr;
+-        err_filled = 0;
+-    }
+-    return retval;
+-}
+-
+-/* darwin_dlopen */
+-static void *darwin_dlopen(const char *path, int mode)
+-{
+-    void *module = 0;
+-    NSObjectFileImage ofi = 0;
+-    NSObjectFileImageReturnCode ofirc;
+-
+-    /* If we got no path, the app wants the global namespace, use -1 as the marker
+-       in this case */
+-    if (!path)
+-        return (void *)-1;
+-
+-    /* Create the object file image, works for things linked with the -bundle arg to ld */
+-    ofirc = NSCreateObjectFileImageFromFile(path, &ofi);
+-    switch (ofirc)
+-    {
+-        case NSObjectFileImageSuccess:
+-            /* It was okay, so use NSLinkModule to link in the image */
+-            module = NSLinkModule(ofi, path,
+-                                                      NSLINKMODULE_OPTION_RETURN_ON_ERROR
+-                                                      | (mode & RTLD_GLOBAL) ? 0 : NSLINKMODULE_OPTION_PRIVATE
+-                                                      | (mode & RTLD_LAZY) ? 0 : NSLINKMODULE_OPTION_BINDNOW);
+-            NSDestroyObjectFileImage(ofi);
+-            break;
+-        case NSObjectFileImageInappropriateFile:
+-            /* It may have been a dynamic library rather than a bundle, try to load it */
+-            module = (void *)NSAddImage(path, NSADDIMAGE_OPTION_RETURN_ON_ERROR);
+-            break;
+-        default:
+-            /* God knows what we got */
+-            error(0, "Can not open \"%s\"", path);
+-            return 0;
+-    }
+-    if (!module)
+-        error(0, "Can not open \"%s\"", path);
+-    return module;
+-
+-}
+-
+-/* dlsymIntern is used by dlsym to find the symbol */
+-static void *dlsymIntern(void *handle, const char *symbol)
+-{
+-    NSSymbol nssym = 0;
+-    /* If the handle is -1, if is the app global context */
+-    if (handle == (void *)-1)
+-    {
+-        /* Global context, use NSLookupAndBindSymbol */
+-        if (NSIsSymbolNameDefined(symbol))
+-        {
+-            nssym = NSLookupAndBindSymbol(symbol);
+-        }
+-
+-    }
+-    /* Now see if the handle is a struch mach_header* or not, use NSLookupSymbol in image
+-       for libraries, and NSLookupSymbolInModule for bundles */
+-    else
+-    {
+-        /* Check for both possible magic numbers depending on x86/ppc byte order */
+-        if ((((struct mach_header *)handle)->magic == MH_MAGIC) ||
+-            (((struct mach_header *)handle)->magic == MH_CIGAM))
+-        {
+-            if (NSIsSymbolNameDefinedInImage((struct mach_header *)handle, symbol))
+-            {
+-                nssym = NSLookupSymbolInImage((struct mach_header *)handle,
+-                                                                          symbol,
+-                                                                          NSLOOKUPSYMBOLINIMAGE_OPTION_BIND
+-                                                                          | NSLOOKUPSYMBOLINIMAGE_OPTION_RETURN_ON_ERROR);
+-            }
+-
+-        }
+-        else
+-        {
+-            nssym = NSLookupSymbolInModule(handle, symbol);
+-        }
+-    }
+-    if (!nssym)
+-    {
+-        error(0, "Symbol \"%s\" Not found", symbol);
+-        return NULL;
+-    }
+-    return NSAddressOfSymbol(nssym);
+-}
+-
+-static const char *darwin_dlerror(void)
+-{
+-    return error(1, (char *)NULL);
+-}
+-
+-static int darwin_dlclose(void *handle)
+-{
+-    if ((((struct mach_header *)handle)->magic == MH_MAGIC) ||
+-        (((struct mach_header *)handle)->magic == MH_CIGAM))
+-    {
+-        error(0, "Can't remove dynamic libraries on darwin");
+-        return 0;
+-    }
+-    if (!NSUnLinkModule(handle, 0))
+-    {
+-        error(0, "unable to unlink module %s", NSNameOfModule(handle));
+-        return 1;
+-    }
+-    return 0;
+-}
+-
+-
+-/* dlsym, prepend the underscore and call dlsymIntern */
+-static void *darwin_dlsym(void *handle, const char *symbol)
+-{
+-    static char undersym[257];          /* Saves calls to malloc(3) */
+-    int sym_len = strlen(symbol);
+-    void *value = NULL;
+-    char *malloc_sym = NULL;
+-
+-    if (sym_len < 256)
+-    {
+-        snprintf(undersym, 256, "_%s", symbol);
+-        value = dlsymIntern(handle, undersym);
+-    }
+-    else
+-    {
+-        malloc_sym = malloc(sym_len + 2);
+-        if (malloc_sym)
+-        {
+-            sprintf(malloc_sym, "_%s", symbol);
+-            value = dlsymIntern(handle, malloc_sym);
+-            free(malloc_sym);
+-        }
+-        else
+-        {
+-            error(0, "Unable to allocate memory");
+-        }
+-    }
+-    return value;
+-}
+-
+-static int darwin_dladdr(const void *handle, Dl_info *info) {
+-    return 0;
+-}
+-#endif /* MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_3 */
+-
+ #if __GNUC__ < 4
+ #pragma CALL_ON_LOAD ctypes_dlfcn_init
+ #else
+@@ -258,14 +78,6 @@ void ctypes_dlfcn_init(void) {
+         ctypes_dlerror = dlerror;
+         ctypes_dlclose = dlclose;
+         ctypes_dladdr = dladdr;
+-    } else {
+-#if MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_3
+-        ctypes_dlsym = darwin_dlsym;
+-        ctypes_dlopen = darwin_dlopen;
+-        ctypes_dlerror = darwin_dlerror;
+-        ctypes_dlclose = darwin_dlclose;
+-        ctypes_dladdr = darwin_dladdr;
+-#endif /* MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_3 */
+     }
+ }
+ 
+--- a/Modules/errnomodule.c	1587330819.000000000
++++ b/Modules/errnomodule.c	1673603070.817917719
+@@ -72,6 +72,69 @@ initerrno(void)
+      * which should be pretty all-inclusive
+      */
+ 
++#ifdef ENOTSUP
++    inscode(d, ds, de, "ENOTSUP", ENOTSUP, "Operation not supported");
++#endif
++#ifdef EPROCLIM
++    inscode(d, ds, de, "EPROCLIM", EPROCLIM, "Too many processes");
++#endif
++#ifdef EBADRPC
++    inscode(d, ds, de, "EBADRPC", EBADRPC, "RPC struct is bad");
++#endif
++#ifdef ERPCMISMATCH
++    inscode(d, ds, de, "ERPCMISMATCH", ERPCMISMATCH, "RPC version wrong");
++#endif
++#ifdef EPROGUNAVAIL
++    inscode(d, ds, de, "EPROGUNAVAIL", EPROGUNAVAIL, "RPC prog. not avail");
++#endif
++#ifdef EPROGMISMATCH
++    inscode(d, ds, de, "EPROGMISMATCH", EPROGMISMATCH, "Program version wrong");
++#endif
++#ifdef EPROCUNAVAIL
++    inscode(d, ds, de, "EPROCUNAVAIL", EPROCUNAVAIL, "Bad procedure for program");
++#endif
++#ifdef EFTYPE
++    inscode(d, ds, de, "EFTYPE", EFTYPE, "Inappropriate file type or format");
++#endif
++#ifdef EAUTH
++    inscode(d, ds, de, "EAUTH", EAUTH, "Authentication error");
++#endif
++#ifdef ENEEDAUTH
++    inscode(d, ds, de, "ENEEDAUTH", ENEEDAUTH, "Need authenticator");
++#endif
++#ifdef EPWROFF
++    inscode(d, ds, de, "EPWROFF", EPWROFF, "Device power is off");
++#endif
++#ifdef EDEVERR
++    inscode(d, ds, de, "EDEVERR", EDEVERR, "Device error");
++#endif
++#ifdef EBADEXEC
++    inscode(d, ds, de, "EBADEXEC", EBADEXEC, "Bad executable (or shared library)");
++#endif
++#ifdef EBADARCH
++    inscode(d, ds, de, "EBADARCH", EBADARCH, "Bad CPU type in executable");
++#endif
++#ifdef ESHLIBVERS
++    inscode(d, ds, de, "ESHLIBVERS", ESHLIBVERS, "Shared library version mismatch");
++#endif
++#ifdef EBADMACHO
++    inscode(d, ds, de, "EBADMACHO", EBADMACHO, "Malformed Mach-o file");
++#endif
++#ifdef ECANCELED
++    inscode(d, ds, de, "ECANCELED", ECANCELED, "Operation canceled");
++#endif
++#ifdef ENOATTR
++    inscode(d, ds, de, "ENOATTR", ENOATTR, "Attribute not found");
++#endif
++#ifdef ENOPOLICY
++    inscode(d, ds, de, "ENOPOLICY", ENOPOLICY, "Policy not found");
++#endif
++#ifdef ENOTRECOVERABLE
++    inscode(d, ds, de, "ENOTRECOVERABLE", ENOTRECOVERABLE, "State not recoverable");
++#endif
++#ifdef EOWNERDEAD
++    inscode(d, ds, de, "EOWNERDEAD", EOWNERDEAD, "Previous owner died");
++#endif
+ #ifdef ENODEV
+     inscode(d, ds, de, "ENODEV", ENODEV, "No such device");
+ #endif
+--- a/Modules/getpath.c	1673687355.759210899
++++ b/Modules/getpath.c	1673604275.868243760
+@@ -7,7 +7,7 @@
+ #include <string.h>
+ 
+ #ifdef __APPLE__
+-#include <mach-o/dyld.h>
++#include <dlfcn.h>
+ #include <AvailabilityMacros.h>
+ #endif
+ 
+@@ -382,14 +382,11 @@ calculate_path(void)
+     size_t prefixsz;
+     char *defpath = pythonpath;
+ #ifdef WITH_NEXT_FRAMEWORK
+-    NSModule pythonModule;
++    Dl_info addrinfo;
++    int first_pass = 1;
+ #endif
+-#ifdef __APPLE__
+-#if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_4
++#ifdef notdef
+     uint32_t nsexeclength = MAXPATHLEN;
+-#else
+-    unsigned long nsexeclength = MAXPATHLEN;
+-#endif
+ #endif
+ 
+         /* If there is no slash in the argv0 path, then we have to
+@@ -399,7 +396,7 @@ calculate_path(void)
+          */
+         if (strchr(prog, SEP))
+                 strncpy(progpath, prog, MAXPATHLEN);
+-#ifdef __APPLE__
++#ifdef notdef
+      /* On Mac OS X, if a script uses an interpreter of the form
+       * "#!/opt/python2.3/bin/python", the kernel only passes "python"
+       * as argv[0], which falls through to the $PATH search below.
+@@ -412,7 +409,7 @@ calculate_path(void)
+       */
+      else if(0 == _NSGetExecutablePath(progpath, &nsexeclength) && progpath[0] == SEP)
+        ;
+-#endif /* __APPLE__ */
++#endif /* notdef */
+         else if (path) {
+                 while (1) {
+                         char *delim = strchr(path, DELIM);
+@@ -451,9 +448,18 @@ calculate_path(void)
+         ** which is in the framework, not relative to the executable, which may
+         ** be outside of the framework. Except when we're in the build directory...
+         */
+-    pythonModule = NSModuleForSymbol(NSLookupAndBindSymbol("_Py_Initialize"));
+-    /* Use dylib functions to find out where the framework was loaded from */
+-    buf = (char *)NSLibraryNameForModule(pythonModule);
++	/* dladdr() now returns the real path of the dylib, instead of the
++	** path of the symlink.  This breaks virtualenv.  To fix this, we
++	** skip using dladdr() during a first pass, and if that fails, then
++	** we go back and do the dladdr().  It turns out that since we moved
++	** Python.app to inside the Python.framework bundle, the call to
++	** search_for_prefix() will now succeed without needing dladdr().
++	** However, virtualenv copies the wrong binary when the prefix is
++	** /usr, so if progpath begins with /usr/bin/, we skip the first pass.
++	*/
++    if (strncmp(progpath, "/usr/bin/", 9) == 0) first_pass = 0;
++return_here_for_second_pass:
++    buf = first_pass ? NULL : (dladdr("_Py_Initialize", &addrinfo) ? (char *)addrinfo.dli_fname : NULL);
+     if (buf != NULL) {
+         /* We're in a framework. */
+         /* See if we might be in the build directory. The framework in the
+@@ -506,6 +512,12 @@ calculate_path(void)
+     */
+ 
+     if (!(pfound = search_for_prefix(argv0_path, home))) {
++#ifdef WITH_NEXT_FRAMEWORK
++	if (first_pass) {
++	    first_pass = 0;
++	    goto return_here_for_second_pass;
++	}
++#endif
+         if (!Py_FrozenFlag)
+             fprintf(stderr,
+                 "Could not find platform independent libraries <prefix>\n");
+--- a/Modules/posixmodule.c	1673687355.765141394
++++ b/Modules/posixmodule.c	1673603070.821459579
+@@ -3926,7 +3926,8 @@ posix_fork(PyObject *self, PyObject *noa
+ #ifdef HAVE_PTY_H
+ #include <pty.h>
+ #else
+-#ifdef HAVE_LIBUTIL_H
++#if defined(HAVE_LIBUTIL_H) && !defined(__APPLE__)
++// pty prototypes do exist in BSD libutil.h, but not Apple
+ #include <libutil.h>
+ #else
+ #ifdef HAVE_UTIL_H
+@@ -6102,7 +6103,7 @@ static PyObject *
+ posix_setgroups(PyObject *self, PyObject *groups)
+ {
+     Py_ssize_t i, len;
+-    gid_t grouplist[MAX_GROUPS];
++    gid_t *grouplist;
+ 
+     if (!PySequence_Check(groups)) {
+         PyErr_SetString(PyExc_TypeError, "setgroups argument must be a sequence");
+@@ -6112,9 +6113,9 @@ posix_setgroups(PyObject *self, PyObject
+     if (len < 0) {
+         return NULL;
+     }
+-    if (len > MAX_GROUPS) {
+-        PyErr_SetString(PyExc_ValueError, "too many groups");
+-        return NULL;
++    if ((grouplist = (gid_t *)alloca(len * sizeof(gid_t))) == NULL) {
++	    PyErr_NoMemory();
++	    return NULL;
+     }
+     for(i = 0; i < len; i++) {
+         PyObject *elem;
+@@ -7989,6 +7990,15 @@ static struct constdef posix_constants_c
+ #ifdef _MIPS_CS_VENDOR
+     {"MIPS_CS_VENDOR",  _MIPS_CS_VENDOR},
+ #endif
++#ifdef _CS_DARWIN_USER_DIR
++    {"CS_DARWIN_USER_DIR", _CS_DARWIN_USER_DIR},
++#endif
++#ifdef _CS_DARWIN_USER_TEMP_DIR
++    {"CS_DARWIN_USER_TEMP_DIR", _CS_DARWIN_USER_TEMP_DIR},
++#endif
++#ifdef _CS_DARWIN_USER_CACHE_DIR
++    {"CS_DARWIN_USER_CACHE_DIR", _CS_DARWIN_USER_CACHE_DIR},
++#endif
+ };
+ 
+ static int
+--- a/Modules/pwdmodule.c	1587330819.000000000
++++ b/Modules/pwdmodule.c	1673603070.821977410
+@@ -64,7 +64,7 @@ mkpwent(struct passwd *p)
+     if (v == NULL)
+         return NULL;
+ 
+-#define SETI(i,val) PyStructSequence_SET_ITEM(v, i, PyInt_FromLong((long) val))
++#define SETI(i,val) PyStructSequence_SET_ITEM(v, i, PyInt_FromLong((long) (int)val))
+ #define SETS(i,val) sets(v, i, val)
+ 
+     SETS(setIndex++, p->pw_name);
+--- a/Modules/readline.c	1587330819.000000000
++++ b/Modules/readline.c	1673856253.337243114
+@@ -45,27 +45,6 @@ extern char **completion_matches(char *,
+ #endif
+ #endif
+ 
+-#ifdef __APPLE__
+-/*
+- * It is possible to link the readline module to the readline
+- * emulation library of editline/libedit.
+- *
+- * On OSX this emulation library is not 100% API compatible
+- * with the "real" readline and cannot be detected at compile-time,
+- * hence we use a runtime check to detect if we're using libedit
+- *
+- * Currently there is one known API incompatibility:
+- * - 'get_history' has a 1-based index with GNU readline, and a 0-based
+- *   index with older versions of libedit's emulation.
+- * - Note that replace_history and remove_history use a 0-based index
+- *   with both implementations.
+- */
+-static int using_libedit_emulation = 0;
+-static const char libedit_version_tag[] = "EditLine wrapper";
+-
+-static int libedit_history_start = 0;
+-#endif /* __APPLE__ */
+-
+ #ifdef HAVE_RL_COMPLETION_DISPLAY_MATCHES_HOOK
+ static void
+ on_completion_display_matches_hook(char **matches,
+@@ -556,27 +535,6 @@ get_history_item(PyObject *self, PyObjec
+ 
+     if (!PyArg_ParseTuple(args, "i:get_history_item", &idx))
+         return NULL;
+-#ifdef  __APPLE__
+-    if (using_libedit_emulation) {
+-        /* Older versions of libedit's readline emulation
+-         * use 0-based indexes, while readline and newer
+-         * versions of libedit use 1-based indexes.
+-         */
+-        int length = _py_get_history_length();
+-
+-        idx = idx - 1 + libedit_history_start;
+-
+-        /*
+-         * Apple's readline emulation crashes when
+-         * the index is out of range, therefore
+-         * test for that and fail gracefully.
+-         */
+-        if (idx < (0 + libedit_history_start)
+-                || idx >= (length + libedit_history_start)) {
+-            Py_RETURN_NONE;
+-        }
+-    }
+-#endif /* __APPLE__ */
+     if ((hist_ent = history_get(idx)))
+         return PyString_FromString(hist_ent->line);
+     else {
+@@ -909,25 +867,6 @@ setup_readline(void)
+         Py_FatalError("not enough memory to save locale");
+ #endif
+ 
+-#ifdef __APPLE__
+-    /* the libedit readline emulation resets key bindings etc
+-     * when calling rl_initialize.  So call it upfront
+-     */
+-    if (using_libedit_emulation)
+-        rl_initialize();
+-
+-    /* Detect if libedit's readline emulation uses 0-based
+-     * indexing or 1-based indexing.
+-     */
+-    add_history("1");
+-    if (history_get(1) == NULL) {
+-        libedit_history_start = 0;
+-    } else {
+-        libedit_history_start = 1;
+-    }
+-    clear_history();
+-#endif /* __APPLE__ */
+-
+     using_history();
+ 
+     rl_readline_name = "python";
+@@ -960,9 +899,6 @@ setup_readline(void)
+     begidx = PyInt_FromLong(0L);
+     endidx = PyInt_FromLong(0L);
+ 
+-#ifdef __APPLE__
+-    if (!using_libedit_emulation)
+-#endif
+     {
+         if (!isatty(STDOUT_FILENO)) {
+             /* Issue #19884: stdout is not a terminal. Disable meta modifier
+@@ -982,11 +918,6 @@ setup_readline(void)
+      * XXX: A bug in the readline-2.2 library causes a memory leak
+      * inside this function.  Nothing we can do about it.
+      */
+-#ifdef __APPLE__
+-    if (using_libedit_emulation)
+-        rl_read_init_file(NULL);
+-    else
+-#endif /* __APPLE__ */
+         rl_initialize();
+ 
+     RESTORE_LOCALE(saved_locale)
+@@ -1162,12 +1093,6 @@ call_readline(FILE *sys_stdin, FILE *sys
+         int length = _py_get_history_length();
+         if (length > 0) {
+             HIST_ENTRY *hist_ent;
+-#ifdef __APPLE__
+-            if (using_libedit_emulation) {
+-                /* handle older 0-based or newer 1-based indexing */
+-                hist_ent = history_get(length + libedit_history_start - 1);
+-            } else
+-#endif /* __APPLE__ */
+                 hist_ent = history_get(length);
+             line = hist_ent ? hist_ent->line : "";
+         } else
+@@ -1195,28 +1120,11 @@ call_readline(FILE *sys_stdin, FILE *sys
+ PyDoc_STRVAR(doc_module,
+ "Importing this module enables command line editing using GNU readline.");
+ 
+-#ifdef __APPLE__
+-PyDoc_STRVAR(doc_module_le,
+-"Importing this module enables command line editing using libedit readline.");
+-#endif /* __APPLE__ */
+-
+ PyMODINIT_FUNC
+ initreadline(void)
+ {
+     PyObject *m;
+ 
+-#ifdef __APPLE__
+-    if (strncmp(rl_library_version, libedit_version_tag, strlen(libedit_version_tag)) == 0) {
+-        using_libedit_emulation = 1;
+-    }
+-
+-    if (using_libedit_emulation)
+-        m = Py_InitModule4("readline", readline_methods, doc_module_le,
+-                   (PyObject *)NULL, PYTHON_API_VERSION);
+-    else
+-
+-#endif /* __APPLE__ */
+-
+     m = Py_InitModule4("readline", readline_methods, doc_module,
+                        (PyObject *)NULL, PYTHON_API_VERSION);
+     if (m == NULL)
+--- a/Modules/socketmodule.c	1587330819.000000000
++++ b/Modules/socketmodule.c	1673603070.824299775
+@@ -84,9 +84,6 @@ Local naming conventions:
+ #ifdef __APPLE__
+ #include <AvailabilityMacros.h>
+ /* for getaddrinfo thread safety test on old versions of OS X */
+-#ifndef MAC_OS_X_VERSION_10_5
+-#define MAC_OS_X_VERSION_10_5 1050
+-#endif
+   /*
+    * inet_aton is not available on OSX 10.3, yet we want to use a binary
+    * that was build on 10.4 or later to work on that release, weak linking
+@@ -206,8 +203,6 @@ shutdown(how) -- shut down traffic in on
+ http://cvsweb.netbsd.org/bsdweb.cgi/src/lib/libc/net/getaddrinfo.c.diff?r1=1.82&r2=1.83
+ */
+ #if defined(WITH_THREAD) && ( \
+-    (defined(__APPLE__) && \
+-        MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_5) || \
+     (defined(__FreeBSD__) && __FreeBSD_version+0 < 503000) || \
+     (defined(__OpenBSD__) && OpenBSD+0 < 201311) || \
+     (defined(__NetBSD__) && __NetBSD_Version__+0 < 400000000) || \
+--- a/Python/dynload_shlib.c	1673687355.766275735
++++ b/Python/dynload_shlib.c	1673603070.824918898
+@@ -141,9 +141,25 @@ dl_funcptr _PyImport_GetDynLoadFunc(cons
+ 
+     if (handle == NULL) {
+         const char *error = dlerror();
++#ifdef __LP64__
++		char *cp;
++		char *err = NULL;
++#endif /* __LP64__ */
+         if (error == NULL)
+             error = "unknown dlopen() error";
++#ifdef __LP64__
++		else if ((cp = strstr(error, ": no matching architecture in universal wrapper")) != NULL) {
++			char *p = strchr(error, '\t');
++			if (p && ++p < cp) {
++				asprintf(&err, "%.*s: no appropriate architecture (see \"man python\" for running in a non-native architecture)", (cp - p), p);
++				if (err) error = err;
++			}
++		}
++#endif /* __LP64__ */
+         PyErr_SetString(PyExc_ImportError, error);
++#ifdef __LP64__
++		if (err) free(err);
++#endif /* __LP64__ */
+         return NULL;
+     }
+     if (fp != NULL && nhandles < 128)
+--- a/Python/import.c	1587330819.000000000
++++ b/Python/import.c	1673603070.826275225
+@@ -27,6 +27,14 @@ extern "C" {
+ typedef unsigned short mode_t;
+ #endif
+ 
++#ifdef __APPLE__
++#include <sys/fsctl.h>
++#include <sys/ioctl.h>
++#ifndef FSCTL_EVAL_ROOTAUTH
++#define FSIOC_EVAL_ROOTAUTH                              _IO('h', 50)
++#define FSCTL_EVAL_ROOTAUTH                              IOCBASECMD(FSIOC_EVAL_ROOTAUTH)
++#endif
++#endif
+ 
+ /* Magic word to reject .pyc files generated by other Python versions.
+    It should change for each incompatible change to the bytecode.
+@@ -797,6 +805,13 @@ make_compiled_pathname(char *pathname, c
+     return buf;
+ }
+ 
++#ifdef __APPLE__
++static bool
++is_on_sealed_volume(const char *cpathname)
++{
++    return (fsctl(cpathname, FSIOC_EVAL_ROOTAUTH, NULL, 0) == 0);
++}
++#endif
+ 
+ /* Given a pathname for a Python source file, its time of last
+    modification, and a pathname for a compiled file, check whether the
+@@ -824,6 +839,17 @@ check_compiled_module(char *pathname, ti
+     }
+     pyc_mtime = PyMarshal_ReadLongFromFile(fp);
+     if (pyc_mtime != mtime) {
++#ifdef __APPLE__
++        /* For files on a sealed volume, we implicitly trust that they're up to date.
++         * We have to do this because their timestamp might have been altered by the
++         * sealing process.
++         */
++        if (is_on_sealed_volume(cpathname)) {
++            if (Py_VerboseFlag)
++                PySys_WriteStderr("# %s is on a sealed volume, skip mtime check\n", cpathname);
++            return fp;
++        }
++#endif
+         if (Py_VerboseFlag)
+             PySys_WriteStderr("# %s has bad mtime\n", cpathname);
+         fclose(fp);
+--- a/Tools/ssl/multissltests.py	1587330819.000000000
++++ b/Tools/ssl/multissltests.py	1673859147.917247017
+@@ -46,9 +46,8 @@ OPENSSL_OLD_VERSIONS = [
+ ]
+ 
+ OPENSSL_RECENT_VERSIONS = [
+-    "1.0.2t",
+-    "1.1.0l",
+-    "1.1.1f",
++    "1.1.1k",
++    # "3.0.0-alpha14"
+ ]
+ 
+ LIBRESSL_OLD_VERSIONS = [
+--- a/configure.ac	1673687355.772122854
++++ b/configure.ac	1673704593.218798675
+@@ -176,7 +176,7 @@ fi
+ AC_SUBST(LIPO_32BIT_FLAGS)
+ AC_MSG_CHECKING(for --with-universal-archs)
+ AC_ARG_WITH(universal-archs,
+-    AS_HELP_STRING([--with-universal-archs=ARCH], [select architectures for universal build ("32-bit", "64-bit", "3-way", "intel", "intel-32", "intel-64", or "all")]),
++    AS_HELP_STRING([--with-universal-archs=ARCH], [select architectures for universal build ("32-bit", "64-bit", "3-way", "a12", "iossim", "intel", "intel-32", "intel-64", or "all")]),
+ [
+ 	UNIVERSAL_ARCHS="$withval"
+ ],
+@@ -340,6 +340,9 @@ then
+ 	*-*-cygwin*)
+ 		ac_sys_system=Cygwin
+ 		;;
++        *-*-darwin*)
++                ac_sys_system=Darwin
++                ;;
+ 	*)
+ 		# for now, limit cross builds to known configurations
+ 		MACHDEP="unknown"
+@@ -386,6 +389,9 @@ if test "$cross_compiling" = yes; then
+ 	*-*-cygwin*)
+ 		_host_cpu=
+ 		;;
++        *-*-darwin*)
++                _host_cpu=$host_cpu
++                ;;
+ 	*)
+ 		# for now, limit cross builds to known configurations
+ 		MACHDEP="unknown"
+@@ -457,7 +463,7 @@ case $ac_sys_system/$ac_sys_release in
+   # has no effect, don't bother defining them
+   Darwin/@<:@6789@:>@.*)
+     define_xopen_source=no;;
+-  Darwin/12@<:@0-9@:>@.*)
++  Darwin/@<:@12@:>@@<:@0-9@:>@.*)
+     define_xopen_source=no;;
+   # On AIX 4 and 5.1, mbstate_t is defined only when _XOPEN_SOURCE == 500 but
+   # used in wcsnrtombs() and mbsnrtowcs() even if _XOPEN_SOURCE is not defined
+@@ -511,7 +517,8 @@ then
+ fi
+ AC_MSG_RESULT($MACHDEP)
+ 
+-MULTIARCH=$($CC --print-multiarch 2>/dev/null)
++# Torrekie: This corrupts our setup, make MULTIARCH='' to match
++#           macOS behavior
+ AC_SUBST(MULTIARCH)
+ 
+ 
+@@ -541,14 +548,6 @@ then
+ fi
+ AC_MSG_RESULT($EXTRAPLATDIR)
+ 
+-# Record the configure-time value of MACOSX_DEPLOYMENT_TARGET,
+-# it may influence the way we can build extensions, so distutils
+-# needs to check it
+-AC_SUBST(CONFIGURE_MACOSX_DEPLOYMENT_TARGET)
+-AC_SUBST(EXPORT_MACOSX_DEPLOYMENT_TARGET)
+-CONFIGURE_MACOSX_DEPLOYMENT_TARGET=
+-EXPORT_MACOSX_DEPLOYMENT_TARGET='#'
+-
+ # checks for alternative programs
+ 
+ # compiler flags are generated in two sets, BASECFLAGS and OPT.  OPT is just
+@@ -717,7 +716,6 @@ then
+   ])
+ fi
+ 
+-MULTIARCH=$($CC --print-multiarch 2>/dev/null)
+ AC_SUBST(MULTIARCH)
+ 
+ 
+@@ -1224,8 +1222,18 @@ yes)
+                LIPO_32BIT_FLAGS="-extract ppc7400 -extract i386"
+                ARCH_RUN_32BIT="/usr/bin/arch -i386 -ppc"
+                ;;
++            a12)
++               UNIVERSAL_ARCH_FLAGS="-arch arm64 -arch arm64e"
++               LIPO_32BIT_FLAGS=""
++               ARCH_RUN_32BIT=""
++               ;;
++            iossim)
++               UNIVERSAL_ARCH_FLAGS="-arch arm64 -arch x86_64"
++               LIPO_32BIT_FLAGS=""
++               ARCH_RUN_32BIT=""
++               ;;
+             *)
+-               AC_MSG_ERROR([proper usage is --with-universal-arch=32-bit|64-bit|all|intel|3-way])
++               AC_MSG_ERROR([proper usage is --with-universal-arch=32-bit|64-bit|a12|all|iossim|intel|3-way])
+                ;;
+             esac
+ 
+@@ -1240,58 +1248,6 @@ yes)
+             fi
+         fi
+ 
+-        # Calculate an appropriate deployment target for this build:
+-        # The deployment target value is used explicitly to enable certain
+-        # features are enabled (such as builtin libedit support for readline)
+-        # through the use of Apple's Availability Macros and is used as a
+-        # component of the string returned by distutils.get_platform().
+-        #
+-        # Use the value from:
+-        # 1. the MACOSX_DEPLOYMENT_TARGET environment variable if specified
+-        # 2. the operating system version of the build machine if >= 10.6
+-        # 3. If running on OS X 10.3 through 10.5, use the legacy tests
+-        #       below to pick either 10.3, 10.4, or 10.5 as the target.
+-        # 4. If we are running on OS X 10.2 or earlier, good luck!
+-
+-        AC_MSG_CHECKING(which MACOSX_DEPLOYMENT_TARGET to use)
+-        cur_target_major=`sw_vers -productVersion | \
+-                sed 's/\([[0-9]]*\)\.\([[0-9]]*\).*/\1/'`
+-        cur_target_minor=`sw_vers -productVersion | \
+-                sed 's/\([[0-9]]*\)\.\([[0-9]]*\).*/\2/'`
+-        cur_target="${cur_target_major}.${cur_target_minor}"
+-        if test ${cur_target_major} -eq 10 && \
+-           test ${cur_target_minor} -ge 3 && \
+-           test ${cur_target_minor} -le 5
+-        then
+-            # OS X 10.3 through 10.5
+-            cur_target=10.3
+-            if test ${enable_universalsdk}
+-            then
+-                case "$UNIVERSAL_ARCHS" in
+-                all|3-way|intel|64-bit)
+-                    # These configurations were first supported in 10.5
+-                    cur_target='10.5'
+-                    ;;
+-                esac
+-            else
+-                if test `/usr/bin/arch` = "i386"
+-                then
+-                    # 10.4 was the first release to support Intel archs
+-                    cur_target="10.4"
+-                fi
+-            fi
+-        fi
+-        CONFIGURE_MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET-${cur_target}}
+-
+-        # Make sure that MACOSX_DEPLOYMENT_TARGET is set in the
+-        # environment with a value that is the same as what we'll use
+-        # in the Makefile to ensure that we'll get the same compiler
+-        # environment during configure and build time.
+-        MACOSX_DEPLOYMENT_TARGET="$CONFIGURE_MACOSX_DEPLOYMENT_TARGET"
+-        export MACOSX_DEPLOYMENT_TARGET
+-        EXPORT_MACOSX_DEPLOYMENT_TARGET=''
+-        AC_MSG_RESULT($MACOSX_DEPLOYMENT_TARGET)
+-
+         # end of Darwin* tests
+         ;;
+ 	OSF*)
+@@ -2231,33 +2187,10 @@ then
+ 		# Use -undefined dynamic_lookup whenever possible (10.3 and later).
+ 		# This allows an extension to be used in any Python
+ 
+-		dep_target_major=`echo ${MACOSX_DEPLOYMENT_TARGET} | \
+-				sed 's/\([[0-9]]*\)\.\([[0-9]]*\).*/\1/'`
+-		dep_target_minor=`echo ${MACOSX_DEPLOYMENT_TARGET} | \
+-				sed 's/\([[0-9]]*\)\.\([[0-9]]*\).*/\2/'`
+-		if test ${dep_target_major} -eq 10 && \
+-		   test ${dep_target_minor} -le 2
+-		then
+-			# building for OS X 10.0 through 10.2
+-			LDSHARED='$(CC) -bundle'
+-			LDCXXSHARED='$(CXX) -bundle'
+-			if test "$enable_framework" ; then
+-				# Link against the framework. All externals should be defined.
+-				BLDSHARED="$LDSHARED "'$(PYTHONFRAMEWORKDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK)'
+-				LDSHARED="$LDSHARED "'$(PYTHONFRAMEWORKPREFIX)/$(PYTHONFRAMEWORKDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK)'
+-				LDCXXSHARED="$LDCXXSHARED "'$(PYTHONFRAMEWORKPREFIX)/$(PYTHONFRAMEWORKDIR)/Versions/$(VERSION)/$(PYTHONFRAMEWORK)'
+-			else
+-				# No framework, use the Python app as bundle-loader
+-				BLDSHARED="$LDSHARED "'-bundle_loader $(BUILDPYTHON)'
+-				LDSHARED="$LDSHARED "'-bundle_loader $(BINDIR)/python$(VERSION)$(EXE)'
+-				LDCXXSHARED="$LDCXXSHARED "'-bundle_loader $(BINDIR)/python$(VERSION)$(EXE)'
+-			fi
+-		else
+-			# building for OS X 10.3 and later
+-			LDSHARED='$(CC) -bundle -undefined dynamic_lookup'
+-			LDCXXSHARED='$(CXX) -bundle -undefined dynamic_lookup'
+-			BLDSHARED="$LDSHARED"
+-		fi
++		# building for OS X 10.3 and later
++		LDSHARED='$(CC) -bundle -undefined dynamic_lookup'
++		LDCXXSHARED='$(CXX) -bundle -undefined dynamic_lookup'
++		BLDSHARED="$LDSHARED"
+ 		;;
+ 	Linux*|GNU*|QNX*)
+ 		LDSHARED='$(CC) -shared'
+@@ -3147,7 +3080,7 @@ AC_CHECK_FUNCS(alarm setitimer getitimer
+  gai_strerror getgroups getlogin getloadavg getpeername getpgid getpid \
+  getentropy \
+  getpriority getresuid getresgid getpwent getspnam getspent getsid getwd \
+- initgroups kill killpg lchown lstat mkfifo mknod mktime mmap \
++ initgroups kill killpg lchmod lchown lstat mkfifo mknod mktime mmap \
+  mremap nice pathconf pause plock poll pthread_init \
+  putenv readlink realpath \
+  select sem_open sem_timedwait sem_getvalue sem_unlink setegid seteuid \
+@@ -3159,13 +3092,6 @@ AC_CHECK_FUNCS(alarm setitimer getitimer
+  sysconf tcgetpgrp tcsetpgrp tempnam timegm times tmpfile tmpnam tmpnam_r \
+  truncate uname unsetenv utimes waitpid wait3 wait4 wcscoll _getpty)
+ 
+-# Force lchmod off for Linux. Linux disallows changing the mode of symbolic
+-# links. Some libc implementations have a stub lchmod implementation that always
+-# returns an error.
+-if test "$MACHDEP" != linux; then
+-  AC_CHECK_FUNCS(lchmod)
+-fi
+-
+ # For some functions, having a definition is not sufficient, since
+ # we want to take their address.
+ AC_MSG_CHECKING(for chroot)
+@@ -4319,7 +4245,7 @@ for py_libtermcap in "" ncursesw ncurses
+   fi
+ done
+ # Uncomment this line if you want to use READINE_LIBS in Makefile or scripts
+-#AC_SUBST([READLINE_LIBS])
++AC_SUBST([READLINE_LIBS])
+ if test $py_cv_lib_readline = no; then
+   AC_MSG_RESULT([none])
+ else
+--- a/setup.py	1673687355.773751114
++++ b/setup.py	1673689658.699536792
+@@ -41,19 +41,19 @@ def add_dir_to_list(dirlist, dir):
+     1) 'dir' is not already in 'dirlist'
+     2) 'dir' actually exists, and is a directory."""
+     if dir is not None and dir not in dirlist:
+-        if host_platform == 'darwin' and is_macosx_sdk_path(dir):
+-            # If in a macOS SDK path, check relative to the SDK root
++        if host_platform == 'darwin' and is_darwin_sdk_path(dir):
++            # If in a Darwin SDK path, check relative to the SDK root
+             dir_exists = os.path.isdir(
+-                os.path.join(macosx_sdk_root(), dir[1:]))
++                os.path.join(darwin_sdk_root(), dir[1:]))
+         else:
+             dir_exists = os.path.isdir(dir)
+         if dir_exists:
+             dirlist.insert(0, dir)
+ 
+-MACOS_SDK_ROOT = None
++DARWIN_SDK_ROOT = None
+ 
+-def macosx_sdk_root():
+-    """Return the directory of the current macOS SDK.
++def darwin_sdk_root():
++    """Return the directory of the current Darwin SDK.
+ 
+     If no SDK was explicitly configured, call the compiler to find which
+     include files paths are being searched by default.  Use '/' if the
+@@ -63,18 +63,18 @@ def macosx_sdk_root():
+     The SDK paths used by Apple-supplied tool chains depend on the
+     setting of various variables; see the xcrun man page for more info.
+     """
+-    global MACOS_SDK_ROOT
++    global DARWIN_SDK_ROOT
+ 
+     # If already called, return cached result.
+-    if MACOS_SDK_ROOT:
+-        return MACOS_SDK_ROOT
++    if DARWIN_SDK_ROOT:
++        return DARWIN_SDK_ROOT
+ 
+     cflags = sysconfig.get_config_var('CFLAGS')
+     m = re.search(r'-isysroot\s+(\S+)', cflags)
+     if m is not None:
+-        MACOS_SDK_ROOT = m.group(1)
++        DARWIN_SDK_ROOT = m.group(1)
+     else:
+-        MACOS_SDK_ROOT = '/'
++        DARWIN_SDK_ROOT = '/'
+         cc = sysconfig.get_config_var('CC')
+         tmpfile = '/tmp/setup_sdk_root.%d' % os.getpid()
+         try:
+@@ -94,19 +94,19 @@ def macosx_sdk_root():
+                         elif in_incdirs:
+                             line = line.strip()
+                             if line == '/usr/include':
+-                                MACOS_SDK_ROOT = '/'
++                                DARWIN_SDK_ROOT = '/'
+                             elif line.endswith(".sdk/usr/include"):
+-                                MACOS_SDK_ROOT = line[:-12]
++                                DARWIN_SDK_ROOT = line[:-12]
+         finally:
+             os.unlink(tmpfile)
+ 
+-    return MACOS_SDK_ROOT
++    return DARWIN_SDK_ROOT
+ 
+-def is_macosx_sdk_path(path):
++def is_darwin_sdk_path(path):
+     """
+-    Returns True if 'path' can be located in an OSX SDK
++    Returns True if 'path' can be located in an Darwin SDK
+     """
+-    return ( (path.startswith('/usr/') and not path.startswith('/usr/local'))
++    return ( path.startswith('/usr/')
+                 or path.startswith('/System/')
+                 or path.startswith('/Library/') )
+ 
+@@ -122,16 +122,16 @@ def find_file(filename, std_dirs, paths)
+         found in one of them, the resulting list will contain the directory.
+     """
+     if host_platform == 'darwin':
+-        # Honor the MacOSX SDK setting when one was specified.
++        # Honor the Darwin SDK setting when one was specified.
+         # An SDK is a directory with the same structure as a real
+         # system, but with only header files and libraries.
+-        sysroot = macosx_sdk_root()
++        sysroot = darwin_sdk_root()
+ 
+     # Check the standard locations
+     for dir in std_dirs:
+         f = os.path.join(dir, filename)
+ 
+-        if host_platform == 'darwin' and is_macosx_sdk_path(dir):
++        if host_platform == 'darwin' and is_darwin_sdk_path(dir):
+             f = os.path.join(sysroot, dir[1:], filename)
+ 
+         if os.path.exists(f): return []
+@@ -140,7 +140,7 @@ def find_file(filename, std_dirs, paths)
+     for dir in paths:
+         f = os.path.join(dir, filename)
+ 
+-        if host_platform == 'darwin' and is_macosx_sdk_path(dir):
++        if host_platform == 'darwin' and is_darwin_sdk_path(dir):
+             f = os.path.join(sysroot, dir[1:], filename)
+ 
+         if os.path.exists(f):
+@@ -155,7 +155,7 @@ def find_library_file(compiler, libname,
+         return None
+ 
+     if host_platform == 'darwin':
+-        sysroot = macosx_sdk_root()
++        sysroot = darwin_sdk_root()
+ 
+     # Check whether the found file is in one of the standard directories
+     dirname = os.path.dirname(result)
+@@ -163,7 +163,7 @@ def find_library_file(compiler, libname,
+         # Ensure path doesn't end with path separator
+         p = p.rstrip(os.sep)
+ 
+-        if host_platform == 'darwin' and is_macosx_sdk_path(p):
++        if host_platform == 'darwin' and is_darwin_sdk_path(p):
+             # Note that, as of Xcode 7, Apple SDKs may contain textual stub
+             # libraries with .tbd extensions rather than the normal .dylib
+             # shared libraries installed in /.  The Apple compiler tool
+@@ -192,7 +192,7 @@ def find_library_file(compiler, libname,
+         # Ensure path doesn't end with path separator
+         p = p.rstrip(os.sep)
+ 
+-        if host_platform == 'darwin' and is_macosx_sdk_path(p):
++        if host_platform == 'darwin' and is_darwin_sdk_path(p):
+             if os.path.join(sysroot, p[1:]) == dirname:
+                 return [ p ]
+ 
+@@ -610,7 +610,7 @@ class PyBuildExt(build_ext):
+                 if item.startswith('-L'):
+                     lib_dirs.append(item[2:])
+ 
+-        # Check for MacOS X, which doesn't need libm.a at all
++        # Check for Darwin, which doesn't need libm.a at all
+         math_libs = ['m']
+         if host_platform in ['darwin', 'beos']:
+             math_libs = []
+@@ -759,14 +759,15 @@ class PyBuildExt(build_ext):
+         exts.append( Extension('audioop', ['audioop.c']) )
+ 
+         # Disabled on 64-bit platforms
+-        if sys.maxsize != 9223372036854775807L:
++        if True:
+             # Operations on images
+             exts.append( Extension('imageop', ['imageop.c']) )
+         else:
+             missing.extend(['imageop'])
+ 
+         # readline
+-        do_readline = self.compiler.find_library_file(lib_dirs, 'readline')
++        # Torrekie: find 'readline.8' or otherwise it will goes libreadline.tbd provided by SDK
++        do_readline = self.compiler.find_library_file(lib_dirs, 'readline.8')
+         readline_termcap_library = ""
+         curses_library = ""
+         # Determine if readline is already linked against curses or tinfo.
+@@ -795,30 +796,8 @@ class PyBuildExt(build_ext):
+         elif self.compiler.find_library_file(lib_dirs, 'curses'):
+             curses_library = 'curses'
+ 
+-        if host_platform == 'darwin':
+-            os_release = int(os.uname()[2].split('.')[0])
+-            dep_target = sysconfig.get_config_var('MACOSX_DEPLOYMENT_TARGET')
+-            if (dep_target and
+-                    (tuple(int(n) for n in dep_target.split('.')[0:2])
+-                        < (10, 5) ) ):
+-                os_release = 8
+-            if os_release < 9:
+-                # MacOSX 10.4 has a broken readline. Don't try to build
+-                # the readline module unless the user has installed a fixed
+-                # readline package
+-                if find_file('readline/rlconf.h', inc_dirs, []) is None:
+-                    do_readline = False
+         if do_readline:
+-            if host_platform == 'darwin' and os_release < 9:
+-                # In every directory on the search path search for a dynamic
+-                # library and then a static library, instead of first looking
+-                # for dynamic libraries on the entire path.
+-                # This way a statically linked custom readline gets picked up
+-                # before the (possibly broken) dynamic library in /usr/lib.
+-                readline_extra_link_args = ('-Wl,-search_paths_first',)
+-            else:
+-                readline_extra_link_args = ()
+-
++            readline_extra_link_args = ()
+             readline_libs = ['readline']
+             if readline_termcap_library:
+                 pass # Issue 7384: Already linked against curses or tinfo.
+@@ -873,28 +852,17 @@ class PyBuildExt(build_ext):
+         else:
+             missing.append('_ssl')
+ 
+-        # find out which version of OpenSSL we have
+-        openssl_ver = 0
+-        openssl_ver_re = re.compile(
+-            '^\s*#\s*define\s+OPENSSL_VERSION_NUMBER\s+(0x[0-9a-fA-F]+)' )
+-
+-        # look for the openssl version header on the compiler search path.
+-        opensslv_h = find_file('openssl/opensslv.h', [],
+-                inc_dirs + search_for_ssl_incs_in)
+-        if opensslv_h:
+-            name = os.path.join(opensslv_h[0], 'openssl/opensslv.h')
+-            if host_platform == 'darwin' and is_macosx_sdk_path(name):
+-                name = os.path.join(macosx_sdk_root(), name[1:])
+-            try:
+-                incfile = open(name, 'r')
+-                for line in incfile:
+-                    m = openssl_ver_re.match(line)
+-                    if m:
+-                        openssl_ver = eval(m.group(1))
+-            except IOError, msg:
+-                print "IOError while reading opensshv.h:", msg
+-                pass
++        # # find out which version of OpenSSL we have
++        # # openssl_ver = 0
++        # # openssl_ver_re = re.compile(
++        #    '^\s*#\s*define\s+OPENSSL_VERSION_NUMBER\s+(0x[0-9a-fA-F]+)' )
++
++        # Torrekie: Not like autoconf, setup.py does not do any compile checks
++        #           in its process, due to OpenSSL@3 changes, the regex pattern
++        #           above is no longer valid. Let's hardcode version then.
+ 
++        # OpenSSL 3.0.7 as of 14/1/2023
++        openssl_ver = 0x30000070
+         min_openssl_ver = 0x00907000
+         have_any_openssl = ssl_incs is not None and ssl_libs is not None
+         have_usable_openssl = (have_any_openssl and
+@@ -983,6 +951,7 @@ class PyBuildExt(build_ext):
+         # construct a list of paths to look for the header file in on
+         # top of the normal inc_dirs.
+         db_inc_paths = [
++            '/usr/libexec/db48/include',
+             '/usr/include/db4',
+             '/usr/local/include/db4',
+             '/opt/sfw/include/db4',
+@@ -1035,7 +1004,7 @@ class PyBuildExt(build_ext):
+         db_ver_inc_map = {}
+ 
+         if host_platform == 'darwin':
+-            sysroot = macosx_sdk_root()
++            sysroot = darwin_sdk_root()
+ 
+         class db_found(Exception): pass
+         try:
+@@ -1044,7 +1013,7 @@ class PyBuildExt(build_ext):
+             for d in inc_dirs + db_inc_paths:
+                 f = os.path.join(d, "db.h")
+ 
+-                if host_platform == 'darwin' and is_macosx_sdk_path(d):
++                if host_platform == 'darwin' and is_darwin_sdk_path(d):
+                     f = os.path.join(sysroot, d[1:], "db.h")
+ 
+                 if db_setup_debug: print "db: looking for db.h in", f
+@@ -1101,7 +1070,7 @@ class PyBuildExt(build_ext):
+                     # Same as other branch, but takes OSX SDK into account
+                     tmp = []
+                     for dn in db_dirs_to_check:
+-                        if is_macosx_sdk_path(dn):
++                        if is_darwin_sdk_path(dn):
+                             if os.path.isdir(os.path.join(sysroot, dn[1:])):
+                                 tmp.append(dn)
+                         else:
+@@ -1161,7 +1130,8 @@ class PyBuildExt(build_ext):
+         # We hunt for #define SQLITE_VERSION "n.n.n"
+         # We need to find >= sqlite version 3.0.8
+         sqlite_incdir = sqlite_libdir = None
+-        sqlite_inc_paths = [ '/usr/include',
++        sqlite_inc_paths = [
++                             '/usr/libexec/sqlite3/include',
+                              '/usr/include/sqlite',
+                              '/usr/include/sqlite3',
+                              '/usr/local/include',
+@@ -1178,13 +1148,11 @@ class PyBuildExt(build_ext):
+         # ones. This allows one to override the copy of sqlite on OSX,
+         # where /usr/include contains an old version of sqlite.
+         if host_platform == 'darwin':
+-            sysroot = macosx_sdk_root()
++            sysroot = darwin_sdk_root()
+ 
+-        for d_ in inc_dirs + sqlite_inc_paths:
++        # Torrekie: Make sure not gointo SDK
++        for d_ in sqlite_inc_paths:
+             d = d_
+-            if host_platform == 'darwin' and is_macosx_sdk_path(d):
+-                d = os.path.join(sysroot, d[1:])
+-
+             f = os.path.join(d, "sqlite3.h")
+             if os.path.exists(f):
+                 if sqlite_setup_debug: print "sqlite: found %s"%f
+@@ -1245,7 +1213,7 @@ class PyBuildExt(build_ext):
+                 # for dynamic libraries on the entire path.
+                 # This way a statically linked custom sqlite gets picked up
+                 # before the dynamic library in /usr/lib.
+-                sqlite_extra_link_args = ('-Wl,-search_paths_first',)
++                sqlite_extra_link_args = ('-Wl,-search_paths_first', '-Wl,-not_for_dyld_shared_cache')
+             else:
+                 sqlite_extra_link_args = ()
+ 
+@@ -1273,8 +1241,8 @@ class PyBuildExt(build_ext):
+         f = "/usr/include/db.h"
+ 
+         if host_platform == 'darwin':
+-            if is_macosx_sdk_path(f):
+-                sysroot = macosx_sdk_root()
++            if is_darwin_sdk_path(f):
++                sysroot = darwin_sdk_root()
+                 f = os.path.join(sysroot, f[1:])
+ 
+         if os.path.exists(f) and not db_incs:
+@@ -1455,8 +1423,8 @@ class PyBuildExt(build_ext):
+             zlib_h = zlib_inc[0] + '/zlib.h'
+             version = '"0.0.0"'
+             version_req = '"1.1.3"'
+-            if host_platform == 'darwin' and is_macosx_sdk_path(zlib_h):
+-                zlib_h = os.path.join(macosx_sdk_root(), zlib_h[1:])
++            if host_platform == 'darwin' and is_darwin_sdk_path(zlib_h):
++                zlib_h = os.path.join(darwin_sdk_root(), zlib_h[1:])
+             fp = open(zlib_h)
+             while 1:
+                 line = fp.readline()
+@@ -1588,7 +1556,7 @@ class PyBuildExt(build_ext):
+                 missing.append('_codecs_%s' % loc)
+ 
+         # Dynamic loading module
+-        if sys.maxint == 0x7fffffff:
++        if True:
+             # This requires sizeof(int) == sizeof(long) == sizeof(char*)
+             dl_inc = find_file('dlfcn.h', [], inc_dirs)
+             if (dl_inc is not None) and (host_platform not in ['atheos']):
+@@ -1606,7 +1574,7 @@ class PyBuildExt(build_ext):
+             macros = dict()
+             libraries = ['ws2_32']
+ 
+-        elif host_platform == 'darwin':          # Mac OSX
++        elif host_platform == 'darwin':          # Darwin
+             macros = dict()
+             libraries = []
+ 
+@@ -1753,24 +1721,11 @@ class PyBuildExt(build_ext):
+                            '_Dlg', '_Drag', '_Evt', '_File', '_Folder', '_Fm',
+                            '_Help', '_Icn', '_IBCarbon', '_List',
+                            '_Menu', '_Mlte', '_OSA', '_Res', '_Qd', '_Qdoffs',
+-                           '_Scrap', '_Snd', '_TE',
++                           '_Scrap', '_Snd', '_TE', '_Win'
+                           ]
+             for name in CARBON_EXTS:
+                 addMacExtension(name, carbon_kwds)
+ 
+-            # Workaround for a bug in the version of gcc shipped with Xcode 3.
+-            # The _Win extension should build just like the other Carbon extensions, but
+-            # this actually results in a hard crash of the linker.
+-            #
+-            if '-arch ppc64' in cflags and '-arch ppc' in cflags:
+-                win_kwds = {'extra_compile_args': carbon_extra_compile_args + ['-arch', 'i386', '-arch', 'ppc'],
+-                               'extra_link_args': ['-framework', 'Carbon', '-arch', 'i386', '-arch', 'ppc'],
+-                           }
+-                addMacExtension('_Win', win_kwds)
+-            else:
+-                addMacExtension('_Win', carbon_kwds)
+-
+-
+             # Application Services & QuickTime
+             app_kwds = {'extra_compile_args': carbon_extra_compile_args,
+                         'extra_link_args': ['-framework','ApplicationServices'],
+@@ -1843,7 +1798,7 @@ class PyBuildExt(build_ext):
+             join(os.getenv('HOME'), '/Library/Frameworks')
+         ]
+ 
+-        sysroot = macosx_sdk_root()
++        sysroot = darwin_sdk_root()
+ 
+         # Find the directory that contains the Tcl.framework and Tk.framework
+         # bundles.
+@@ -1853,7 +1808,7 @@ class PyBuildExt(build_ext):
+ 
+ 
+             for fw in 'Tcl', 'Tk':
+-                if is_macosx_sdk_path(F):
++                if is_darwin_sdk_path(F):
+                     if not exists(join(sysroot, F[1:], fw + '.framework')):
+                         break
+                 else:
+@@ -1889,7 +1844,7 @@ class PyBuildExt(build_ext):
+         cflags = sysconfig.get_config_vars('CFLAGS')[0]
+         archs = re.findall('-arch\s+(\w+)', cflags)
+ 
+-        if is_macosx_sdk_path(F):
++        if is_darwin_sdk_path(F):
+             fp = os.popen("file %s/Tk.framework/Tk | grep 'for architecture'"%(os.path.join(sysroot, F[1:]),))
+         else:
+             fp = os.popen("file %s/Tk.framework/Tk | grep 'for architecture'"%(F,))
+@@ -2035,84 +1990,8 @@ class PyBuildExt(build_ext):
+         # *** Uncomment these for TOGL extension only:
+         #       -lGL -lGLU -lXext -lXmu \
+ 
+-    def configure_ctypes_darwin(self, ext):
+-        # Darwin (OS X) uses preconfigured files, in
+-        # the Modules/_ctypes/libffi_osx directory.
+-        srcdir = sysconfig.get_config_var('srcdir')
+-        ffi_srcdir = os.path.abspath(os.path.join(srcdir, 'Modules',
+-                                                  '_ctypes', 'libffi_osx'))
+-        sources = [os.path.join(ffi_srcdir, p)
+-                   for p in ['ffi.c',
+-                             'x86/darwin64.S',
+-                             'x86/x86-darwin.S',
+-                             'x86/x86-ffi_darwin.c',
+-                             'x86/x86-ffi64.c',
+-                             'powerpc/ppc-darwin.S',
+-                             'powerpc/ppc-darwin_closure.S',
+-                             'powerpc/ppc-ffi_darwin.c',
+-                             'powerpc/ppc64-darwin_closure.S',
+-                             ]]
+-
+-        # Add .S (preprocessed assembly) to C compiler source extensions.
+-        self.compiler.src_extensions.append('.S')
+-
+-        include_dirs = [os.path.join(ffi_srcdir, 'include'),
+-                        os.path.join(ffi_srcdir, 'powerpc')]
+-        ext.include_dirs.extend(include_dirs)
+-        ext.sources.extend(sources)
+-        return True
+-
+     def configure_ctypes(self, ext):
+-        if not self.use_system_libffi:
+-            if host_platform == 'darwin':
+-                return self.configure_ctypes_darwin(ext)
+-
+-            srcdir = sysconfig.get_config_var('srcdir')
+-            ffi_builddir = os.path.join(self.build_temp, 'libffi')
+-            ffi_srcdir = os.path.abspath(os.path.join(srcdir, 'Modules',
+-                                         '_ctypes', 'libffi'))
+-            ffi_configfile = os.path.join(ffi_builddir, 'fficonfig.py')
+-
+-            from distutils.dep_util import newer_group
+-
+-            config_sources = [os.path.join(ffi_srcdir, fname)
+-                              for fname in os.listdir(ffi_srcdir)
+-                              if os.path.isfile(os.path.join(ffi_srcdir, fname))]
+-            if self.force or newer_group(config_sources,
+-                                         ffi_configfile):
+-                from distutils.dir_util import mkpath
+-                mkpath(ffi_builddir)
+-                config_args = [arg for arg in sysconfig.get_config_var("CONFIG_ARGS").split()
+-                               if (('--host=' in arg) or ('--build=' in arg))]
+-                if not self.verbose:
+-                    config_args.append("-q")
+-
+-                # Pass empty CFLAGS because we'll just append the resulting
+-                # CFLAGS to Python's; -g or -O2 is to be avoided.
+-                cmd = "cd %s && env CFLAGS='' '%s/configure' %s" \
+-                      % (ffi_builddir, ffi_srcdir, " ".join(config_args))
+-
+-                res = os.system(cmd)
+-                if res or not os.path.exists(ffi_configfile):
+-                    print "Failed to configure _ctypes module"
+-                    return False
+-
+-            fficonfig = {}
+-            with open(ffi_configfile) as f:
+-                exec f in fficonfig
+-
+-            # Add .S (preprocessed assembly) to C compiler source extensions.
+-            self.compiler.src_extensions.append('.S')
+-
+-            include_dirs = [os.path.join(ffi_builddir, 'include'),
+-                            ffi_builddir,
+-                            os.path.join(ffi_srcdir, 'src')]
+-            extra_compile_args = fficonfig['ffi_cflags'].split()
+-
+-            ext.sources.extend(os.path.join(ffi_srcdir, f) for f in
+-                               fficonfig['ffi_sources'])
+-            ext.include_dirs.extend(include_dirs)
+-            ext.extra_compile_args.extend(extra_compile_args)
++        # Force system libffi
+         return True
+ 
+     def detect_ctypes(self, inc_dirs, lib_dirs):

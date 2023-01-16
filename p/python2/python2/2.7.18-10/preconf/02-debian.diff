@@ -1,0 +1,2615 @@
+--- a/Demo/tkinter/guido/ManPage.py	1587330819.000000000
++++ b/Demo/tkinter/guido/ManPage.py	1673513050.116278026
+@@ -189,8 +189,9 @@
+ def test():
+     import os
+     import sys
+-    # XXX This directory may be different on your system
+-    MANDIR = '/usr/local/man/mann'
++    # XXX This directory may be different on your system,
++    #     it is here set for Darwin.
++    MANDIR = '/usr/share/man'
+     DEFAULTPAGE = 'Tcl'
+     formatted = 0
+     if sys.argv[1:] and sys.argv[1] == '-f':
+--- a/Demo/tkinter/guido/tkman.py	1587330819.000000000
++++ b/Demo/tkinter/guido/tkman.py	1673513050.117131431
+@@ -9,8 +9,8 @@
+ from Tkinter import *
+ from ManPage import ManPage
+ 
+-MANNDIRLIST = ['/depot/sundry/man/mann','/usr/local/man/mann']
+-MAN3DIRLIST = ['/depot/sundry/man/man3','/usr/local/man/man3']
++MANNDIRLIST = ['/depot/sundry/man/mann','/usr/share/man/mann']
++MAN3DIRLIST = ['/depot/sundry/man/man3','/usr/share/man/man3']
+ 
+ foundmanndir = 0
+ for dir in MANNDIRLIST:
+--- a/Demo/turtle/turtleDemo.py	1587330819.000000000
++++ b/Demo/turtle/turtleDemo.py	1673513111.883251671
+@@ -3,10 +3,12 @@
+ import os
+ 
+ from Tkinter import *
+-from idlelib.Percolator import Percolator
+-from idlelib.ColorDelegator import ColorDelegator
+-from idlelib.textView import view_file
+-
++try:
++    from idlelib.Percolator import Percolator
++    from idlelib.ColorDelegator import ColorDelegator
++    from idlelib.textView import view_file
++except ImportError, msg:
++    raise ImportError, str(msg) + ', please install the idle package'
+ import turtle
+ import time
+ 
+--- a/Doc/install/index.rst	1587330819.000000000
++++ b/Doc/install/index.rst	1673513061.184540688
+@@ -255,6 +255,8 @@
+ +-----------------+-----------------------------------------------------+--------------------------------------------------+-------+
+ | Platform        | Standard installation location                      | Default value                                    | Notes |
+ +=================+=====================================================+==================================================+=======+
++| Debian/Ubuntu   | :file:`{prefix}/lib/python{X.Y}/dist-packages`      | :file:`/usr/local/lib/python{X.Y}/dist-packages` | \(0)  |
+++-----------------+-----------------------------------------------------+--------------------------------------------------+-------+
+ | Unix (pure)     | :file:`{prefix}/lib/python{X.Y}/site-packages`      | :file:`/usr/local/lib/python{X.Y}/site-packages` | \(1)  |
+ +-----------------+-----------------------------------------------------+--------------------------------------------------+-------+
+ | Unix (non-pure) | :file:`{exec-prefix}/lib/python{X.Y}/site-packages` | :file:`/usr/local/lib/python{X.Y}/site-packages` | \(1)  |
+@@ -264,6 +266,14 @@
+ 
+ Notes:
+ 
++(0)
++   Starting with Python-2.6 Debian/Ubuntu uses for the Python which comes within
++   the Linux distribution a non-default name for the installation directory. This
++   is to avoid overwriting of the python modules which come with the distribution,
++   which unfortunately is the upstream behaviour of the installation tools. The
++   non-default name in :file:`/usr/local` is used not to overwrite a local python
++   installation (defaulting to :file:`/usr/local`).
++
+ (1)
+    Most Linux distributions include Python as a standard part of the system, so
+    :file:`{prefix}` and :file:`{exec-prefix}` are usually both :file:`/usr` on
+@@ -448,6 +458,15 @@
+ 
+    /usr/bin/python setup.py install --prefix=/usr/local
+ 
++Starting with Python-2.6 Debian/Ubuntu does use
++:file:`/usr/lib/python{X.Y}/dist-packages` and
++:file:`/usr/local/lib/python{X.Y}/dist-packages` for the installation
++of python modules included in the Linux distribution.  To overwrite
++the name of the site directory, explicitely use the :option:`--prefix`
++option, however make sure that the installation path is included in
++``sys.path``.  For packaging of python modules for Debian/Ubuntu, use
++the new ``setup.py install`` option :option:`--install-layout=deb`.
++
+ Another possibility is a network filesystem where the name used to write to a
+ remote directory is different from the name used to read it: for example, the
+ Python interpreter accessed as :file:`/usr/local/bin/python` might search for
+@@ -699,6 +718,17 @@
+ import them, this directory must be added to ``sys.path``.  There are several
+ different ways to add the directory.
+ 
++On Debian/Ubuntu, starting with Python-2.6 the convention for system
++installed packages is to put then in the
++:file:`/usr/lib/python{X.Y}/dist-packages/` directory, and for locally
++installed packages is to put them in the
++:file:`/usr/lib/python{X.Y}/dist-packages/` directory.  To share the
++locally installed packages for the system provided Python with the
++locally installed packages of a local python installation, make
++:file:`/usr/lib/python{X.Y}/dist-packages/` a symbolic link to the
++:file:`{...}/site-packages/` directory of your local python
++installation.
++
+ The most convenient way is to add a path configuration file to a directory
+ that's already on Python's path, usually to the :file:`.../site-packages/`
+ directory.  Path configuration files have an extension of :file:`.pth`, and each
+--- a/Doc/tools/templates/layout.html	1587330819.000000000
++++ b/Doc/tools/templates/layout.html	1673513562.886463787
+@@ -3,8 +3,8 @@
+ {%- if outdated %}
+ <div id="outdated-warning" style="padding: .5em; text-align: center; background-color: #FFBABA; color: #6A0E0E;">
+     {% trans %}This document is for an old version of Python that is {% endtrans %}<a href="https://devguide.python.org/devcycle/#end-of-life-branches">{% trans %}no longer supported{% endtrans %}</a>.
+-    {% trans %}You should upgrade and read the {% endtrans %}
+-    <a href="https://docs.python.org/{{ language + '/' if language and language != 'en' else '' }}3/{{ pagename }}{{ file_suffix }}">{% trans %} Python documentation for the current stable release{% endtrans %}</a>.
++    {% trans %}You should install the python3 and python3-doc packages and read the {% endtrans %}
++    <a href="file:///usr/share/doc/python3-doc/html/{{ language + '/' if language and language != 'en' else '' }}{{ pagename }}{{ file_suffix }}">{% trans %} Python documentation for the Python3 version packaged in this release{% endtrans %}</a>.
+ </div>
+ {%- endif %}
+ {% endblock %}
+@@ -27,7 +27,7 @@
+ {% block relbar2 %} {% if builder != 'qthelp' %} {{ relbar() }} {% endif %} {% endblock %}
+ {% block extrahead %}
+     <link rel="shortcut icon" type="image/png" href="{{ pathto('_static/py.png', 1) }}" />
+-    <link rel="canonical" href="https://docs.python.org/2/{{pagename}}.html" />
++    <link rel="canonical" href="file:///usr/share/doc/python2.7/html/{{pagename}}.html" />
+     {% if not embedded %}<script type="text/javascript" src="{{ pathto('_static/copybutton.js', 1) }}"></script>{% endif %}
+     {% if switchers is defined and not embedded %}<script type="text/javascript" src="{{ pathto('_static/switchers.js', 1) }}"></script>{% endif %}
+ {{ super() }}
+--- a/Lib/ctypes/test/test_parameters.py	1587330819.000000000
++++ b/Lib/ctypes/test/test_parameters.py	1673513582.402336413
+@@ -206,6 +206,49 @@
+         with self.assertRaises(ZeroDivisionError):
+             WorseStruct().__setstate__({}, b'foo')
+ 
++    def test_parameter_repr(self):
++        from ctypes import (
++            c_bool,
++            c_char,
++            c_wchar,
++            c_byte,
++            c_ubyte,
++            c_short,
++            c_ushort,
++            c_int,
++            c_uint,
++            c_long,
++            c_ulong,
++            c_longlong,
++            c_ulonglong,
++            c_float,
++            c_double,
++            c_longdouble,
++            c_char_p,
++            c_wchar_p,
++            c_void_p,
++        )
++        self.assertRegexpMatches(repr(c_bool.from_param(True)), r"^<cparam '\?' at 0x[A-Fa-f0-9]+>$")
++        self.assertEqual(repr(c_char.from_param('a')), "<cparam 'c' (a)>")
++        self.assertRegexpMatches(repr(c_wchar.from_param('a')), r"^<cparam 'u' at 0x[A-Fa-f0-9]+>$")
++        self.assertEqual(repr(c_byte.from_param(98)), "<cparam 'b' (98)>")
++        self.assertEqual(repr(c_ubyte.from_param(98)), "<cparam 'B' (98)>")
++        self.assertEqual(repr(c_short.from_param(511)), "<cparam 'h' (511)>")
++        self.assertEqual(repr(c_ushort.from_param(511)), "<cparam 'H' (511)>")
++        self.assertRegexpMatches(repr(c_int.from_param(20000)), r"^<cparam '[li]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_uint.from_param(20000)), r"^<cparam '[LI]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_long.from_param(20000)), r"^<cparam '[li]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_ulong.from_param(20000)), r"^<cparam '[LI]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_longlong.from_param(20000)), r"^<cparam '[liq]' \(20000\)>$")
++        self.assertRegexpMatches(repr(c_ulonglong.from_param(20000)), r"^<cparam '[LIQ]' \(20000\)>$")
++        self.assertEqual(repr(c_float.from_param(1.5)), "<cparam 'f' (1.5)>")
++        self.assertEqual(repr(c_double.from_param(1.5)), "<cparam 'd' (1.5)>")
++        self.assertEqual(repr(c_double.from_param(1e300)), "<cparam 'd' (1e+300)>")
++        self.assertRegexpMatches(repr(c_longdouble.from_param(1.5)), r"^<cparam ('d' \(1.5\)|'g' at 0x[A-Fa-f0-9]+)>$")
++        self.assertRegexpMatches(repr(c_char_p.from_param(b'hihi')), "^<cparam 'z' \(0x[A-Fa-f0-9]+\)>$")
++        self.assertRegexpMatches(repr(c_wchar_p.from_param('hihi')), "^<cparam 'Z' \(0x[A-Fa-f0-9]+\)>$")
++        self.assertRegexpMatches(repr(c_void_p.from_param(0x12)), r"^<cparam 'P' \(0x0*12\)>$")
++
+ ################################################################
+ 
+ if __name__ == '__main__':
+--- a/Lib/ctypes/util.py	1587330819.000000000
++++ b/Lib/ctypes/util.py	1673513295.578575240
+@@ -236,16 +236,27 @@
+ 
+         def _findSoname_ldconfig(name):
+             import struct
++            # XXX this code assumes that we know all unames and that a single
++            # ABI is supported per uname; instead we should find what the
++            # ABI is (e.g. check ABI of current process) or simply ask libc
++            # to load the library for us
++            uname = os.uname()[4]
++            # ARM has a variety of unames, e.g. armv7l
++            if uname.startswith("arm"):
++                uname = "arm"
+             if struct.calcsize('l') == 4:
+-                machine = os.uname()[4] + '-32'
++                machine = uname + '-32'
+             else:
+-                machine = os.uname()[4] + '-64'
++                machine = uname + '-64'
+             mach_map = {
+                 'x86_64-64': 'libc6,x86-64',
+                 'ppc64-64': 'libc6,64bit',
+                 'sparc64-64': 'libc6,64bit',
+                 's390x-64': 'libc6,64bit',
+                 'ia64-64': 'libc6,IA-64',
++                # this actually breaks on biarch or multiarch as the first
++                # library wins; uname doesn't tell us which ABI we're using
++                'arm-32': 'libc6(,hard-float)?',
+                 }
+             abi_type = mach_map.get(machine, 'libc6')
+ 
+--- a/Lib/distutils/command/bdist_wininst.py	1587330819.000000000
++++ b/Lib/distutils/command/bdist_wininst.py	1673513160.506869628
+@@ -14,6 +14,7 @@
+ from distutils.core import Command
+ from distutils.dir_util import remove_tree
+ from distutils.errors import DistutilsOptionError, DistutilsPlatformError
++from distutils.errors import DistutilsFileError
+ from distutils import log
+ from distutils.util import get_platform
+ 
+@@ -360,7 +361,10 @@
+             sfix = ''
+ 
+         filename = os.path.join(directory, "wininst-%.1f%s.exe" % (bv, sfix))
+-        f = open(filename, "rb")
++        try:
++            f = open(filename, "rb")
++        except IOError, msg:
++            raise DistutilsFileError, str(msg) + ', %s not included in the Darwin packages.' % filename
+         try:
+             return f.read()
+         finally:
+--- a/Lib/distutils/command/build.py	1587330819.000000000
++++ b/Lib/distutils/command/build.py	1673513123.252198459
+@@ -91,7 +91,8 @@
+         # 'lib.<plat>' under the base build directory.  We only use one of
+         # them for a given distribution, though --
+         if self.build_purelib is None:
+-            self.build_purelib = os.path.join(self.build_base, 'lib')
++            self.build_purelib = os.path.join(self.build_base,
++                                              'lib' + plat_specifier)
+         if self.build_platlib is None:
+             self.build_platlib = os.path.join(self.build_base,
+                                               'lib' + plat_specifier)
+--- a/Lib/distutils/command/build_ext.py	1587330819.000000000
++++ b/Lib/distutils/command/build_ext.py	1673513385.889213090
+@@ -237,7 +237,7 @@
+         # For building extensions with a shared Python library,
+         # Python's library directory must be appended to library_dirs
+         # See Issues: #1600860, #4366
+-        if (sysconfig.get_config_var('Py_ENABLE_SHARED')):
++        if False and (sysconfig.get_config_var('Py_ENABLE_SHARED')):
+             if not sysconfig.python_build:
+                 # building third party extensions
+                 self.library_dirs.append(sysconfig.get_config_var('LIBDIR'))
+@@ -758,7 +758,7 @@
+             return ext.libraries
+         else:
+             from distutils import sysconfig
+-            if sysconfig.get_config_var('Py_ENABLE_SHARED'):
++            if False and sysconfig.get_config_var('Py_ENABLE_SHARED'):
+                 template = "python%d.%d"
+                 pythonlib = (template %
+                              (sys.hexversion >> 24, (sys.hexversion >> 16) & 0xff))
+--- a/Lib/distutils/command/install.py	1587330819.000000000
++++ b/Lib/distutils/command/install.py	1673513061.185829983
+@@ -47,6 +47,20 @@
+         'scripts': '$base/bin',
+         'data'   : '$base',
+         },
++    'unix_local': {
++        'purelib': '$base/local/lib/python$py_version_short/dist-packages',
++        'platlib': '$platbase/local/lib/python$py_version_short/dist-packages',
++        'headers': '$base/local/include/python$py_version_short/$dist_name',
++        'scripts': '$base/local/bin',
++        'data'   : '$base/local',
++        },
++    'deb_system': {
++        'purelib': '$base/lib/python$py_version_short/dist-packages',
++        'platlib': '$platbase/lib/python$py_version_short/dist-packages',
++        'headers': '$base/include/python$py_version_short/$dist_name',
++        'scripts': '$base/bin',
++        'data'   : '$base',
++        },
+     'unix_home': {
+         'purelib': '$base/lib/python',
+         'platlib': '$base/lib/python',
+@@ -154,6 +168,9 @@
+ 
+         ('record=', None,
+          "filename in which to record list of installed files"),
++
++        ('install-layout=', None,
++         "installation layout to choose (known values: deb, unix)"),
+         ]
+ 
+     boolean_options = ['compile', 'force', 'skip-build', 'user']
+@@ -168,6 +185,7 @@
+         self.exec_prefix = None
+         self.home = None
+         self.user = 0
++        self.prefix_option = None
+ 
+         # These select only the installation base; it's up to the user to
+         # specify the installation scheme (currently, that means supplying
+@@ -189,6 +207,9 @@
+         self.install_userbase = USER_BASE
+         self.install_usersite = USER_SITE
+ 
++        # enable custom installation, known values: deb
++        self.install_layout = None
++
+         self.compile = None
+         self.optimize = None
+ 
+@@ -421,6 +442,7 @@
+             self.install_base = self.install_platbase = self.home
+             self.select_scheme("unix_home")
+         else:
++            self.prefix_option = self.prefix
+             if self.prefix is None:
+                 if self.exec_prefix is not None:
+                     raise DistutilsOptionError, \
+@@ -435,7 +457,23 @@
+ 
+             self.install_base = self.prefix
+             self.install_platbase = self.exec_prefix
+-            self.select_scheme("unix_prefix")
++            if self.install_layout:
++                if self.install_layout.lower() in ['deb']:
++                    self.select_scheme("deb_system")
++                elif self.install_layout.lower() in ['posix', 'unix']:
++                    self.select_scheme("unix_prefix")
++                else:
++                    raise DistutilsOptionError(
++                        "unknown value for --install-layout")
++            elif (self.prefix_option and os.path.normpath(self.prefix) != '/usr/local') \
++                    or 'PYTHONUSERBASE' in os.environ \
++                    or 'real_prefix' in sys.__dict__:
++                self.select_scheme("unix_prefix")
++            else:
++                if os.path.normpath(self.prefix) == '/usr/local':
++                    self.select_scheme("deb_system")
++                else:
++                    self.select_scheme("unix_local")
+ 
+     # finalize_unix ()
+ 
+--- a/Lib/distutils/command/install_egg_info.py	1587330819.000000000
++++ b/Lib/distutils/command/install_egg_info.py	1673513061.186383466
+@@ -14,18 +14,37 @@
+     description = "Install package's PKG-INFO metadata as an .egg-info file"
+     user_options = [
+         ('install-dir=', 'd', "directory to install to"),
++        ('install-layout', None, "custom installation layout"),
+     ]
+ 
+     def initialize_options(self):
+         self.install_dir = None
++        self.install_layout = None
++        self.prefix_option = None
+ 
+     def finalize_options(self):
+         self.set_undefined_options('install_lib',('install_dir','install_dir'))
+-        basename = "%s-%s-py%s.egg-info" % (
+-            to_filename(safe_name(self.distribution.get_name())),
+-            to_filename(safe_version(self.distribution.get_version())),
+-            sys.version[:3]
+-        )
++        self.set_undefined_options('install',('install_layout','install_layout'))
++        self.set_undefined_options('install',('prefix_option','prefix_option'))
++        if self.install_layout:
++            basename = "%s-%s.egg-info" % (
++                to_filename(safe_name(self.distribution.get_name())),
++                to_filename(safe_version(self.distribution.get_version()))
++                )
++            if not self.install_layout.lower() in ['deb']:
++                raise DistutilsOptionError(
++                    "unknown value for --install-layout")
++        elif self.prefix_option or 'real_prefix' in sys.__dict__:
++            basename = "%s-%s-py%s.egg-info" % (
++                to_filename(safe_name(self.distribution.get_name())),
++                to_filename(safe_version(self.distribution.get_version())),
++                sys.version[:3]
++                )
++        else:
++            basename = "%s-%s.egg-info" % (
++                to_filename(safe_name(self.distribution.get_name())),
++                to_filename(safe_version(self.distribution.get_version()))
++                )
+         self.target = os.path.join(self.install_dir, basename)
+         self.outputs = [self.target]
+ 
+--- a/Lib/distutils/sysconfig.py	1673512828.951757692
++++ b/Lib/distutils/sysconfig.py	1673513492.195113721
+@@ -15,6 +15,7 @@
+ import re
+ import string
+ import sys
++import fnmatch
+ 
+ from distutils.errors import DistutilsPlatformError
+ 
+@@ -79,8 +80,6 @@
+     If 'prefix' is supplied, use it instead of sys.prefix or
+     sys.exec_prefix -- i.e., ignore 'plat_specific'.
+     """
+-    if prefix is None:
+-        prefix = plat_specific and EXEC_PREFIX or PREFIX
+ 
+     if os.name == "posix":
+         if python_build:
+@@ -100,7 +99,14 @@
+                 # Include is located in the srcdir
+                 inc_dir = os.path.join(srcdir, "Include")
+             return inc_dir
+-        return os.path.join(prefix, "include", "python" + get_python_version())
++        else:
++            if not (prefix is None):
++                return os.path.join(prefix, "include",
++                                    "python" + get_python_version())+(sys.pydebug and "_d" or "")
++            if plat_specific:
++                return get_config_var('CONFINCLUDEPY')
++            else:
++                return get_config_var('INCLUDEPY')
+     elif os.name == "nt":
+         return os.path.join(prefix, "include")
+     elif os.name == "os2":
+@@ -125,6 +131,7 @@
+     If 'prefix' is supplied, use it instead of sys.prefix or
+     sys.exec_prefix -- i.e., ignore 'plat_specific'.
+     """
++    is_default_prefix = not prefix or os.path.normpath(prefix) in ('/usr', '/usr/local')
+     if prefix is None:
+         prefix = plat_specific and EXEC_PREFIX or PREFIX
+ 
+@@ -133,6 +140,8 @@
+                                  "lib", "python" + get_python_version())
+         if standard_lib:
+             return libpython
++        elif is_default_prefix and 'PYTHONUSERBASE' not in os.environ and 'real_prefix' not in sys.__dict__:
++            return os.path.join(libpython, "dist-packages")
+         else:
+             return os.path.join(libpython, "site-packages")
+ 
+@@ -181,10 +190,12 @@
+                 _osx_support.customize_compiler(_config_vars)
+                 _config_vars['CUSTOMIZED_OSX_COMPILER'] = 'True'
+ 
+-        (cc, cxx, cflags, ccshared, ldshared, so_ext, ar, ar_flags) = \
+-            get_config_vars('CC', 'CXX', 'CFLAGS',
+-                            'CCSHARED', 'LDSHARED', 'SO', 'AR',
+-                            'ARFLAGS')
++        (cc, cxx, cflags, extra_cflags, basecflags,
++         ccshared, ldshared, so_ext, ar, ar_flags,
++         configure_cppflags, configure_cflags, configure_ldflags) = \
++            get_config_vars('CC', 'CXX', 'CFLAGS', 'EXTRA_CFLAGS', 'BASECFLAGS',
++                            'CCSHARED', 'LDSHARED', 'SO', 'AR', 'ARFLAGS',
++                            'CONFIGURE_CPPFLAGS', 'CONFIGURE_CFLAGS', 'CONFIGURE_LDFLAGS')
+ 
+         if 'CC' in os.environ:
+             newcc = os.environ['CC']
+@@ -197,6 +208,10 @@
+             cc = newcc
+         if 'CXX' in os.environ:
+             cxx = os.environ['CXX']
++        if fnmatch.filter([cc, cxx], '*-4.[0-8]'):
++            configure_cflags = configure_cflags.replace('-fstack-protector-strong', '-fstack-protector')
++            ldshared = ldshared.replace('-fstack-protector-strong', '-fstack-protector')
++            cflags = cflags.replace('-fstack-protector-strong', '-fstack-protector')
+         if 'LDSHARED' in os.environ:
+             ldshared = os.environ['LDSHARED']
+         if 'CPP' in os.environ:
+@@ -205,13 +220,24 @@
+             cpp = cc + " -E"           # not always
+         if 'LDFLAGS' in os.environ:
+             ldshared = ldshared + ' ' + os.environ['LDFLAGS']
++        elif configure_ldflags:
++            ldshared = ldshared + ' ' + configure_ldflags
++        if 'BASECFLAGS' in os.environ:
++            basecflags = os.environ['BASECFLAGS']
+         if 'CFLAGS' in os.environ:
+-            cflags = cflags + ' ' + os.environ['CFLAGS']
++            cflags = ' '.join(str(x) for x in (basecflags, os.environ['CFLAGS'], extra_cflags) if x)
+             ldshared = ldshared + ' ' + os.environ['CFLAGS']
++        elif configure_cflags:
++            cflags = ' '.join(str(x) for x in (basecflags, configure_cflags, extra_cflags) if x)
++            ldshared = ldshared + ' ' + configure_cflags
+         if 'CPPFLAGS' in os.environ:
+             cpp = cpp + ' ' + os.environ['CPPFLAGS']
+             cflags = cflags + ' ' + os.environ['CPPFLAGS']
+             ldshared = ldshared + ' ' + os.environ['CPPFLAGS']
++        elif configure_cppflags:
++            cpp = cpp + ' ' + configure_cppflags
++            cflags = cflags + ' ' + configure_cppflags
++            ldshared = ldshared + ' ' + configure_cppflags
+         if 'AR' in os.environ:
+             ar = os.environ['AR']
+         if 'ARFLAGS' in os.environ:
+@@ -225,7 +251,7 @@
+             compiler=cc_cmd,
+             compiler_so=cc_cmd + ' ' + ccshared,
+             compiler_cxx=cxx,
+-            linker_so=ldshared,
++            linker_so=ldshared + ' ' + ccshared,
+             linker_exe=cc,
+             archiver=archiver)
+ 
+@@ -254,7 +280,7 @@
+     if python_build:
+         return os.path.join(project_base, "Makefile")
+     lib_dir = get_python_lib(plat_specific=1, standard_lib=1)
+-    return os.path.join(lib_dir, "config", "Makefile")
++    return os.path.join(get_config_var('LIBPL'), "Makefile")
+ 
+ 
+ def parse_config_h(fp, g=None):
+@@ -330,11 +356,19 @@
+                     done[n] = v
+ 
+     # do variable interpolation here
+-    while notdone:
+-        for name in notdone.keys():
++    variables = list(notdone.keys())
++
++    # Variables with a 'PY_' prefix in the makefile. These need to
++    # be made available without that prefix through sysconfig.
++    # Special care is needed to ensure that variable expansion works, even
++    # if the expansion uses the name without a prefix.
++    renamed_variables = ('CFLAGS', 'LDFLAGS', 'CPPFLAGS')
++
++    while len(variables) > 0:
++        for name in tuple(variables):
+             value = notdone[name]
+             m = _findvar1_rx.search(value) or _findvar2_rx.search(value)
+-            if m:
++            if m is not None:
+                 n = m.group(1)
+                 found = True
+                 if n in done:
+@@ -345,25 +379,47 @@
+                 elif n in os.environ:
+                     # do it like make: fall back to environment
+                     item = os.environ[n]
++
++                elif n in renamed_variables:
++                    if name.startswith('PY_') and name[3:] in renamed_variables:
++                        item = ""
++
++                    elif 'PY_' + n in notdone:
++                        found = False
++
++                    else:
++                        item = str(done['PY_' + n])
++
+                 else:
+                     done[n] = item = ""
++
+                 if found:
+                     after = value[m.end():]
+                     value = value[:m.start()] + item + after
+                     if "$" in after:
+                         notdone[name] = value
+                     else:
+-                        try: value = int(value)
++                        try:
++                            value = int(value)
+                         except ValueError:
+                             done[name] = value.strip()
+                         else:
+                             done[name] = value
+-                        del notdone[name]
+-            else:
+-                # bogus variable reference; just drop it since we can't deal
+-                del notdone[name]
++                        variables.remove(name)
+ 
+-    fp.close()
++                        if name.startswith('PY_') \
++                        and name[3:] in renamed_variables:
++
++                            name = name[3:]
++                            if name not in done:
++                                done[name] = value
++
++
++            else:
++                # bogus variable reference (e.g. "prefix=$/opt/python");
++                # just drop it since we can't deal
++                done[name] = value
++                variables.remove(name)
+ 
+     # strip spurious spaces
+     for k, v in done.items():
+--- a/Lib/distutils/tests/test_bdist_dumb.py	1587330819.000000000
++++ b/Lib/distutils/tests/test_bdist_dumb.py	1673513061.191578474
+@@ -87,7 +87,7 @@
+             fp.close()
+ 
+         contents = sorted(filter(None, map(os.path.basename, contents)))
+-        wanted = ['foo-0.1-py%s.%s.egg-info' % sys.version_info[:2], 'foo.py']
++        wanted = ['foo-0.1.egg-info', 'foo.py']
+         if not sys.dont_write_bytecode:
+             wanted.append('foo.pyc')
+         self.assertEqual(contents, sorted(wanted))
+--- a/Lib/distutils/tests/test_build.py	1587330819.000000000
++++ b/Lib/distutils/tests/test_build.py	1673513123.259693755
+@@ -20,10 +20,6 @@
+         # if not specified, plat_name gets the current platform
+         self.assertEqual(cmd.plat_name, get_platform())
+ 
+-        # build_purelib is build + lib
+-        wanted = os.path.join(cmd.build_base, 'lib')
+-        self.assertEqual(cmd.build_purelib, wanted)
+-
+         # build_platlib is 'build/lib.platform-x.x[-pydebug]'
+         # examples:
+         #   build/lib.macosx-10.3-i386-2.7
+@@ -34,6 +30,10 @@
+         wanted = os.path.join(cmd.build_base, 'lib' + plat_spec)
+         self.assertEqual(cmd.build_platlib, wanted)
+ 
++        # build_purelib is build + lib
++        wanted = os.path.join(cmd.build_base, 'lib' + plat_spec)
++        self.assertEqual(cmd.build_purelib, wanted)
++
+         # by default, build_lib = build_purelib
+         self.assertEqual(cmd.build_lib, cmd.build_purelib)
+ 
+--- a/Lib/distutils/tests/test_build_ext.py	1673512024.368721653
++++ b/Lib/distutils/tests/test_build_ext.py	1673513466.262327820
+@@ -84,27 +84,6 @@
+         self.assertIsInstance(xx.Null(), xx.Null)
+         self.assertIsInstance(xx.Str(), xx.Str)
+ 
+-    def test_solaris_enable_shared(self):
+-        dist = Distribution({'name': 'xx'})
+-        cmd = build_ext(dist)
+-        old = sys.platform
+-
+-        sys.platform = 'sunos' # fooling finalize_options
+-        from distutils.sysconfig import  _config_vars
+-        old_var = _config_vars.get('Py_ENABLE_SHARED')
+-        _config_vars['Py_ENABLE_SHARED'] = 1
+-        try:
+-            cmd.ensure_finalized()
+-        finally:
+-            sys.platform = old
+-            if old_var is None:
+-                del _config_vars['Py_ENABLE_SHARED']
+-            else:
+-                _config_vars['Py_ENABLE_SHARED'] = old_var
+-
+-        # make sure we get some library dirs under solaris
+-        self.assertGreater(len(cmd.library_dirs), 0)
+-
+     @unittest.skipIf(sys.version < '2.6',
+                      'site.USER_SITE was introduced in 2.6')
+     def test_user_site(self):
+@@ -295,8 +274,8 @@
+         finally:
+             os.chdir(old_wd)
+         self.assertTrue(os.path.exists(so_file))
+-        self.assertEqual(os.path.splitext(so_file)[-1],
+-                         sysconfig.get_config_var('SO'))
++        so_ext = sysconfig.get_config_var('SO')
++        self.assertEqual(so_file[len(so_file)-len(so_ext):], so_ext)
+         so_dir = os.path.dirname(so_file)
+         self.assertEqual(so_dir, other_tmp_dir)
+         cmd.compiler = None
+@@ -304,8 +283,7 @@
+         cmd.run()
+         so_file = cmd.get_outputs()[0]
+         self.assertTrue(os.path.exists(so_file))
+-        self.assertEqual(os.path.splitext(so_file)[-1],
+-                         sysconfig.get_config_var('SO'))
++        self.assertEqual(so_file[len(so_file)-len(so_ext):], so_ext)
+         so_dir = os.path.dirname(so_file)
+         self.assertEqual(so_dir, cmd.build_lib)
+ 
+--- a/Lib/distutils/tests/test_install.py	1587330819.000000000
++++ b/Lib/distutils/tests/test_install.py	1673513061.191031741
+@@ -194,7 +194,7 @@
+ 
+         found = [os.path.basename(line) for line in content.splitlines()]
+         expected = ['hello.py', 'hello.pyc', 'sayhi',
+-                    'UNKNOWN-0.0.0-py%s.%s.egg-info' % sys.version_info[:2]]
++                    'UNKNOWN-0.0.0.egg-info']
+         self.assertEqual(found, expected)
+ 
+     def test_record_extensions(self):
+@@ -224,7 +224,7 @@
+ 
+         found = [os.path.basename(line) for line in content.splitlines()]
+         expected = [_make_ext_name('xx'),
+-                    'UNKNOWN-0.0.0-py%s.%s.egg-info' % sys.version_info[:2]]
++                    'UNKNOWN-0.0.0.egg-info']
+         self.assertEqual(found, expected)
+ 
+     def test_debug_mode(self):
+--- a/Lib/ensurepip/__init__.py	1587330819.000000000
++++ b/Lib/ensurepip/__init__.py	1673513482.971828240
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python2
+ from __future__ import print_function
+ 
++import glob
+ import os
+ import os.path
+ import pkgutil
+@@ -11,14 +12,25 @@
+ 
+ __all__ = ["version", "bootstrap"]
+ 
+-
+-_SETUPTOOLS_VERSION = "41.2.0"
+-
+-_PIP_VERSION = "19.2.3"
++def _ensurepip_is_disabled_in_darwin():
++    if True:
++        print ('''\
++ensurepip is disabled in Darwin for the system python.
++
++Python modules For the system python are usually handled by dpkg and apt-get.
++
++    apt-get install python-<module name>
++
++Install the python-pip package to use pip itself.  Using pip together
++with the system python might have unexpected results for any system installed
++module, so use it on your own risk, or make sure to only use it in virtual
++environments.
++''')
++        sys.exit(1)
+ 
+ _PROJECTS = [
+-    ("setuptools", _SETUPTOOLS_VERSION),
+-    ("pip", _PIP_VERSION),
++    ("setuptools"),
++    ("pip"),
+ ]
+ 
+ 
+@@ -36,7 +48,12 @@
+     """
+     Returns a string specifying the bundled version of pip.
+     """
+-    return _PIP_VERSION
++    _ensurepip_is_disabled_in_darwin()
++    whl_name = 'pip'
++    wheel_names = glob.glob('/usr/share/python-wheels/%s-*.whl' % whl_name)
++    if len(wheel_names) == 1:
++        return os.path.basename(wheel_names[0]).split('-')[1]
++    raise RuntimeError('missing dependency wheel %s. Installation of the python-%s-whl package is needed to use ensurepip.' % (whl_name, whl_name))
+ 
+ 
+ def _disable_pip_configuration_settings():
+@@ -75,6 +92,7 @@
+ 
+     Note that calling this function will alter both sys.path and os.environ.
+     """
++    _ensurepip_is_disabled_in_darwin()
+     if altinstall and default_pip:
+         raise ValueError("Cannot use altinstall and default_pip together")
+ 
+@@ -93,21 +111,53 @@
+         # omit pip and easy_install
+         os.environ["ENSUREPIP_OPTIONS"] = "install"
+ 
++    # Debian: The bundled wheels are useless to us because we must use ones
++    # crafted from source code in the archive.  As we build the virtual
++    # environment, copy the wheels from the system location into the virtual
++    # environment, and place those wheels on sys.path.
++    def copy_wheels(wheels, destdir, paths):
++        for project in wheels:
++            wheel_names = glob.glob(
++                '/usr/share/python-wheels/{}-*.whl'.format(project))
++            if len(wheel_names) == 0:
++                raise RuntimeError('missing dependency wheel %s. Installation of the python-%s-whl package is needed to use ensurepip.' % (project, project))
++            assert len(wheel_names) == 1, wheel_names
++            wheel_name = os.path.basename(wheel_names[0])
++            path = os.path.join('/usr/share/python-wheels', wheel_name)
++            with open(path, 'rb') as fp:
++                whl = fp.read()
++            dest = os.path.join(destdir, wheel_name)
++            with open(dest, 'wb') as fp:
++                fp.write(whl)
++            paths.append(dest)
++
++    # check that the python-{pip,setuptools}-whl packages are installed
++    missing = []
++    for project in reversed(_PROJECTS):
++        wheel_names = glob.glob('/usr/share/python-wheels/%s-*.whl' % project)
++        if len(wheel_names) != 1:
++            missing.append(project)
++    if missing:
++        raise RuntimeError('missing wheel(s) %s. Installation of the %s package(s) is needed to use ensurepip.' \
++                           % (', '.join([missing]),
++                              ', '.join(['python-%s-whl' % m for m in missing])) \
++                           )
++
+     tmpdir = tempfile.mkdtemp()
++
++    for project in _PROJECTS:
++        try:
++            with open('/usr/share/python-wheels/%s.dependencies' % project) as fp:
++                dependencies = [line[:-1].split()[0] for line in fp.readlines()]
++        except IOError:
++            dependencies = []
++        copy_wheels(dependencies, tmpdir, sys.path)
++
+     try:
+         # Put our bundled wheels into a temporary directory and construct the
+         # additional paths that need added to sys.path
+         additional_paths = []
+-        for project, version in _PROJECTS:
+-            wheel_name = "{}-{}-py2.py3-none-any.whl".format(project, version)
+-            whl = pkgutil.get_data(
+-                "ensurepip",
+-                "_bundled/{}".format(wheel_name),
+-            )
+-            with open(os.path.join(tmpdir, wheel_name), "wb") as fp:
+-                fp.write(whl)
+-
+-            additional_paths.append(os.path.join(tmpdir, wheel_name))
++        copy_wheels(_PROJECTS, tmpdir, additional_paths)
+ 
+         # Construct the arguments to be passed to the pip command
+         args = ["install", "--no-index", "--find-links", tmpdir]
+@@ -120,7 +170,7 @@
+         if verbosity:
+             args += ["-" + "v" * verbosity]
+ 
+-        return _run_pip(args + [p[0] for p in _PROJECTS], additional_paths)
++        return _run_pip(args + _PROJECTS, additional_paths)
+     finally:
+         shutil.rmtree(tmpdir, ignore_errors=True)
+ 
+@@ -136,7 +186,8 @@
+         return
+ 
+     # If the pip version doesn't match the bundled one, leave it alone
+-    if pip.__version__ != _PIP_VERSION:
++    # Disabled for Debian, always using the version from the python3-pip package.
++    if False and pip.__version__ != _PIP_VERSION:
+         msg = ("ensurepip will only uninstall a matching version "
+                "({!r} installed, {!r} bundled)")
+         print(msg.format(pip.__version__, _PIP_VERSION), file=sys.stderr)
+@@ -149,7 +200,7 @@
+     if verbosity:
+         args += ["-" + "v" * verbosity]
+ 
+-    return _run_pip(args + [p[0] for p in reversed(_PROJECTS)])
++    return _run_pip(args + reversed(_PROJECTS))
+ 
+ 
+ def _main(argv=None):
+--- a/Lib/hotshot/stats.py	1587330819.000000000
++++ b/Lib/hotshot/stats.py	1673513129.075296493
+@@ -1,7 +1,10 @@
+ """Statistics analyzer for HotShot."""
+ 
+-import profile
+-import pstats
++try:
++    import profile
++    import pstats
++except ImportError, e:
++    raise ImportError, str(e) + '; please install the python-profiler package'
+ 
+ import hotshot.log
+ 
+--- a/Lib/idlelib/macosxSupport.py	1587330819.000000000
++++ b/Lib/idlelib/macosxSupport.py	1673513523.073549864
+@@ -18,7 +18,7 @@
+                         DeprecationWarning, stacklevel=2)
+     return isCarbonTk()
+ 
+-_tk_type = None
++_tk_type = "other"
+ 
+ def _initializeTkVariantTests(root):
+     """
+--- a/Lib/lib-tk/Tkinter.py	1587330819.000000000
++++ b/Lib/lib-tk/Tkinter.py	1673513111.882385296
+@@ -36,7 +36,10 @@
+ if sys.platform == "win32":
+     # Attempt to configure Tcl/Tk without requiring PATH
+     import FixTk
+-import _tkinter # If this fails your Python may not be configured for Tk
++try:
++    import _tkinter
++except ImportError, msg:
++    raise ImportError, str(msg) + ', please install the python-tk package'
+ tkinter = _tkinter # b/w compat for export
+ TclError = _tkinter.TclError
+ from types import *
+--- a/Lib/lib2to3/pgen2/driver.py	1587330819.000000000
++++ b/Lib/lib2to3/pgen2/driver.py	1673513339.252999308
+@@ -123,7 +123,10 @@
+     if force or not _newer(gp, gt):
+         logger.info("Generating grammar tables from %s", gt)
+         g = pgen.generate_grammar(gt)
+-        if save:
++        # the pickle files mismatch, when built on different architectures.
++        # don't save these for now. An alternative solution might be to
++        # include the multiarch triplet into the file name
++        if False:
+             logger.info("Writing grammar tables to %s", gp)
+             try:
+                 g.dump(gp)
+--- a/Lib/lib2to3/tests/test_main.py	1587330819.000000000
++++ b/Lib/lib2to3/tests/test_main.py	1673513339.254156143
+@@ -82,68 +82,6 @@
+             trivial.write("print 'I need a simple conversion.'")
+         self.setup_files.append("trivial.py")
+ 
+-    def test_filename_changing_on_output_single_dir(self):
+-        """2to3 a single directory with a new output dir and suffix."""
+-        self.setup_test_source_trees()
+-        out = StringIO.StringIO()
+-        err = StringIO.StringIO()
+-        suffix = "TEST"
+-        ret = self.run_2to3_capture(
+-                ["-n", "--add-suffix", suffix, "--write-unchanged-files",
+-                 "--no-diffs", "--output-dir",
+-                 self.py3_dest_dir, self.py2_src_dir],
+-                StringIO.StringIO(""), out, err)
+-        self.assertEqual(ret, 0)
+-        stderr = err.getvalue()
+-        self.assertIn(" implies -w.", stderr)
+-        self.assertIn(
+-                "Output in %r will mirror the input directory %r layout" % (
+-                        self.py3_dest_dir, self.py2_src_dir), stderr)
+-        self.assertEqual(set(name+suffix for name in self.setup_files),
+-                         set(os.listdir(self.py3_dest_dir)))
+-        for name in self.setup_files:
+-            self.assertIn("Writing converted %s to %s" % (
+-                    os.path.join(self.py2_src_dir, name),
+-                    os.path.join(self.py3_dest_dir, name+suffix)), stderr)
+-        sep = re.escape(os.sep)
+-        self.assertRegexpMatches(
+-                stderr, r"No changes to .*/__init__\.py".replace("/", sep))
+-        self.assertNotRegex(
+-                stderr, r"No changes to .*/trivial\.py".replace("/", sep))
+-
+-    def test_filename_changing_on_output_two_files(self):
+-        """2to3 two files in one directory with a new output dir."""
+-        self.setup_test_source_trees()
+-        err = StringIO.StringIO()
+-        py2_files = [self.trivial_py2_file, self.init_py2_file]
+-        expected_files = set(os.path.basename(name) for name in py2_files)
+-        ret = self.run_2to3_capture(
+-                ["-n", "-w", "--write-unchanged-files",
+-                 "--no-diffs", "--output-dir", self.py3_dest_dir] + py2_files,
+-                StringIO.StringIO(""), StringIO.StringIO(), err)
+-        self.assertEqual(ret, 0)
+-        stderr = err.getvalue()
+-        self.assertIn(
+-                "Output in %r will mirror the input directory %r layout" % (
+-                        self.py3_dest_dir, self.py2_src_dir), stderr)
+-        self.assertEqual(expected_files, set(os.listdir(self.py3_dest_dir)))
+-
+-    def test_filename_changing_on_output_single_file(self):
+-        """2to3 a single file with a new output dir."""
+-        self.setup_test_source_trees()
+-        err = StringIO.StringIO()
+-        ret = self.run_2to3_capture(
+-                ["-n", "-w", "--no-diffs", "--output-dir", self.py3_dest_dir,
+-                 self.trivial_py2_file],
+-                StringIO.StringIO(""), StringIO.StringIO(), err)
+-        self.assertEqual(ret, 0)
+-        stderr = err.getvalue()
+-        self.assertIn(
+-                "Output in %r will mirror the input directory %r layout" % (
+-                        self.py3_dest_dir, self.py2_src_dir), stderr)
+-        self.assertEqual(set([os.path.basename(self.trivial_py2_file)]),
+-                         set(os.listdir(self.py3_dest_dir)))
+-
+ 
+ if __name__ == '__main__':
+     unittest.main()
+--- a/Lib/lib2to3/tests/test_parser.py	1587330819.000000000
++++ b/Lib/lib2to3/tests/test_parser.py	1673513339.254786643
+@@ -41,65 +41,6 @@
+     def test_load_grammar_from_txt_file(self):
+         pgen2_driver.load_grammar(support.grammar_path, save=False, force=True)
+ 
+-    def test_load_grammar_from_pickle(self):
+-        # Make a copy of the grammar file in a temp directory we are
+-        # guaranteed to be able to write to.
+-        tmpdir = tempfile.mkdtemp()
+-        try:
+-            grammar_copy = os.path.join(
+-                    tmpdir, os.path.basename(support.grammar_path))
+-            shutil.copy(support.grammar_path, grammar_copy)
+-            pickle_name = pgen2_driver._generate_pickle_name(grammar_copy)
+-
+-            pgen2_driver.load_grammar(grammar_copy, save=True, force=True)
+-            self.assertTrue(os.path.exists(pickle_name))
+-
+-            os.unlink(grammar_copy)  # Only the pickle remains...
+-            pgen2_driver.load_grammar(grammar_copy, save=False, force=False)
+-        finally:
+-            shutil.rmtree(tmpdir)
+-
+-    @unittest.skipIf(sys.executable is None, 'sys.executable required')
+-    def test_load_grammar_from_subprocess(self):
+-        tmpdir = tempfile.mkdtemp()
+-        tmpsubdir = os.path.join(tmpdir, 'subdir')
+-        try:
+-            os.mkdir(tmpsubdir)
+-            grammar_base = os.path.basename(support.grammar_path)
+-            grammar_copy = os.path.join(tmpdir, grammar_base)
+-            grammar_sub_copy = os.path.join(tmpsubdir, grammar_base)
+-            shutil.copy(support.grammar_path, grammar_copy)
+-            shutil.copy(support.grammar_path, grammar_sub_copy)
+-            pickle_name = pgen2_driver._generate_pickle_name(grammar_copy)
+-            pickle_sub_name = pgen2_driver._generate_pickle_name(
+-                     grammar_sub_copy)
+-            self.assertNotEqual(pickle_name, pickle_sub_name)
+-
+-            # Generate a pickle file from this process.
+-            pgen2_driver.load_grammar(grammar_copy, save=True, force=True)
+-            self.assertTrue(os.path.exists(pickle_name))
+-
+-            # Generate a new pickle file in a subprocess with a most likely
+-            # different hash randomization seed.
+-            sub_env = dict(os.environ)
+-            sub_env['PYTHONHASHSEED'] = 'random'
+-            subprocess.check_call(
+-                    [sys.executable, '-c', """
+-from lib2to3.pgen2 import driver as pgen2_driver
+-pgen2_driver.load_grammar(%r, save=True, force=True)
+-                    """ % (grammar_sub_copy,)],
+-                    env=sub_env)
+-            self.assertTrue(os.path.exists(pickle_sub_name))
+-
+-            with open(pickle_name, 'rb') as pickle_f_1, \
+-                    open(pickle_sub_name, 'rb') as pickle_f_2:
+-                self.assertEqual(
+-                    pickle_f_1.read(), pickle_f_2.read(),
+-                    msg='Grammar caches generated using different hash seeds'
+-                    ' were not identical.')
+-        finally:
+-            shutil.rmtree(tmpdir)
+-
+     def test_load_packaged_grammar(self):
+         modname = __name__ + '.load_test'
+         class MyLoader:
+--- a/Lib/locale.py	1587330819.000000000
++++ b/Lib/locale.py	1673513070.344837095
+@@ -1761,8 +1761,8 @@
+     'uk_ua.iso88595':                       'uk_UA.ISO8859-5',
+     'uk_ua.koi8u':                          'uk_UA.KOI8-U',
+     'uk_ua.microsoftcp1251':                'uk_UA.CP1251',
+-    'univ':                                 'en_US.utf',
+-    'universal':                            'en_US.utf',
++    'univ':                                 'en_US.UTF-8',
++    'universal':                            'en_US.UTF-8',
+     'universal.utf8@ucs4':                  'en_US.UTF-8',
+     'unm_us':                               'unm_US.UTF-8',
+     'ur':                                   'ur_PK.CP1256',
+--- a/Lib/plat-generic/regen	1587330819.000000000
++++ b/Lib/plat-generic/regen	1673513555.170968840
+@@ -1,3 +1,3 @@
+ #! /bin/sh
+ set -v
+-eval $PYTHON_FOR_BUILD ../../Tools/scripts/h2py.py -i "'(u_long)'" /usr/include/netinet/in.h
++eval $PYTHON_FOR_BUILD ../../Tools/scripts/h2py.py -i "'(u_long)'" netinet/in.h
+--- a/Lib/platform.py	1587330819.000000000
++++ b/Lib/platform.py	1673513149.960274815
+@@ -293,7 +293,7 @@
+ _supported_dists = (
+     'SuSE', 'debian', 'fedora', 'redhat', 'centos',
+     'mandrake', 'mandriva', 'rocks', 'slackware', 'yellowdog', 'gentoo',
+-    'UnitedLinux', 'turbolinux')
++    'UnitedLinux', 'turbolinux', 'Ubuntu')
+ 
+ def _parse_release_file(firstline):
+ 
+@@ -322,6 +322,10 @@
+             id = l[1]
+     return '', version, id
+ 
++_distributor_id_file_re = re.compile("(?:DISTRIB_ID\s*=)\s*(.*)", re.I)
++_release_file_re = re.compile("(?:DISTRIB_RELEASE\s*=)\s*(.*)", re.I)
++_codename_file_re = re.compile("(?:DISTRIB_CODENAME\s*=)\s*(.*)", re.I)
++
+ def linux_distribution(distname='', version='', id='',
+ 
+                        supported_dists=_supported_dists,
+@@ -346,6 +350,25 @@
+         args given as parameters.
+ 
+     """
++    # check for the LSB /etc/lsb-release file first, needed so
++    # that the distribution doesn't get identified as Debian.
++    try:
++        with open("/etc/lsb-release", "rU") as etclsbrel:
++            for line in etclsbrel:
++                m = _distributor_id_file_re.search(line)
++                if m:
++                    _u_distname = m.group(1).strip()
++                m = _release_file_re.search(line)
++                if m:
++                    _u_version = m.group(1).strip()
++                m = _codename_file_re.search(line)
++                if m:
++                    _u_id = m.group(1).strip()
++            if _u_distname and _u_version:
++                return (_u_distname, _u_version, _u_id)
++    except (EnvironmentError, UnboundLocalError):
++        pass
++
+     try:
+         etc = os.listdir('/etc')
+     except os.error:
+--- a/Lib/py_compile.py	1587330819.000000000
++++ b/Lib/py_compile.py	1673513421.723395361
+@@ -120,13 +120,24 @@
+             return
+     if cfile is None:
+         cfile = file + (__debug__ and 'c' or 'o')
+-    with open(cfile, 'wb') as fc:
+-        fc.write('\0\0\0\0')
+-        wr_long(fc, timestamp)
+-        marshal.dump(codeobject, fc)
+-        fc.flush()
+-        fc.seek(0, 0)
+-        fc.write(MAGIC)
++    # Atomically write the pyc/pyo file.  Issue #13146.
++    # id() is used to generate a pseudo-random filename.
++    path_tmp = '{}.{}'.format(cfile, id(cfile))
++    try:
++        with open(path_tmp, 'wb') as fc:
++            fc.write('\0\0\0\0')
++            wr_long(fc, timestamp)
++            marshal.dump(codeobject, fc)
++            fc.flush()
++            fc.seek(0, 0)
++            fc.write(MAGIC)
++        os.rename(path_tmp, cfile)
++    except OSError:
++        try:
++            os.unlink(path_tmp)
++        except OSError:
++            pass
++        raise
+ 
+ def main(args=None):
+     """Compile several source files.
+--- a/Lib/pydoc.py	1587330819.000000000
++++ b/Lib/pydoc.py	1673513517.072836266
+@@ -392,6 +392,7 @@
+                                  'marshal', 'posix', 'signal', 'sys',
+                                  'thread', 'zipimport') or
+              (file.startswith(basedir) and
++              not file.startswith(os.path.join(basedir, 'dist-packages')) and
+               not file.startswith(os.path.join(basedir, 'site-packages')))) and
+             object.__name__ not in ('xml.etree', 'test.pydoc_mod')):
+             if docloc.startswith(("http://", "https://")):
+@@ -1394,6 +1395,8 @@
+         return plainpager
+     if sys.platform == 'win32' or sys.platform.startswith('os2'):
+         return lambda text: tempfilepager(plain(text), 'more <')
++    if hasattr(os, 'system') and os.system('(pager) 2>/dev/null') == 0:
++        return lambda text: pipepager(text, 'pager')
+     if hasattr(os, 'system') and os.system('(less) 2>/dev/null') == 0:
+         return lambda text: pipepager(text, 'less')
+ 
+--- a/Lib/site.py	1587330819.000000000
++++ b/Lib/site.py	1673513061.187495390
+@@ -19,6 +19,12 @@
+ resulting directories, if they exist, are appended to sys.path, and
+ also inspected for path configuration files.
+ 
++For Debian and derivatives, this sys.path is augmented with directories
++for packages distributed within the distribution. Local addons go
++into /usr/local/lib/python<version>/dist-packages, Debian addons
++install into /usr/{lib,share}/python<version>/dist-packages.
++/usr/lib/python<version>/site-packages is not used.
++
+ A path configuration file is a file whose name has the form
+ <package>.pth; its contents are additional directories (one per line)
+ to be added to sys.path.  Non-existing directories (or
+@@ -267,6 +273,13 @@
+ 
+     if ENABLE_USER_SITE and os.path.isdir(user_site):
+         addsitedir(user_site, known_paths)
++    if ENABLE_USER_SITE:
++        for dist_libdir in ("local/lib", "lib"):
++            user_site = os.path.join(USER_BASE, dist_libdir,
++                                     "python" + sys.version[:3],
++                                     "dist-packages")
++            if os.path.isdir(user_site):
++                addsitedir(user_site, known_paths)
+     return known_paths
+ 
+ def getsitepackages():
+@@ -288,10 +301,12 @@
+         if sys.platform in ('os2emx', 'riscos'):
+             sitepackages.append(os.path.join(prefix, "Lib", "site-packages"))
+         elif os.sep == '/':
++            sitepackages.append(os.path.join(prefix, "local/lib",
++                                        "python" + sys.version[:3],
++                                        "dist-packages"))
+             sitepackages.append(os.path.join(prefix, "lib",
+                                         "python" + sys.version[:3],
+-                                        "site-packages"))
+-            sitepackages.append(os.path.join(prefix, "lib", "site-python"))
++                                        "dist-packages"))
+         else:
+             sitepackages.append(prefix)
+             sitepackages.append(os.path.join(prefix, "lib", "site-packages"))
+--- a/Lib/sysconfig.py	1673512828.946143470
++++ b/Lib/sysconfig.py	1673513313.087104769
+@@ -16,6 +16,26 @@
+         'scripts': '{base}/bin',
+         'data': '{base}',
+         },
++    'posix_local': {
++        'stdlib': '{base}/lib/python{py_version_short}',
++        'platstdlib': '{platbase}/lib/python{py_version_short}',
++        'purelib': '{base}/local/lib/python{py_version_short}/dist-packages',
++        'platlib': '{platbase}/local/lib/python{py_version_short}/dist-packages',
++        'include': '{base}/local/include/python{py_version_short}',
++        'platinclude': '{platbase}/local/include/python{py_version_short}',
++        'scripts': '{base}/local/bin',
++        'data': '{base}/local',
++        },
++    'deb_system': {
++        'stdlib': '{base}/lib/python{py_version_short}',
++        'platstdlib': '{platbase}/lib/python{py_version_short}',
++        'purelib': '{base}/lib/python{py_version_short}/dist-packages',
++        'platlib': '{platbase}/lib/python{py_version_short}/dist-packages',
++        'include': '{base}/include/python{py_version_short}',
++        'platinclude': '{platbase}/include/python{py_version_short}',
++        'scripts': '{base}/bin',
++        'data': '{base}',
++        },
+     'posix_home': {
+         'stdlib': '{base}/lib/python',
+         'platstdlib': '{base}/lib/python',
+@@ -134,7 +154,7 @@
+ _PYTHON_BUILD = is_python_build()
+ 
+ if _PYTHON_BUILD:
+-    for scheme in ('posix_prefix', 'posix_home'):
++    for scheme in ('posix_prefix', 'posix_local', 'deb_system', 'posix_home'):
+         _INSTALL_SCHEMES[scheme]['include'] = '{projectbase}/Include'
+         _INSTALL_SCHEMES[scheme]['platinclude'] = '{srcdir}'
+ 
+@@ -168,7 +188,10 @@
+ 
+ def _get_default_scheme():
+     if os.name == 'posix':
+-        # the default scheme for posix is posix_prefix
++        # the default scheme for posix on Debian/Ubuntu is posix_local
++        is_default_prefix = os.path.normpath(sys.exec_prefix or sys.prefix) in ('/usr', '/usr/local')
++        if is_default_prefix and 'PYTHONUSERBASE' not in os.environ and 'real_prefix' not in sys.__dict__:
++            return 'posix_local'
+         return 'posix_prefix'
+     return os.name
+ 
+@@ -236,11 +259,19 @@
+                     done[n] = v
+ 
+     # do variable interpolation here
+-    while notdone:
+-        for name in notdone.keys():
++    variables = list(notdone.keys())
++
++    # Variables with a 'PY_' prefix in the makefile. These need to
++    # be made available without that prefix through sysconfig.
++    # Special care is needed to ensure that variable expansion works, even
++    # if the expansion uses the name without a prefix.
++    renamed_variables = ('CFLAGS', 'LDFLAGS', 'CPPFLAGS')
++
++    while len(variables) > 0:
++        for name in tuple(variables):
+             value = notdone[name]
+             m = _findvar1_rx.search(value) or _findvar2_rx.search(value)
+-            if m:
++            if m is not None:
+                 n = m.group(1)
+                 found = True
+                 if n in done:
+@@ -251,23 +282,48 @@
+                 elif n in os.environ:
+                     # do it like make: fall back to environment
+                     item = os.environ[n]
++
++                elif n in renamed_variables:
++                    if name.startswith('PY_') and name[3:] in renamed_variables:
++                        item = ""
++
++                    elif 'PY_' + n in notdone:
++                        found = False
++
++                    else:
++                        item = str(done['PY_' + n])
++
+                 else:
+                     done[n] = item = ""
++
+                 if found:
+                     after = value[m.end():]
+                     value = value[:m.start()] + item + after
+                     if "$" in after:
+                         notdone[name] = value
+                     else:
+-                        try: value = int(value)
++                        try:
++                            value = int(value)
+                         except ValueError:
+                             done[name] = value.strip()
+                         else:
+                             done[name] = value
+-                        del notdone[name]
++                        variables.remove(name)
++
++                        if name.startswith('PY_') \
++                        and name[3:] in renamed_variables:
++
++                            name = name[3:]
++                            if name not in done:
++                                done[name] = value
++
++
+             else:
+-                # bogus variable reference; just drop it since we can't deal
+-                del notdone[name]
++                # bogus variable reference (e.g. "prefix=$/opt/python");
++                # just drop it since we can't deal
++                done[name] = value
++                variables.remove(name)
++
+     # strip spurious spaces
+     for k, v in done.items():
+         if isinstance(v, str):
+@@ -282,7 +338,7 @@
+     """Return the path of the Makefile."""
+     if _PYTHON_BUILD:
+         return os.path.join(_PROJECT_BASE, "Makefile")
+-    return os.path.join(get_path('platstdlib'), "config", "Makefile")
++    return os.path.join(get_config_var('LIBPL'), "Makefile")
+ 
+ # Issue #22199: retain undocumented private name for compatibility
+ _get_makefile_filename = get_makefile_filename
+@@ -414,7 +470,7 @@
+         else:
+             inc_dir = _PROJECT_BASE
+     else:
+-        inc_dir = get_path('platinclude')
++        inc_dir = get_path('platinclude').replace("/usr/local","/usr",1)+(sys.pydebug and "_d" or "")
+     return os.path.join(inc_dir, 'pyconfig.h')
+ 
+ def get_scheme_names():
+@@ -481,6 +537,12 @@
+         # the init-function.
+         _CONFIG_VARS['userbase'] = _getuserbase()
+ 
++        multiarch = get_config_var('MULTIARCH')
++        if multiarch:
++            _CONFIG_VARS['multiarchsubdir'] = '/' + multiarch
++        else:
++            _CONFIG_VARS['multiarchsubdir'] = ''
++
+         if 'srcdir' not in _CONFIG_VARS:
+             _CONFIG_VARS['srcdir'] = _PROJECT_BASE
+ 
+--- a/Lib/tarfile.py	1587330819.000000000
++++ b/Lib/tarfile.py	1673513570.221508848
+@@ -1400,6 +1400,8 @@
+ 
+             length, keyword = match.groups()
+             length = int(length)
++            if length == 0:
++                raise InvalidHeaderError("invalid header")
+             value = buf[match.end(2) + 1:match.start(1) + length - 1]
+ 
+             keyword = keyword.decode("utf8")
+--- a/Lib/test/test_import.py	1587330819.000000000
++++ b/Lib/test/test_import.py	1673513061.189109799
+@@ -301,7 +301,7 @@
+         with check_warnings(('', ImportWarning)):
+             # Just a random non-package directory we always expect to be
+             # somewhere in sys.path...
+-            self.assertRaises(ImportError, __import__, "site-packages")
++            self.assertRaises(ImportError, __import__, "dist-packages")
+ 
+     def test_import_by_filename(self):
+         path = os.path.abspath(TESTFN)
+--- a/Lib/test/test_site.py	1587330819.000000000
++++ b/Lib/test/test_site.py	1673513061.189733239
+@@ -255,10 +255,13 @@
+         elif os.sep == '/':
+             # OS X, Linux, FreeBSD, etc
+             self.assertEqual(len(dirs), 2)
+-            wanted = os.path.join('xoxo', 'lib', 'python' + sys.version[:3],
+-                                  'site-packages')
++            wanted = os.path.join('xoxo', 'local', 'lib',
++                                  'python' + sys.version[:3],
++                                  'dist-packages')
+             self.assertEqual(dirs[0], wanted)
+-            wanted = os.path.join('xoxo', 'lib', 'site-python')
++            wanted = os.path.join('xoxo', 'lib',
++                                  'python' + sys.version[:3],
++                                  'dist-packages')
+             self.assertEqual(dirs[1], wanted)
+         else:
+             # other platforms
+--- a/Lib/test/test_sundry.py	1587330819.000000000
++++ b/Lib/test/test_sundry.py	1673513106.757287342
+@@ -59,7 +59,11 @@
+             import os2emxpath
+             import pdb
+             import posixfile
+-            import pstats
++            try:
++                import pstats  # separated out into the python-profiler package
++            except ImportError:
++                if test_support.verbose:
++                    print "skipping profile and pstats"
+             import py_compile
+             import rexec
+             import sched
+--- a/Lib/test/test_sysconfig.py	1587330819.000000000
++++ b/Lib/test/test_sysconfig.py	1673513061.190357345
+@@ -239,8 +239,8 @@
+         self.assertTrue(os.path.isfile(config_h), config_h)
+ 
+     def test_get_scheme_names(self):
+-        wanted = ('nt', 'nt_user', 'os2', 'os2_home', 'osx_framework_user',
+-                  'posix_home', 'posix_prefix', 'posix_user')
++        wanted = ('deb_system', 'nt', 'nt_user', 'os2', 'os2_home', 'osx_framework_user',
++                  'posix_home', 'posix_local', 'posix_prefix', 'posix_user')
+         self.assertEqual(get_scheme_names(), wanted)
+ 
+     @unittest.skipIf(sys.platform.startswith('win'),
+--- a/Lib/unittest/loader.py	1587330819.000000000
++++ b/Lib/unittest/loader.py	1673513429.478540395
+@@ -256,8 +256,8 @@
+                     yield _make_failed_import_test(name, self.suiteClass)
+                 else:
+                     mod_file = os.path.abspath(getattr(module, '__file__', full_path))
+-                    realpath = os.path.splitext(os.path.realpath(mod_file))[0]
+-                    fullpath_noext = os.path.splitext(os.path.realpath(full_path))[0]
++                    realpath = os.path.splitext(mod_file)[0]
++                    fullpath_noext = os.path.splitext(full_path)[0]
+                     if realpath.lower() != fullpath_noext.lower():
+                         module_dir = os.path.dirname(realpath)
+                         mod_name = os.path.splitext(os.path.basename(full_path))[0]
+--- a/Lib/unittest/test/test_discovery.py	1587330819.000000000
++++ b/Lib/unittest/test/test_discovery.py	1673513429.479619396
+@@ -315,7 +315,7 @@
+         self.assertTrue(program.failfast)
+         self.assertTrue(program.catchbreak)
+ 
+-    def setup_module_clash(self):
++    def test_detect_module_clash(self):
+         class Module(object):
+             __file__ = 'bar/foo.py'
+         sys.modules['foo'] = Module
+@@ -342,10 +342,7 @@
+         os.listdir = listdir
+         os.path.isfile = isfile
+         os.path.isdir = isdir
+-        return full_path
+ 
+-    def test_detect_module_clash(self):
+-        full_path = self.setup_module_clash()
+         loader = unittest.TestLoader()
+ 
+         mod_dir = os.path.abspath('bar')
+@@ -358,25 +355,6 @@
+         )
+         self.assertEqual(sys.path[0], full_path)
+ 
+-    def test_module_symlink_ok(self):
+-        full_path = self.setup_module_clash()
+-
+-        original_realpath = os.path.realpath
+-
+-        mod_dir = os.path.abspath('bar')
+-        expected_dir = os.path.abspath('foo')
+-
+-        def cleanup():
+-            os.path.realpath = original_realpath
+-        self.addCleanup(cleanup)
+-
+-        def realpath(path):
+-            if path == os.path.join(mod_dir, 'foo.py'):
+-                return os.path.join(expected_dir, 'foo.py')
+-            return path
+-        os.path.realpath = realpath
+-        loader = unittest.TestLoader()
+-        loader.discover(start_dir='foo', pattern='foo.py')
+ 
+     def test_discovery_from_dotted_path(self):
+         loader = unittest.TestLoader()
+--- a/Lib/urllib2.py	1587330819.000000000
++++ b/Lib/urllib2.py	1673513576.914442726
+@@ -856,8 +856,15 @@
+ 
+     # allow for double- and single-quoted realm values
+     # (single quotes are a violation of the RFC, but appear in the wild)
+-    rx = re.compile('(?:.*,)*[ \t]*([^ \t]+)[ \t]+'
+-                    'realm=(["\']?)([^"\']*)\\2', re.I)
++    rx = re.compile('(?:^|,)'   # start of the string or ','
++                    '[ \t]*'    # optional whitespaces
++                    '([^ \t]+)' # scheme like "Basic"
++                    '[ \t]+'    # mandatory whitespaces
++                    # realm=xxx
++                    # realm='xxx'
++                    # realm="xxx"
++                    'realm=(["\']?)([^"\']*)\\2',
++                    re.I)
+ 
+     # XXX could pre-emptively send auth info already accepted (RFC 2617,
+     # end of section 2, and section 1.2 immediately after "credentials"
+--- a/Makefile.pre.in	1673512834.301234158
++++ b/Makefile.pre.in	1673513511.242005610
+@@ -72,12 +72,18 @@
+ # Compiler options
+ OPT=		@OPT@
+ BASECFLAGS=	@BASECFLAGS@
+-CFLAGS=		$(BASECFLAGS) @CFLAGS@ $(OPT) $(EXTRA_CFLAGS)
++CONFIGURE_CFLAGS=	@CFLAGS@
++CONFIGURE_CPPFLAGS=	@CPPFLAGS@
++CONFIGURE_LDFLAGS=	@LDFLAGS@
++# Avoid assigning CFLAGS, LDFLAGS, etc. so users can use them on the
++# command line to append to these values without stomping the pre-set
++# values.
++PY_CFLAGS=	$(BASECFLAGS) $(OPT) $(CONFIGURE_CFLAGS) $(CFLAGS) $(EXTRA_CFLAGS)
+ # Both CPPFLAGS and LDFLAGS need to contain the shell's value for setup.py to
+ # be able to build extension modules using the directories specified in the
+ # environment variables
+-CPPFLAGS=	-I. -IInclude -I$(srcdir)/Include @CPPFLAGS@
+-LDFLAGS=	@LDFLAGS@
++PY_CPPFLAGS=	-I. -IInclude -I$(srcdir)/Include $(CONFIGURE_CPPFLAGS) $(CPPFLAGS)
++PY_LDFLAGS=	$(CONFIGURE_LDFLAGS) $(LDFLAGS)
+ LDLAST=		@LDLAST@
+ SGI_ABI=	@SGI_ABI@
+ CCSHARED=	@CCSHARED@
+@@ -86,7 +92,7 @@
+ # Extra C flags added for building the interpreter object files.
+ CFLAGSFORSHARED=@CFLAGSFORSHARED@
+ # C flags used for building the interpreter object files
+-PY_CFLAGS=	$(CFLAGS) $(CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE
++PY_CORE_CFLAGS=	$(PY_CFLAGS) $(PY_CPPFLAGS) $(CFLAGSFORSHARED) -DPy_BUILD_CORE
+ 
+ 
+ # Machine-dependent subdirectories
+@@ -95,6 +101,9 @@
+ # Multiarch directory (may be empty)
+ MULTIARCH=	@MULTIARCH@
+ 
++# Multiarch directory (may be empty)
++MULTIARCH=	@MULTIARCH@
++
+ # Install prefix for architecture-independent files
+ prefix=		@prefix@
+ 
+@@ -115,14 +124,14 @@
+ # Detailed destination directories
+ BINLIBDEST=	$(LIBDIR)/python$(VERSION)
+ LIBDEST=	$(SCRIPTDIR)/python$(VERSION)
+-INCLUDEPY=	$(INCLUDEDIR)/python$(VERSION)
+-CONFINCLUDEPY=	$(CONFINCLUDEDIR)/python$(VERSION)
++INCLUDEPY=	$(INCLUDEDIR)/python$(VERSION)$(DEBUG_EXT)
++CONFINCLUDEPY=	$(CONFINCLUDEDIR)/python$(VERSION)$(DEBUG_EXT)
+ LIBP=		$(LIBDIR)/python$(VERSION)
+ 
+ # Symbols used for using shared libraries
+ SO=		@SO@
+-LDSHARED=	@LDSHARED@ $(LDFLAGS)
+-BLDSHARED=	@BLDSHARED@ $(LDFLAGS)
++LDSHARED=	@LDSHARED@ $(PY_LDFLAGS)
++BLDSHARED=	@BLDSHARED@ $(PY_LDFLAGS) $(PY_CFLAGS)
+ LDCXXSHARED=	@LDCXXSHARED@
+ DESTSHARED=	$(BINLIBDEST)/lib-dynload
+ 
+@@ -130,6 +139,8 @@
+ EXE=		@EXEEXT@
+ BUILDEXE=	@BUILDEXEEXT@
+ 
++DEBUG_EXT=	@DEBUG_EXT@
++
+ # Short name and location for Mac OS X Python framework
+ UNIVERSALSDK=@UNIVERSALSDK@
+ PYTHONFRAMEWORK=	@PYTHONFRAMEWORK@
+@@ -394,7 +405,7 @@
+ 		$(PYTHON_OBJS) \
+ 		$(MODULE_OBJS) \
+ 		$(SIGNAL_OBJS) \
+-		$(MODOBJS)
++		$(sort $(MODOBJS))
+ 
+ #########################################################################
+ # Rules
+@@ -487,7 +498,7 @@
+ 
+ # Build the interpreter
+ $(BUILDPYTHON):	Modules/python.o $(LIBRARY) $(LDLIBRARY)
+-		$(LINKCC) $(LDFLAGS) $(LINKFORSHARED) -o $@ \
++		$(LINKCC) $(PY_LDFLAGS) $(PY_CFLAGS) $(LINKFORSHARED) -o $@ \
+ 			Modules/python.o \
+ 			$(BLDLIBRARY) $(LIBS) $(MODLIBS) $(SYSLIBS) $(LDLAST)
+ 
+@@ -512,7 +523,7 @@
+ 
+ # This is shared by the math and cmath modules
+ Modules/_math.o: Modules/_math.c Modules/_math.h
+-	$(CC) -c $(CCSHARED) $(PY_CFLAGS) -o $@ $<
++	$(CC) -c $(CCSHARED) $(PY_CORE_CFLAGS) -o $@ $<
+ 
+ # Build the shared modules
+ # Under GNU make, MAKEFLAGS are sorted and normalized; the 's' for
+@@ -523,7 +534,7 @@
+ 	    *\ -s*|s*) quiet="-q";; \
+ 	    *) quiet="";; \
+ 	esac; \
+-	$(RUNSHARED) CC='$(CC)' LDSHARED='$(BLDSHARED)' OPT='$(OPT)' \
++	$(RUNSHARED) CC='$(CC)' LDSHARED='$(BLDSHARED)' LDFLAGS='$(PY_LDFLAGS)' OPT='$(OPT)' \
+ 		_TCLTK_INCLUDES='$(TCLTK_INCLUDES)' _TCLTK_LIBS='$(TCLTK_LIBS)' \
+ 		$(PYTHON_FOR_BUILD) $(srcdir)/setup.py --no-user-cfg $$quiet build
+ 
+@@ -536,23 +547,23 @@
+ 	$(AR) $(ARFLAGS) $@ $(OBJECT_OBJS)
+ 	$(AR) $(ARFLAGS) $@ $(PYTHON_OBJS)
+ 	$(AR) $(ARFLAGS) $@ $(MODULE_OBJS) $(SIGNAL_OBJS)
+-	$(AR) $(ARFLAGS) $@ $(MODOBJS)
++	$(AR) $(ARFLAGS) $@ $(sort $(MODOBJS))
+ 	$(RANLIB) $@
+ 
+-libpython$(VERSION).so: $(LIBRARY_OBJS)
++libpython$(VERSION)$(DEBUG_EXT).so: $(LIBRARY_OBJS)
+ 	if test $(INSTSONAME) != $(LDLIBRARY); then \
+-		$(BLDSHARED) -Wl,-h$(INSTSONAME) -o $(INSTSONAME) $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST); \
++		$(BLDSHARED) $(PY_LDFLAGS) $(CCSHARED) -Wl,-h$(INSTSONAME) -o $(INSTSONAME) $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST); \
+ 		$(LN) -f $(INSTSONAME) $@; \
+ 	else \
+-		$(BLDSHARED) -o $@ $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST); \
++		$(BLDSHARED) $(PY_LDFLAGS) $(CCSHARED) -o $@ $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST); \
+ 	fi
+ 
+ libpython$(VERSION).dylib: $(LIBRARY_OBJS)
+-	 $(CC) -dynamiclib -Wl,-single_module $(LDFLAGS) -undefined dynamic_lookup -Wl,-install_name,$(prefix)/lib/libpython$(VERSION).dylib -Wl,-compatibility_version,$(VERSION) -Wl,-current_version,$(VERSION) -o $@ $(LIBRARY_OBJS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST); \
++	 $(CC) -dynamiclib -Wl,-single_module $(PY_LDFLAGS) -undefined dynamic_lookup -Wl,-install_name,$(prefix)/lib/libpython$(VERSION).dylib -Wl,-compatibility_version,$(VERSION) -Wl,-current_version,$(VERSION) -o $@ $(LIBRARY_OBJS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST); \
+ 
+ 
+ libpython$(VERSION).sl: $(LIBRARY_OBJS)
+-	$(LDSHARED) -o $@ $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST)
++	$(LDSHARED) $(PY_LDFLAGS) -o $@ $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM) $(LDLAST)
+ 
+ # Copy up the gdb python hooks into a position where they can be automatically
+ # loaded by gdb during Lib/test/test_gdb.py
+@@ -591,7 +602,7 @@
+ # for a shared core library; otherwise, this rule is a noop.
+ $(DLLLIBRARY) libpython$(VERSION).dll.a: $(LIBRARY_OBJS)
+ 	if test -n "$(DLLLIBRARY)"; then \
+-		$(LDSHARED) -Wl,--out-implib=$@ -o $(DLLLIBRARY) $^ \
++		$(LDSHARED) $(PY_LDFLAGS) -Wl,--out-implib=$@ -o $(DLLLIBRARY) $^ \
+ 			$(LIBS) $(MODLIBS) $(SYSLIBS) $(LDLAST); \
+ 	else true; \
+ 	fi
+@@ -614,6 +625,10 @@
+ 	@mv config.c Modules
+ 	@echo "The Makefile was updated, you may need to re-run make."
+ 
++Python/dynload_shlib.o: $(srcdir)/Python/dynload_shlib.c Makefile
++	$(CC) -c $(PY_CORE_CFLAGS) \
++		$(if $(MULTIARCH),-DMULTIARCH='"$(MULTIARCH)"') \
++		-o $@ $(srcdir)/Python/dynload_shlib.c
+ 
+ Modules/Setup: $(srcdir)/Modules/Setup.dist
+ 	@if test -f Modules/Setup; then \
+@@ -641,14 +656,16 @@
+ 		$(SIGNAL_OBJS) \
+ 		$(MODOBJS) \
+ 		$(srcdir)/Modules/getbuildinfo.c
+-	$(CC) -c $(PY_CFLAGS) \
++	$(CC) -c $(PY_CORE_CFLAGS) \
+ 	      -DGITVERSION="\"`LC_ALL=C $(GITVERSION)`\"" \
+ 	      -DGITTAG="\"`LC_ALL=C $(GITTAG)`\"" \
+ 	      -DGITBRANCH="\"`LC_ALL=C $(GITBRANCH)`\"" \
++	      $(if $(BUILD_DATE),-DDATE='"$(BUILD_DATE)"') \
++	      $(if $(BUILD_TIME),-DTIME='"$(BUILD_TIME)"') \
+ 	      -o $@ $(srcdir)/Modules/getbuildinfo.c
+ 
+ Modules/getpath.o: $(srcdir)/Modules/getpath.c Makefile
+-	$(CC) -c $(PY_CFLAGS) -DPYTHONPATH='"$(PYTHONPATH)"' \
++	$(CC) -c $(PY_CORE_CFLAGS) -DPYTHONPATH='"$(PYTHONPATH)"' \
+ 		-DPREFIX='"$(prefix)"' \
+ 		-DEXEC_PREFIX='"$(exec_prefix)"' \
+ 		-DVERSION='"$(VERSION)"' \
+@@ -656,7 +673,7 @@
+ 		-o $@ $(srcdir)/Modules/getpath.c
+ 
+ Modules/python.o: $(srcdir)/Modules/python.c
+-	$(MAINCC) -c $(PY_CFLAGS) -o $@ $(srcdir)/Modules/python.c
++	$(MAINCC) -c $(PY_CORE_CFLAGS) -o $@ $(srcdir)/Modules/python.c
+ 
+ Modules/posixmodule.o: $(srcdir)/Modules/posixmodule.c $(srcdir)/Modules/posixmodule.h
+ 
+@@ -665,7 +682,7 @@
+ Modules/pwdmodule.o: $(srcdir)/Modules/pwdmodule.c $(srcdir)/Modules/posixmodule.h
+ 
+ $(PGEN):	$(PGENOBJS)
+-		$(CC) $(OPT) $(LDFLAGS) $(PGENOBJS) $(LIBS) -o $(PGEN)
++		$(CC) $(OPT) $(PY_LDFLAGS) $(PGENOBJS) $(LIBS) -o $(PGEN)
+ 
+ .PHONY: regen-grammar
+ regen-grammar: $(PGEN)
+@@ -701,10 +718,10 @@
+ Python/compile.o Python/symtable.o Python/ast.o: $(srcdir)/Include/graminit.h $(srcdir)/Include/Python-ast.h
+ 
+ Python/getplatform.o: $(srcdir)/Python/getplatform.c
+-		$(CC) -c $(PY_CFLAGS) -DPLATFORM='"$(MACHDEP)"' -o $@ $(srcdir)/Python/getplatform.c
++		$(CC) -c $(PY_CORE_CFLAGS) -DPLATFORM='"$(MACHDEP)"' -o $@ $(srcdir)/Python/getplatform.c
+ 
+ Python/importdl.o: $(srcdir)/Python/importdl.c
+-		$(CC) -c $(PY_CFLAGS) -I$(DLINCLDIR) -o $@ $(srcdir)/Python/importdl.c
++		$(CC) -c $(PY_CORE_CFLAGS) -I$(DLINCLDIR) -o $@ $(srcdir)/Python/importdl.c
+ 
+ Objects/unicodectype.o:	$(srcdir)/Objects/unicodectype.c \
+ 				$(srcdir)/Objects/unicodetype_db.h
+@@ -1181,6 +1198,8 @@
+ 	# Substitution happens here, as the completely-expanded BINDIR
+ 	# is not available in configure
+ 	sed -e "s,@EXENAME@,$(BINDIR)/python$(VERSION)$(EXE)," < $(srcdir)/Misc/python-config.in >python-config
++	# Replace makefile compat. variable references with shell script compat. ones; $(VAR) -> ${VAR}
++	sed -e "s,\$$(\([A-Za-z0-9_]*\)),\$$\{\1\},g" < Misc/python-config.sh >python-config.sh
+ 
+ # Install the include files
+ INCLDIRSTOMAKE=$(INCLUDEDIR) $(CONFINCLUDEDIR) $(INCLUDEPY) $(CONFINCLUDEPY)
+@@ -1201,11 +1220,11 @@
+ 	$(INSTALL_DATA) pyconfig.h $(DESTDIR)$(CONFINCLUDEPY)/pyconfig.h
+ 
+ # Install the library and miscellaneous stuff needed for extending/embedding
+-# This goes into $(exec_prefix)
+-LIBPL=		$(LIBP)/config
++# This goes into $(exec_prefix)$(DEBUG_EXT)
++LIBPL=		$(LIBP)/config-$(MULTIARCH)$(DEBUG_EXT)
+ 
+ # pkgconfig directory
+-LIBPC=		$(LIBDIR)/pkgconfig
++LIBPC=		$(LIBDIR)/$(MULTIARCH)/pkgconfig
+ 
+ libainstall:	@DEF_MAKE_RULE@ python-config
+ 	@for i in $(LIBDIR) $(LIBP) $(LIBPL) $(LIBPC); \
+@@ -1240,6 +1259,7 @@
+ 	$(INSTALL_SCRIPT) $(srcdir)/install-sh $(DESTDIR)$(LIBPL)/install-sh
+ 	$(INSTALL_SCRIPT) python-config $(DESTDIR)$(BINDIR)/python$(VERSION)-config
+ 	rm python-config
++	$(INSTALL_SCRIPT) python-config.sh $(DESTDIR)$(BINDIR)/python-config.sh
+ 	@if [ -s Modules/python.exp -a \
+ 		"`echo $(MACHDEP) | sed 's/^\(...\).*/\1/'`" = "aix" ]; then \
+ 		echo; echo "Installing support files for building shared extension modules on AIX:"; \
+@@ -1362,7 +1382,7 @@
+ 
+ # Some make's put the object file in the current directory
+ .c.o:
+-	$(CC) -c $(PY_CFLAGS) -o $@ $<
++	$(CC) -c $(PY_CORE_CFLAGS) -o $@ $<
+ 
+ # Run reindent on the library
+ reindent:
+@@ -1485,6 +1505,11 @@
+ 
+ Python/thread.o: @THREADHEADERS@
+ 
++Python/sysmodule.o: $(srcdir)/Python/sysmodule.c Makefile
++	$(CC) -c $(PY_CORE_CFLAGS) \
++		-DMULTIARCH='"$(MULTIARCH)"' \
++		-o $@ $(srcdir)/Python/sysmodule.c
++
+ # Declare targets that aren't real files
+ .PHONY: all build_all sharedmods check-clean-src oldsharedmods test quicktest memtest
+ .PHONY: install altinstall oldsharedinstall bininstall altbininstall
+--- a/Misc/python-config.in	1587330819.000000000
++++ b/Misc/python-config.in	1673513347.187391419
+@@ -44,7 +44,7 @@
+         print ' '.join(flags)
+ 
+     elif opt in ('--libs', '--ldflags'):
+-        libs = ['-lpython' + pyver]
++        libs = ['-lpython' + pyver + (sys.pydebug and "_d" or "")]
+         libs += getvar('LIBS').split()
+         libs += getvar('SYSLIBS').split()
+         # add the prefix/lib/pythonX.Y/config dir, but only if there is no
+@@ -56,3 +56,11 @@
+                 libs.extend(getvar('LINKFORSHARED').split())
+         print ' '.join(libs)
+ 
++    elif opt == '--extension-suffix':
++        print sysconfig.get_config_var('SO')
++
++    elif opt == '--abiflags':
++        print ''
++
++    elif opt == '--configdir':
++        print sysconfig.get_config_var('LIBPL')
+--- a/Misc/python.man	1587330819.000000000
++++ b/Misc/python.man	1673513536.332630103
+@@ -337,7 +337,7 @@
+ These are subject to difference depending on local installation
+ conventions; ${prefix} and ${exec_prefix} are installation-dependent
+ and should be interpreted as for GNU software; they may be the same.
+-The default for both is \fI/usr/local\fP.
++The default for both is \fI/usr\fP.
+ .IP \fI${exec_prefix}/bin/python\fP
+ Recommended location of the interpreter.
+ .PP
+@@ -456,7 +456,8 @@
+ .SH INTERNET RESOURCES
+ Main website:  https://www.python.org/
+ .br
+-Documentation:  https://docs.python.org/2/
++Documentation:  file:///usr/share/doc/python2.7/html/index.html (python-doc package)
++or https://docs.python.org/2/
+ .br
+ Developer resources:  https://docs.python.org/devguide/
+ .br
+--- a/Modules/Setup.dist	1587330819.000000000
++++ b/Modules/Setup.dist	1673513236.593292670
+@@ -169,7 +169,7 @@
+ # Modules that should always be present (non UNIX dependent):
+ 
+ #array arraymodule.c	# array objects
+-#cmath cmathmodule.c _math.c # -lm # complex math library functions
++#cmath cmathmodule.c # -lm # complex math library functions
+ #math mathmodule.c _math.c # -lm # math library functions, e.g. sin()
+ #_struct _struct.c	# binary structure packing/unpacking
+ #time timemodule.c # -lm # time operations and variables
+@@ -181,7 +181,7 @@
+ #itertools itertoolsmodule.c	# Functions creating iterators for efficient looping 
+ #strop stropmodule.c		# String manipulations
+ #_functools _functoolsmodule.c	# Tools for working with functions and callable objects
+-#_elementtree -I$(srcdir)/Modules/expat -DHAVE_EXPAT_CONFIG_H -DUSE_PYEXPAT_CAPI _elementtree.c	# elementtree accelerator
++#_elementtree -DUSE_PYEXPAT_CAPI _elementtree.c	# elementtree accelerator
+ #_pickle _pickle.c	# pickle accelerator
+ #datetime datetimemodule.c	# date/time type
+ #_bisect _bisectmodule.c	# Bisection algorithms
+@@ -215,10 +215,7 @@
+ 
+ # Socket module helper for SSL support; you must comment out the other
+ # socket line above, and possibly edit the SSL variable:
+-#SSL=/usr/local/ssl
+-#_ssl _ssl.c \
+-#	-DUSE_SSL -I$(SSL)/include -I$(SSL)/include/openssl \
+-#	-L$(SSL)/lib -lssl -lcrypto
++#_ssl _ssl.c -lssl -lcrypto
+ 
+ # The crypt module is now disabled by default because it breaks builds
+ # on many systems (where -lcrypt is needed), e.g. Linux (I believe).
+@@ -261,6 +258,7 @@
+ #_sha256 sha256module.c
+ #_sha512 sha512module.c
+ 
++#_hashlib _hashopenssl.c -lssl -lcrypto
+ 
+ # SGI IRIX specific modules -- off by default.
+ 
+@@ -469,7 +467,7 @@
+ # Interface to the Expat XML parser
+ # More information on Expat can be found at www.libexpat.org.
+ #
+-#pyexpat expat/xmlparse.c expat/xmlrole.c expat/xmltok.c pyexpat.c -I$(srcdir)/Modules/expat -DHAVE_EXPAT_CONFIG_H -DXML_POOR_ENTROPY=1 -DUSE_PYEXPAT_CAPI
++#pyexpat pyexpat.c -lexpat
+ 
+ 
+ # Hye-Shik Chang's CJKCodecs
+--- a/Modules/_ctypes/callproc.c	1673512024.374376465
++++ b/Modules/_ctypes/callproc.c	1673513582.403998748
+@@ -464,50 +464,53 @@
+ static PyObject *
+ PyCArg_repr(PyCArgObject *self)
+ {
+-    char buffer[256];
+     switch(self->tag) {
+     case 'b':
+     case 'B':
+-        sprintf(buffer, "<cparam '%c' (%d)>",
++        return PyString_FromFormat("<cparam '%c' (%d)>",
+             self->tag, self->value.b);
+-        break;
+     case 'h':
+     case 'H':
+-        sprintf(buffer, "<cparam '%c' (%d)>",
++        return PyString_FromFormat("<cparam '%c' (%d)>",
+             self->tag, self->value.h);
+-        break;
+     case 'i':
+     case 'I':
+-        sprintf(buffer, "<cparam '%c' (%d)>",
++        return PyString_FromFormat("<cparam '%c' (%d)>",
+             self->tag, self->value.i);
+-        break;
+     case 'l':
+     case 'L':
+-        sprintf(buffer, "<cparam '%c' (%ld)>",
++        return PyString_FromFormat("<cparam '%c' (%ld)>",
+             self->tag, self->value.l);
+-        break;
+ 
+ #ifdef HAVE_LONG_LONG
+     case 'q':
+     case 'Q':
+-        sprintf(buffer,
+-            "<cparam '%c' (%" PY_FORMAT_LONG_LONG "d)>",
++        return PyString_FromFormat("<cparam '%c' (%" PY_FORMAT_LONG_LONG "d)>",
+             self->tag, self->value.q);
+-        break;
+ #endif
+     case 'd':
+-        sprintf(buffer, "<cparam '%c' (%f)>",
+-            self->tag, self->value.d);
+-        break;
+-    case 'f':
+-        sprintf(buffer, "<cparam '%c' (%f)>",
+-            self->tag, self->value.f);
+-        break;
++    case 'f': {
++        PyObject *f = PyFloat_FromDouble((self->tag == 'f') ? self->value.f : self->value.d);
++        if (f == NULL) {
++            return NULL;
++        }
++        PyObject *r = PyObject_Repr(f);
++        Py_DECREF(f);
++        if (r == NULL) {
++            return NULL;
++        }
++        char *value = PyString_AsString(r);
++        if (value == NULL) {
++            return NULL;
++        }
++        PyObject *result = PyString_FromFormat("<cparam '%c' (%s)>", self->tag, value);
++        Py_DECREF(r);
++        return result;
++    }
+ 
+     case 'c':
+-        sprintf(buffer, "<cparam '%c' (%c)>",
++        return PyString_FromFormat("<cparam '%c' (%c)>",
+             self->tag, self->value.c);
+-        break;
+ 
+ /* Hm, are these 'z' and 'Z' codes useful at all?
+    Shouldn't they be replaced by the functionality of c_string
+@@ -516,16 +519,13 @@
+     case 'z':
+     case 'Z':
+     case 'P':
+-        sprintf(buffer, "<cparam '%c' (%p)>",
++        return PyString_FromFormat("<cparam '%c' (%p)>",
+             self->tag, self->value.p);
+-        break;
+ 
+     default:
+-        sprintf(buffer, "<cparam '%c' at %p>",
++        return PyString_FromFormat("<cparam '%c' at %p>",
+             self->tag, self);
+-        break;
+     }
+-    return PyString_FromString(buffer);
+ }
+ 
+ static PyMemberDef PyCArgType_members[] = {
+--- a/Modules/_ctypes/libffi/config.sub	1587330819.000000000
++++ b/Modules/_ctypes/libffi/config.sub	1673513545.021835648
+@@ -282,8 +282,10 @@
+ 	| mips64vr5900 | mips64vr5900el \
+ 	| mipsisa32 | mipsisa32el \
+ 	| mipsisa32r2 | mipsisa32r2el \
++	| mipsisa32r6 | mipsisa32r6el \
+ 	| mipsisa64 | mipsisa64el \
+ 	| mipsisa64r2 | mipsisa64r2el \
++	| mipsisa64r6 | mipsisa64r6el \
+ 	| mipsisa64sb1 | mipsisa64sb1el \
+ 	| mipsisa64sr71k | mipsisa64sr71kel \
+ 	| mipsr5900 | mipsr5900el \
+@@ -400,8 +402,10 @@
+ 	| mips64vr5900-* | mips64vr5900el-* \
+ 	| mipsisa32-* | mipsisa32el-* \
+ 	| mipsisa32r2-* | mipsisa32r2el-* \
++	| mipsisa32r6-* | mipsisa32r6el-* \
+ 	| mipsisa64-* | mipsisa64el-* \
+ 	| mipsisa64r2-* | mipsisa64r2el-* \
++	| mipsisa64r6-* | mipsisa64r6el-* \
+ 	| mipsisa64sb1-* | mipsisa64sb1el-* \
+ 	| mipsisa64sr71k-* | mipsisa64sr71kel-* \
+ 	| mipsr5900-* | mipsr5900el-* \
+--- a/Modules/getpath.c	1673512024.376202221
++++ b/Modules/getpath.c	1673513135.972764160
+@@ -373,7 +373,9 @@
+     char *path = getenv("PATH");
+     char *prog = Py_GetProgramName();
+     char argv0_path[MAXPATHLEN+1];
++#ifdef WITH_ZIP_PATH
+     char zip_path[MAXPATHLEN+1];
++#endif
+     int pfound, efound; /* 1 if found; -1 if found build directory */
+     char *buf;
+     size_t bufsz;
+@@ -513,6 +515,7 @@
+     else
+         reduce(prefix);
+ 
++#ifdef WITH_ZIP_PATH
+     strncpy(zip_path, prefix, MAXPATHLEN);
+     zip_path[MAXPATHLEN] = '\0';
+     if (pfound > 0) { /* Use the reduced prefix returned by Py_GetPrefix() */
+@@ -525,6 +528,7 @@
+     bufsz = strlen(zip_path);   /* Replace "00" with version */
+     zip_path[bufsz - 6] = VERSION[0];
+     zip_path[bufsz - 5] = VERSION[2];
++#endif
+ 
+     if (!(efound = search_for_exec_prefix(argv0_path, home))) {
+         if (!Py_FrozenFlag)
+@@ -564,7 +568,9 @@
+         defpath = delim + 1;
+     }
+ 
++#ifdef WITH_ZIP_PATH
+     bufsz += strlen(zip_path) + 1;
++#endif
+     bufsz += strlen(exec_prefix) + 1;
+ 
+     /* This is the only malloc call in this file */
+@@ -585,9 +591,11 @@
+         else
+             buf[0] = '\0';
+ 
++#ifdef WITH_ZIP_PATH
+         /* Next is the default zip path */
+         strcat(buf, zip_path);
+         strcat(buf, delimiter);
++#endif
+ 
+         /* Next goes merge of compile-time $PYTHONPATH with
+          * dynamically located prefix.
+--- a/Modules/makesetup	1673512828.948541101
++++ b/Modules/makesetup	1673513173.307852605
+@@ -219,7 +219,7 @@
+ 			case $doconfig in
+ 			no)	cc="$cc \$(CCSHARED) \$(CFLAGS) \$(CPPFLAGS)";;
+ 			*)
+-				cc="$cc \$(PY_CFLAGS)";;
++				cc="$cc \$(PY_CORE_CFLAGS)";;
+ 			esac
+ 			rule="$obj: $src; $cc $cpps -c $src -o $obj"
+ 			echo "$rule" >>$rulesf
+@@ -281,7 +281,7 @@
+ 	-)	;;
+ 	*)	sedf="@sed.in.$$"
+ 		trap 'rm -f $sedf' 0 1 2 3
+-		echo "1i\\" >$sedf
++		printf "1i\\" >$sedf
+ 		str="# Generated automatically from $makepre by makesetup."
+ 		echo "$str" >>$sedf
+ 		echo "s%_MODOBJS_%$OBJS%" >>$sedf
+--- a/Modules/md5.c	1587330819.000000000
++++ b/Modules/md5.c	1673513528.554816418
+@@ -311,7 +311,7 @@
+ }
+ 
+ void
+-md5_init(md5_state_t *pms)
++_Py_md5_init(md5_state_t *pms)
+ {
+     pms->count[0] = pms->count[1] = 0;
+     pms->abcd[0] = 0x67452301;
+@@ -321,7 +321,7 @@
+ }
+ 
+ void
+-md5_append(md5_state_t *pms, const md5_byte_t *data, unsigned int nbytes)
++_Py_md5_append(md5_state_t *pms, const md5_byte_t *data, unsigned int nbytes)
+ {
+     const md5_byte_t *p = data;
+     unsigned int left = nbytes;
+@@ -338,8 +338,8 @@
+         /* handle the append in two steps to prevent overflow */
+         overlap = 64 - offset;
+ 
+-        md5_append(pms, data, overlap);
+-        md5_append(pms, data + overlap, nbytes - overlap);
++        _Py_md5_append(pms, data, overlap);
++        _Py_md5_append(pms, data + overlap, nbytes - overlap);
+         return;
+     }
+ 
+@@ -371,7 +371,7 @@
+ }
+ 
+ void
+-md5_finish(md5_state_t *pms, md5_byte_t digest[16])
++_Py_md5_finish(md5_state_t *pms, md5_byte_t digest[16])
+ {
+     static const md5_byte_t pad[64] = {
+         0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+@@ -386,9 +386,9 @@
+     for (i = 0; i < 8; ++i)
+         data[i] = (md5_byte_t)(pms->count[i >> 2] >> ((i & 3) << 3));
+     /* Pad to 56 bytes mod 64. */
+-    md5_append(pms, pad, ((55 - (pms->count[0] >> 3)) & 63) + 1);
++    _Py_md5_append(pms, pad, ((55 - (pms->count[0] >> 3)) & 63) + 1);
+     /* Append the length. */
+-    md5_append(pms, data, 8);
++    _Py_md5_append(pms, data, 8);
+     for (i = 0; i < 16; ++i)
+         digest[i] = (md5_byte_t)(pms->abcd[i >> 2] >> ((i & 3) << 3));
+ }
+--- a/Modules/md5.h	1587330819.000000000
++++ b/Modules/md5.h	1673513528.555686169
+@@ -76,13 +76,13 @@
+ #endif
+ 
+ /* Initialize the algorithm. */
+-void md5_init(md5_state_t *pms);
++void _Py_md5_init(md5_state_t *pms);
+ 
+ /* Append a string to the message. */
+-void md5_append(md5_state_t *pms, const md5_byte_t *data, unsigned int nbytes);
++void _Py_md5_append(md5_state_t *pms, const md5_byte_t *data, unsigned int nbytes);
+ 
+ /* Finish the message and return the digest. */
+-void md5_finish(md5_state_t *pms, md5_byte_t digest[16]);
++void _Py_md5_finish(md5_state_t *pms, md5_byte_t digest[16]);
+ 
+ #ifdef __cplusplus
+ }  /* end extern "C" */
+--- a/Modules/md5module.c	1587330819.000000000
++++ b/Modules/md5module.c	1673513528.556283337
+@@ -31,7 +31,7 @@
+     if (md5p == NULL)
+         return NULL;
+ 
+-    md5_init(&md5p->md5);       /* actual initialisation */
++    _Py_md5_init(&md5p->md5);       /* actual initialisation */
+     return md5p;
+ }
+ 
+@@ -65,7 +65,7 @@
+             nbytes = INT_MAX;
+         else
+             nbytes = n;
+-        md5_append(&self->md5, buf,
++        _Py_md5_append(&self->md5, buf,
+                    Py_SAFE_DOWNCAST(nbytes, Py_ssize_t, unsigned int));
+         buf += nbytes;
+         n -= nbytes;
+@@ -91,7 +91,7 @@
+ 
+     /* make a temporary copy, and perform the final */
+     mdContext = self->md5;
+-    md5_finish(&mdContext, aDigest);
++    _Py_md5_finish(&mdContext, aDigest);
+ 
+     return PyString_FromStringAndSize((char *)aDigest, 16);
+ }
+@@ -114,7 +114,7 @@
+ 
+     /* make a temporary copy, and perform the final */
+     mdContext = self->md5;
+-    md5_finish(&mdContext, digest);
++    _Py_md5_finish(&mdContext, digest);
+ 
+     /* Make hex version of the digest */
+     for(i=j=0; i<16; i++) {
+@@ -294,7 +294,7 @@
+             nbytes = INT_MAX;
+         else
+             nbytes = n;
+-        md5_append(&md5p->md5, buf,
++        _Py_md5_append(&md5p->md5, buf,
+                    Py_SAFE_DOWNCAST(nbytes, Py_ssize_t, unsigned int));
+         buf += nbytes;
+         n -= nbytes;
+--- a/Modules/posixmodule.c	1587330819.000000000
++++ b/Modules/posixmodule.c	1673513219.698653806
+@@ -9426,6 +9426,43 @@
+     if (ins(d, "EX_NOTFOUND", (long)EX_NOTFOUND)) return -1;
+ #endif /* EX_NOTFOUND */
+ 
++	/* These came from statvfs.h */
++#ifdef ST_RDONLY
++	if (ins(d, "ST_RDONLY", (long)ST_RDONLY)) return -1;
++#endif /* ST_RDONLY */
++#ifdef ST_NOSUID
++	if (ins(d, "ST_NOSUID", (long)ST_NOSUID)) return -1;
++#endif /* ST_NOSUID */
++
++	/* GNU extensions */
++#ifdef ST_NODEV
++	if (ins(d, "ST_NODEV", (long)ST_NODEV)) return -1;
++#endif /* ST_NODEV */
++#ifdef ST_NOEXEC
++	if (ins(d, "ST_NOEXEC", (long)ST_NOEXEC)) return -1;
++#endif /* ST_NOEXEC */
++#ifdef ST_SYNCHRONOUS
++	if (ins(d, "ST_SYNCHRONOUS", (long)ST_SYNCHRONOUS)) return -1;
++#endif /* ST_SYNCHRONOUS */
++#ifdef ST_MANDLOCK
++	if (ins(d, "ST_MANDLOCK", (long)ST_MANDLOCK)) return -1;
++#endif /* ST_MANDLOCK */
++#ifdef ST_WRITE
++	if (ins(d, "ST_WRITE", (long)ST_WRITE)) return -1;
++#endif /* ST_WRITE */
++#ifdef ST_APPEND
++	if (ins(d, "ST_APPEND", (long)ST_APPEND)) return -1;
++#endif /* ST_APPEND */
++#ifdef ST_NOATIME
++	if (ins(d, "ST_NOATIME", (long)ST_NOATIME)) return -1;
++#endif /* ST_NOATIME */
++#ifdef ST_NODIRATIME
++	if (ins(d, "ST_NODIRATIME", (long)ST_NODIRATIME)) return -1;
++#endif /* ST_NODIRATIME */
++#ifdef ST_RELATIME
++	if (ins(d, "ST_RELATIME", (long)ST_RELATIME)) return -1;
++#endif /* ST_RELATIME */
++
+ #ifdef HAVE_SPAWNV
+ #if defined(PYOS_OS2) && defined(PYCC_GCC)
+     if (ins(d, "P_WAIT", (long)P_WAIT)) return -1;
+--- a/Python/dynload_shlib.c	1587330819.000000000
++++ b/Python/dynload_shlib.c	1673513313.088846605
+@@ -46,6 +46,16 @@
+     {"module.exe", "rb", C_EXTENSION},
+     {"MODULE.EXE", "rb", C_EXTENSION},
+ #else
++#ifdef Py_DEBUG
++    {"_d.so", "rb", C_EXTENSION},
++    {"module_d.so", "rb", C_EXTENSION},
++# ifdef MULTIARCH
++    {"." MULTIARCH "_d.so", "rb", C_EXTENSION},
++# endif
++#endif
++#ifdef MULTIARCH
++    {"." MULTIARCH ".so", "rb", C_EXTENSION},
++#endif
+     {".so", "rb", C_EXTENSION},
+     {"module.so", "rb", C_EXTENSION},
+ #endif
+--- a/Python/sysmodule.c	1587330819.000000000
++++ b/Python/sysmodule.c	1673513313.092031775
+@@ -1453,6 +1453,8 @@
+                         PyFloat_GetInfo());
+     SET_SYS_FROM_STRING("long_info",
+                         PyLong_GetInfo());
++    SET_SYS_FROM_STRING("_multiarch",
++                        PyString_FromString(MULTIARCH));
+ #ifdef Py_USING_UNICODE
+     SET_SYS_FROM_STRING("maxunicode",
+                         PyInt_FromLong(PyUnicode_GetMax()));
+@@ -1524,6 +1526,12 @@
+                         PyString_FromString("legacy"));
+ #endif
+ 
++#ifdef Py_DEBUG
++	PyDict_SetItemString(sysdict, "pydebug", Py_True);
++#else
++	PyDict_SetItemString(sysdict, "pydebug", Py_False);
++#endif
++
+ #undef SET_SYS_FROM_STRING
+     if (PyErr_Occurred())
+         return NULL;
+--- a/Tools/faqwiz/faqconf.py	1587330819.000000000
++++ b/Tools/faqwiz/faqconf.py	1673513050.118443389
+@@ -21,7 +21,7 @@
+ OWNEREMAIL = "nobody@anywhere.org"      # Email for feedback
+ HOMEURL = "http://www.python.org"       # Related home page
+ HOMENAME = "Python home"                # Name of related home page
+-RCSBINDIR = "/usr/local/bin/"           # Directory containing RCS commands
++RCSBINDIR = "/usr/bin/"                 # Directory containing RCS commands
+                                         # (must end in a slash)
+ 
+ # Parameters you can normally leave alone
+--- a/Tools/scripts/h2py.py	1587330819.000000000
++++ b/Tools/scripts/h2py.py	1673513555.170126714
+@@ -78,7 +78,10 @@
+             sys.stdout.write('# Generated by h2py from stdin\n')
+             process(sys.stdin, sys.stdout)
+         else:
+-            fp = open(filename, 'r')
++            fp = open_include(filename)
++            if not fp:
++                raise IOError("could not find %r on %r" %
++                              (filename, searchdirs))
+             outfile = os.path.basename(filename)
+             i = outfile.rfind('.')
+             if i > 0: outfile = outfile[:i]
+@@ -162,13 +165,7 @@
+                 outfp.write('from %s import *\n' % importable[filename])
+             elif not filedict.has_key(filename):
+                 filedict[filename] = None
+-                inclfp = None
+-                for dir in searchdirs:
+-                    try:
+-                        inclfp = open(dir + '/' + filename)
+-                        break
+-                    except IOError:
+-                        pass
++                inclfp = open_include(filename)
+                 if inclfp:
+                     outfp.write(
+                             '\n# Included from %s\n' % filename)
+@@ -177,5 +174,13 @@
+                     sys.stderr.write('Warning - could not find file %s\n' %
+                                      filename)
+ 
++def open_include(filename):
++    for dir in searchdirs:
++        try:
++            return open(dir + '/' + filename, 'r')
++        except IOError:
++            pass
++    return None
++
+ if __name__ == '__main__':
+     main()
+--- a/Tools/webchecker/webchecker.py	1587330819.000000000
++++ b/Tools/webchecker/webchecker.py	1673513050.119187384
+@@ -19,7 +19,8 @@
+ a directory listing is returned.  Now, you can point webchecker to the
+ document tree in the local file system of your HTTP daemon, and have
+ most of it checked.  In fact the default works this way if your local
+-web tree is located at /usr/local/etc/httpd/htdpcs (the default for
++web tree is located at /var/www, which is the default for Darwin.
++Other systems may use /usr/local/etc/httpd/htdocs (the default for
+ the NCSA HTTP daemon and probably others).
+ 
+ Report printed:
+--- a/configure.ac	1673512828.950948148
++++ b/configure.ac	1673513357.249248012
+@@ -511,8 +511,16 @@
+ fi
+ AC_MSG_RESULT($MACHDEP)
+ 
++MULTIARCH=$($CC --print-multiarch 2>/dev/null)
++AC_SUBST(MULTIARCH)
++
++
+ AC_SUBST(PLATDIR)
+-PLATDIR=plat-$MACHDEP
++if test -n "$MULTIARCH"; then
++  PLATDIR=plat-$MULTIARCH
++else
++  PLATDIR=plat-$MACHDEP
++fi
+ 
+ # And add extra plat-mac for darwin
+ AC_SUBST(EXTRAPLATDIR)
+@@ -647,14 +655,13 @@
+     fi
+ fi
+ 
+-# If the user set CFLAGS, use this instead of the automatically
+-# determined setting
+-preset_cflags="$CFLAGS"
+-AC_PROG_CC
+-if test ! -z "$preset_cflags"
+-then
+-	CFLAGS=$preset_cflags
++# Don't let AC_PROG_CC set the default CFLAGS. It normally sets -g -O2
++# when the compiler supports them, but we don't always want -O2, and
++# we set -g later.
++if test -z "$CFLAGS"; then
++        CFLAGS=
+ fi
++AC_PROG_CC
+ 
+ AC_SUBST(CXX)
+ AC_SUBST(MAINCC)
+@@ -778,7 +785,7 @@
+ AC_MSG_CHECKING(LIBRARY)
+ if test -z "$LIBRARY"
+ then
+-	LIBRARY='libpython$(VERSION).a'
++	LIBRARY='libpython$(VERSION)$(DEBUG_EXT).a'
+ fi
+ AC_MSG_RESULT($LIBRARY)
+ 
+@@ -908,6 +915,7 @@
+ 
+ # Other platforms follow
+ if test $enable_shared = "yes"; then
++  PY_ENABLE_SHARED=1
+   AC_DEFINE(Py_ENABLE_SHARED, 1, [Defined if Python is built as a shared library.])
+   case $ac_sys_system in
+     BeOS*)
+@@ -924,8 +932,8 @@
+ 	  INSTSONAME="$LDLIBRARY".$SOVERSION
+           ;;
+     Linux*|GNU*|NetBSD*|FreeBSD*|DragonFly*|OpenBSD*)
+-	  LDLIBRARY='libpython$(VERSION).so'
+-	  BLDLIBRARY='-L. -lpython$(VERSION)'
++	  LDLIBRARY='libpython$(VERSION)$(DEBUG_EXT).so'
++	  BLDLIBRARY='-L. -lpython$(VERSION)$(DEBUG_EXT)'
+ 	  RUNSHARED=LD_LIBRARY_PATH=`pwd`${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+ 	  case $ac_sys_system in
+ 	      FreeBSD*)
+@@ -968,6 +976,7 @@
+ 
+   esac
+ else # shared is disabled
++  PY_ENABLE_SHARED=0
+   case $ac_sys_system in
+     CYGWIN*)
+           BLDLIBRARY='$(LIBRARY)'
+@@ -975,6 +984,7 @@
+           ;;
+   esac
+ fi
++AC_SUBST(PY_ENABLE_SHARED)
+ 
+ if test "$cross_compiling" = yes; then
+ 	RUNSHARED=
+@@ -1051,6 +1061,12 @@
+ fi],
+ [AC_MSG_RESULT(no)])
+ 
++if test "$Py_DEBUG" = 'true'
++then
++	DEBUG_EXT=_d
++fi
++AC_SUBST(DEBUG_EXT)
++
+ # XXX Shouldn't the code above that fiddles with BASECFLAGS and OPT be
+ # merged with this chunk of code?
+ 
+@@ -2133,7 +2149,7 @@
+ 		esac
+ 		;;
+ 	CYGWIN*)   SO=.dll;;
+-	*)	   SO=.so;;
++	*)	   SO=$DEBUG_EXT.so;;
+ 	esac
+ else
+ 	# this might also be a termcap variable, see #610332
+@@ -4944,7 +4960,7 @@
+ AC_SUBST(ENSUREPIP)
+ 
+ # generate output files
+-AC_CONFIG_FILES(Makefile.pre Modules/Setup.config Misc/python.pc)
++AC_CONFIG_FILES(Makefile.pre Modules/Setup.config Misc/python.pc Misc/python-config.sh)
+ AC_CONFIG_FILES([Modules/ld_so_aix], [chmod +x Modules/ld_so_aix])
+ AC_OUTPUT
+ 
+--- a/setup.py	1673512024.383946498
++++ b/setup.py	1673513410.165283207
+@@ -912,7 +912,7 @@
+                 print ("warning: openssl 0x%08x is too old for _hashlib" %
+                        openssl_ver)
+                 missing.append('_hashlib')
+-        if COMPILED_WITH_PYDEBUG or not have_usable_openssl:
++        if True or COMPILED_WITH_PYDEBUG or not have_usable_openssl:
+             # The _sha module implements the SHA1 hash algorithm.
+             exts.append( Extension('_sha', ['shamodule.c']) )
+             # The _md5 module implements the RSA Data Security, Inc. MD5
+@@ -923,7 +923,7 @@
+                             depends = ['md5.h']) )
+ 
+         min_sha2_openssl_ver = 0x00908000
+-        if COMPILED_WITH_PYDEBUG or openssl_ver < min_sha2_openssl_ver:
++        if True or COMPILED_WITH_PYDEBUG or openssl_ver < min_sha2_openssl_ver:
+             # OpenSSL doesn't do these until 0.9.8 so we'll bring our own hash
+             exts.append( Extension('_sha256', ['sha256module.c']) )
+             exts.append( Extension('_sha512', ['sha512module.c']) )
+@@ -1128,7 +1128,13 @@
+             if db_setup_debug:
+                 print "bsddb using BerkeleyDB lib:", db_ver, dblib
+                 print "bsddb lib dir:", dblib_dir, " inc dir:", db_incdir
+-            db_incs = [db_incdir]
++            # only add db_incdir/dblib_dir if not in the standard paths
++            if db_incdir in inc_dirs:
++                db_incs = []
++            else:
++                db_incs = [db_incdir]
++            if dblib_dir[0] in lib_dirs:
++                dblib_dir = []
+             dblibs = [dblib]
+             # We add the runtime_library_dirs argument because the
+             # BerkeleyDB lib we're linking against often isn't in the
+@@ -1428,6 +1434,9 @@
+         else:
+             missing.append('_curses_panel')
+ 
++        #fpectl fpectlmodule.c ...
++        exts.append( Extension('fpectl', ['fpectlmodule.c']) )
++
+         # Andrew Kuchling's zlib module.  Note that some versions of zlib
+         # 1.1.3 have security problems.  See CERT Advisory CA-2002-07:
+         # http://www.cert.org/advisories/CA-2002-07.html
+@@ -2174,7 +2183,7 @@
+                           'ffi_wrapper_h'.format(ffi_h))
+         ffi_lib = None
+         if ffi_inc is not None:
+-            for lib_name in ('ffi_convenience', 'ffi_pic', 'ffi'):
++            for lib_name in ('ffi', 'ffi_convenience', 'ffi_pic', 'ffi'):
+                 if (self.compiler.find_library_file(lib_dirs, lib_name)):
+                     ffi_lib = lib_name
+                     break
+--- /dev/null
++++ b/Misc/python-config.sh.in
+@@ -0,0 +1,103 @@
++#!/bin/sh
++
++exit_with_usage ()
++{
++    echo "Usage: $0 --prefix|--exec-prefix|--includes|--libs|--cflags|--ldflags|--extension-suffix|--help|--configdir"
++    exit $1
++}
++
++if [ "$1" = "" ] ; then
++    exit_with_usage 1
++fi
++
++# Returns the actual prefix where this script was installed to.
++installed_prefix ()
++{
++    local RESULT=$(dirname $(cd $(dirname "$1") && pwd -P))
++    if [ $(which readlink) ] ; then
++        RESULT=$(readlink -f "$RESULT")
++    fi
++    echo $RESULT
++}
++
++prefix_build="@prefix@"
++prefix_real=$(installed_prefix "$0")
++
++# Use sed to fix paths from their built to locations to their installed to locations.
++prefix=$(echo "$prefix_build" | sed "s#$prefix_build#$prefix_real#")
++exec_prefix_build="@exec_prefix@"
++exec_prefix=$(echo "$exec_prefix_build" | sed "s#$exec_prefix_build#$prefix_real#")
++includedir=$(echo "@includedir@" | sed "s#$prefix_build#$prefix_real#")
++libdir=$(echo "@libdir@" | sed "s#$prefix_build#$prefix_real#")
++CFLAGS=$(echo "@CFLAGS@" | sed "s#$prefix_build#$prefix_real#")
++VERSION="@VERSION@"
++LIBM="@LIBM@"
++LIBC="@LIBC@"
++SYSLIBS="$LIBM $LIBC"
++ABIFLAGS="@DEBUG_EXT@"
++MULTIARCH="@MULTIARCH@"
++LIBS="-lpython${VERSION}${ABIFLAGS} @LIBS@ $SYSLIBS"
++BASECFLAGS="@BASECFLAGS@"
++LDLIBRARY="@LDLIBRARY@"
++LINKFORSHARED="@LINKFORSHARED@"
++OPT="@OPT@"
++PY_ENABLE_SHARED="@PY_ENABLE_SHARED@"
++LIBDEST=${prefix}/lib/python${VERSION}
++LIBPL=${LIBDEST}/config-${MULTIARCH}${ABIFLAGS}
++SO="${ABIFLAGS}.so"
++PYTHONFRAMEWORK="@PYTHONFRAMEWORK@"
++INCDIR="-I$includedir/python${VERSION}${ABIFLAGS}"
++PLATINCDIR="-I$includedir/$MULTIARCH/python${VERSION}${ABIFLAGS}"
++
++# Scan for --help or unknown argument.
++for ARG in $*
++do
++    case $ARG in
++        --help)
++            exit_with_usage 0
++        ;;
++        --prefix|--exec-prefix|--includes|--libs|--cflags|--ldflags|--extension-suffix|--configdir)
++        ;;
++        *)
++            exit_with_usage 1
++        ;;
++    esac
++done
++
++for ARG in $*
++do
++    case $ARG in
++        --prefix)
++            echo "$prefix"
++        ;;
++        --exec-prefix)
++            echo "$exec_prefix"
++        ;;
++        --includes)
++            echo "$INCDIR" "$PLATINCDIR"
++        ;;
++        --cflags)
++            echo "$INCDIR $PLATINCDIR $BASECFLAGS $CFLAGS $OPT"
++        ;;
++        --libs)
++            echo "$LIBS"
++        ;;
++        --ldflags)
++            LINKFORSHAREDUSED=
++            if [ -z "$PYTHONFRAMEWORK" ] ; then
++                LINKFORSHAREDUSED=$LINKFORSHARED
++            fi
++            LIBPLUSED=
++            if [ "$PY_ENABLE_SHARED" = "0" ] ; then
++                LIBPLUSED="-L$LIBPL"
++            fi
++            echo "$LIBPLUSED -L$libdir $LIBS $LINKFORSHAREDUSED"
++        ;;
++        --extension-suffix)
++            echo "$SO"
++        ;;
++        --configdir)
++            echo "$LIBPL"
++        ;;
++esac
++done
