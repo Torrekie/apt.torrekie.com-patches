@@ -1,0 +1,20 @@
+commit f1ddf810e4ee6693acb9fab1be1794586aa111a0
+Author: Ville Skyttä <ville.skytta@iki.fi>
+Date:   Sat Mar 20 10:41:04 2021 +0200
+
+    fix(find): don't look for -exec etc command if completing before it
+
+    Closes https://github.com/scop/bash-completion/issues/509
+
+diff --git a/completions/find b/completions/find
+index 64121eda..f18c7d7e 100644
+--- a/completions/find
++++ b/completions/find
+@@ -10,6 +10,7 @@ _find()
+     local i
+     for i in ${!words[*]}; do
+         if [[ ${words[i]} == -@(exec|ok)?(dir) ]]; then
++            ((cword > i)) || break
+             _command_offset $((i + 1))
+             return
+         fi

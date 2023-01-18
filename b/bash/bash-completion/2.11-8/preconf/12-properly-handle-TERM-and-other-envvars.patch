@@ -1,0 +1,139 @@
+From 79a504a44cefa119f1ef8c0db28e7fa674aeaf32 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Ville=20Skytt=C3=A4?= <ville.skytta@iki.fi>
+Date: Mon, 7 Dec 2020 01:12:10 +0200
+Subject: [PATCH] _variables: split out _variable_assignments, use in export
+
+Closes https://github.com/scop/bash-completion/issues/457
+---
+ bash_completion     | 77 +++++++++++++++++++++++++++++----------------
+ completions/export  |  5 +--
+ test/t/test_grep.py | 10 ++++++
+ 3 files changed, 61 insertions(+), 31 deletions(-)
+
+diff --git a/bash_completion b/bash_completion
+index 2114ea05086..1a097417d72 100644
+--- a/bash_completion
++++ b/bash_completion
+@@ -679,37 +679,60 @@ _variables()
+         COMPREPLY+=("$cur}")
+         __ltrim_colon_completions "$cur"
+         return 0
+-    else
+-        case ${prev-} in
+-            TZ)
+-                cur=/usr/share/zoneinfo/$cur
+-                _filedir
+-                for i in "${!COMPREPLY[@]}"; do
+-                    if [[ ${COMPREPLY[i]} == *.tab ]]; then
+-                        unset 'COMPREPLY[i]'
+-                        continue
+-                    elif [[ -d ${COMPREPLY[i]} ]]; then
+-                        COMPREPLY[i]+=/
+-                        compopt -o nospace
+-                    fi
+-                    COMPREPLY[i]=${COMPREPLY[i]#/usr/share/zoneinfo/}
+-                done
+-                return 0
+-                ;;
+-            TERM)
+-                _terms
+-                return 0
+-                ;;
+-            LANG | LC_*)
+-                COMPREPLY=($(compgen -W '$(locale -a 2>/dev/null)' \
+-                    -- "$cur"))
+-                return 0
+-                ;;
+-        esac
+     fi
+     return 1
+ }
+ 
++# Complete assignment of various known environment variables.
++# The word to be completed is expected to contain the entire
++# assignment, including the variable name and the "=". See related
++# parameters to _init_completion.
++#
++# @param  $1 variable assignment to be completed
++# @return True (0) if variable value completion was attempted,
++#         False (> 0) if not.
++_variable_assignments()
++{
++    local cur=${1-}
++
++    if [[ $cur =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
++        prev=${BASH_REMATCH[1]}
++        cur=${BASH_REMATCH[2]}
++    else
++        return 1
++    fi
++
++    case $prev in
++        TZ)
++            cur=/usr/share/zoneinfo/$cur
++            _filedir
++            for i in "${!COMPREPLY[@]}"; do
++                if [[ ${COMPREPLY[i]} == *.tab ]]; then
++                    unset 'COMPREPLY[i]'
++                    continue
++                elif [[ -d ${COMPREPLY[i]} ]]; then
++                    COMPREPLY[i]+=/
++                    compopt -o nospace
++                fi
++                COMPREPLY[i]=${COMPREPLY[i]#/usr/share/zoneinfo/}
++            done
++            ;;
++        TERM)
++            _terms
++            ;;
++        LANG | LC_*)
++            COMPREPLY=($(compgen -W '$(locale -a 2>/dev/null)' \
++                -- "$cur"))
++            ;;
++        *)
++            _variables && return 0
++            _filedir
++            ;;
++    esac
++
++    return 0
++}
++
+ # Initialize completion and deal with various general things: do file
+ # and variable completion where appropriate, and adjust prev, words,
+ # and cword as if no redirections exist so that completions do not
+diff --git a/completions/export b/completions/export
+index 8d823614aaf..9cf94277678 100644
+--- a/completions/export
++++ b/completions/export
+@@ -25,10 +25,7 @@ _export()
+     done
+ 
+     if [[ $cur == *=* ]]; then
+-        local ocur=$cur oprev=$prev
+-        prev=${cur%%=*} cur=${cur#*=}
+-        _variables && return
+-        cur=$ocur prev=$oprev
++        _variable_assignments $cur && return
+     fi
+ 
+     case $cur in
+diff --git a/test/t/test_grep.py b/test/t/test_grep.py
+index a249122eb12..10956b1f5e9 100644
+--- a/test/t/test_grep.py
++++ b/test/t/test_grep.py
+@@ -14,3 +14,13 @@ def test_2(self, completion):
+         Not really a grep option, but tests _longopt.
+         """
+         assert completion == "foo foo.d/".split()
++
++    @pytest.mark.complete("grep TZ ", cwd="shared/default")
++    def test_no_variable_assignment_confusion(self, completion):
++        """
++        Test TZ doesn't trigger known variable value assignment completion.
++
++        Not really a grep specific, but good to test somewhere.
++        Refs https://github.com/scop/bash-completion/issues/457
++        """
++        assert "foo" in completion
+

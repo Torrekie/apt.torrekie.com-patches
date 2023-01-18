@@ -1,0 +1,11 @@
+--- a/bash_completion	1673775129.327250017
++++ b/bash_completion	1673775151.863850682
+@@ -1440,7 +1440,7 @@
+         elif type -p greadlink >/dev/null; then
+             greadlink -f "$(type -P "$1")"
+         elif type -p readlink >/dev/null; then
+-            readlink -f "$(type -P "$1")"
++            readlink "$(type -P "$1")"
+         else
+             type -P "$1"
+         fi

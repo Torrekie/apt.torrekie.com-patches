@@ -1,0 +1,144 @@
+From: Gabriel F. T. Gomes <gabriel@inconstante.eti.br>
+Subject: Add completions for OpenRC rc-service
+Origin: vendor, https://bugs.debian.org/865548
+Bug-Debian: https://bugs.debian.org/865548
+Forwarded: yes, https://github.com/scop/bash-completion/pull/254
+
+This patch adds completions for the rc-service command from OpenRC, as
+suggested and provided by Mathieu Roy via a Debian bug [1], fixed and
+extended for more options by myself.
+
+When ran on a chroot with a freshly bootstrapped Debian system, the
+following completions produce the following output.
+
+For the options:
+
+  # rc-service [TAB][TAB]
+  -c              -h              --ifstopped     -q              savecache
+  -C              --help          kmod            --quiet         udev
+  cron            -i              -l              -r              -v
+  -d              -I              --list          rc              -V
+  -D              --ifcrashed     -N              rcS             --verbose
+  --debug         --ifexists      networking      --resolve       --version
+  --dry-run       --ifinactive    --nocolor       rsyslog         -Z
+  -e              --ifnotstarted  --nodeps        -s
+  --exists        --ifstarted     procps          -S
+  # rc-service [CURSOR]
+
+  # rc-service -h[TAB]
+  # rc-service -h [CURSOR]
+
+  # rc-service --v[TAB]
+  # rc-service --ver[CURSOR]
+
+  # rc-service --ver[TAB][TAB]
+  --verbose  --version
+  # rc-service --ver[CURSOR]
+
+  # rc-service --verbose --l[TAB]
+  # rc-service --verbose --list [CURSOR]
+
+For the services:
+
+  # rc-service --list[ENTER]
+  cron
+  hwclock.sh
+  kmod
+  networking
+  procps
+  rc
+  rcS
+  rsyslog
+  savecache
+  udev
+
+  # rc-service r[TAB][TAB]
+  rc       rcS      rsyslog
+  # rc-service r[CURSOR]
+
+  # rc-service --dry-run cr[TAB]
+  # rc-service --dry-run cron [CURSOR]
+
+  # rc-service --dry-run cron [TAB][TAB]
+  force-reload  reload        restart       start         status        stop
+  # rc-service --dry-run cron [CURSOR]
+
+  # rc-service --dry-run cron re[TAB][TAB]
+  reload   restart
+  # rc-service --dry-run cron re[CURSOR]
+
+  # rc-service --dry-run cron res[TAB]
+  # rc-service --dry-run cron restart [CURSOR]
+
+Adding `set show-all-if-ambiguous on' to .inputrc yields the same
+results, but without the need for the additional [TAB] as displayed
+above.
+
+[1] https://bugs.debian.org/865548
+---
+ completions/rc-service | 56 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 56 insertions(+)
+ create mode 100644 completions/rc-service
+
+diff --git a/completions/rc-service b/completions/rc-service
+new file mode 100644
+index 00000000..f90c86ae
+--- /dev/null
++++ b/completions/rc-service
+@@ -0,0 +1,56 @@
++# rc-service(8) completion                                 -*- shell-script -*-
++#
++# Adapted from update-rc.d
++#
++# Copyright (C) 2004 Servilio Afre Puentes <servilio@gmail.com>
++#               2018 Mathieu Roy <yeupou@gnu.org>
++#               2018 Gabriel F. T. Gomes <gabriel@inconstante.eti.br>
++
++_rc_service()
++{
++    local cur prev words cword
++    _init_completion || return
++
++    local sysvdir services options valid_options
++
++    sysvdir=/etc/init.d
++
++    services=( $( printf '%s ' $sysvdir/!(README*|*.sh|$_backup_glob) ) )
++    services=( ${services[@]#$sysvdir/} )
++    options=( -d --debug \
++              -D --nodeps \
++              -e --exists \
++              -c --ifcrashed \
++              -i --ifexists \
++              -I --ifinactive \
++              -N --ifnotstarted \
++              -s --ifstarted \
++              -S --ifstopped \
++              -l --list \
++              -r --resolve \
++              -Z --dry-run \
++              -h --help \
++              -C --nocolor \
++              -V --version \
++              -v --verbose \
++              -q --quiet \
++    )
++
++
++    if [[ ($cword -eq 1) || ("$prev" == -* ) ]]; then
++        COMPREPLY=( $( compgen -W '${options[@]} ${services[@]}' \
++                               -- "$cur" ) )
++    elif [[ -x $sysvdir/$prev ]]; then
++        COMPREPLY=( $( compgen -W '`sed -e "y/|/ /" \
++                                        -ne "s/^.*Usage:[ ]*[^ ]*[ ]*{*\([^}\"]*\).*$/\1/p" \
++                                        $sysvdir/$prev`' \
++                               -- "$cur" ) )
++    else
++        COMPREPLY=()
++    fi
++
++    return 0
++} &&
++complete -F _rc_service rc-service
++
++# ex: filetype=sh

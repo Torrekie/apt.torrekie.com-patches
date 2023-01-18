@@ -1,0 +1,51 @@
+commit a283b6963421adb3acf087c9816614a9c0c4c214
+Author: Ville Skyttä <ville.skytta@iki.fi>
+Date:   Tue Apr 13 17:02:12 2021 +0300
+
+    feat(perltidy): support long variants of arg completed options
+
+diff --git a/completions/perltidy b/completions/perltidy
+index 4404cf8..a6ee36b 100644
+--- a/completions/perltidy
++++ b/completions/perltidy
+@@ -16,25 +16,34 @@ _perltidy()
+     esac
+ 
+     case $cur in
+-        -pro=*)
++        -pro=* | --profile=*)
+             cur="${cur#*=}"
+             _filedir
+             return
+             ;;
+-        -ole=*)
++        -ole=* | --output-line-ending=*)
+             COMPREPLY=($(compgen -W 'dos win mac unix' -- "${cur#*=}"))
+             return
+             ;;
+-        -bt=* | -pt=* | -sbt=* | -bvt=* | -pvt=* | -sbvt=* | -bvtc=* | -pvtc=* | -sbvtc=* | \
+-            -cti=* | -kbl=* | -vt=*)
++        -bt=* | --brace-tightness=* | -pt=* | --paren-tightness=* | \
++            -sbt=* | --square-bracket-tightness=* | \
++            -bvt=* | --brace-vertical-tightness=* | \
++            -pvt=* | --paren-vertical-tightness=* | \
++            -sbvt=* | --square-bracket-vertical-tightness=* | \
++            -bvtc=* | --brace-vertical-tightness-closing=* | \
++            -pvtc=* | --paren-vertical-tightness-closing=* | \
++            -sbvtc=* | --square-bracket-vertical-tightness-closing=* | \
++            -cti=* | --closing-token-indentation=* | \
++            -kbl=* | --keep-old-blank-lines=* | \
++            -vt=* | --vertical-tightness=*)
+             COMPREPLY=($(compgen -W '0 1 2' -- "${cur#*=}"))
+             return
+             ;;
+-        -vtc=*)
++        -vtc=* | --vertical-tightness-closing=*)
+             COMPREPLY=($(compgen -W '0 1' -- "${cur#*=}"))
+             return
+             ;;
+-        -cab=*)
++        -cab=* | --comma-arrow-breakpoints=*)
+             COMPREPLY=($(compgen -W '0 1 2 3' -- "${cur#*=}"))
+             return
+             ;;

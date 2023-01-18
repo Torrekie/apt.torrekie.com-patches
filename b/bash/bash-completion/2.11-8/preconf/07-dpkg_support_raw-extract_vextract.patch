@@ -1,0 +1,59 @@
+From: Uwe Storbeck <uwe@ibr.ch>
+Subject: support more options for dpkg-deb
+Origin: vendor, https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=698977
+Bug-Debian: https://bugs.debian.org/698977
+Forwarded: no
+
+---
+ completions/dpkg |   44 +++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 41 insertions(+), 3 deletions(-)
+
+--- bash-completion.orig/completions/dpkg
++++ bash-completion/completions/dpkg
+@@ -81,7 +81,45 @@ _dpkg()
+     COMPREPLY=($(compgen -W '$(_parse_help "$1")' -- "$cur"))
+     [[ ${COMPREPLY-} == *= ]] && compopt -o nospace
+ } &&
+-    complete -F _dpkg dpkg dpkg-deb dpkg-query
++    complete -F _dpkg dpkg dpkg-query
++
++# Debian dpkg-deb(1) completion
++#
++_dpkg_deb()
++{
++    local cur prev words cword split
++    _init_completion -s || return
++
++    _expand || return 0
++
++    local i=$cword
++
++    # find the last option flag
++    if [[ $cur != -* ]]; then
++        while [[ $prev != -* && $i -ne 1 ]]; do
++            i=$((i-1))
++            prev=${words[i-1]}
++        done
++    fi
++
++    case $prev in
++        -c|-I|-W|-f|-e|-x|-X|-R|--contents|--info|--show|--field|--control| \
++        --extract|--vextract|--raw-extract|--fsys-tarfile)
++            _filedir '?(u|d)deb'
++            return 0
++            ;;
++        -b|--build)
++            _filedir -d
++            return 0
++            ;;
++    esac
++
++    $split && return
++
++    COMPREPLY=( $( compgen -W '$( _parse_help "$1" )' -- "$cur" ) )
++    [[ $COMPREPLY == *= ]] && compopt -o nospace
++} &&
++complete -F _dpkg_deb dpkg-deb
+ 
+ # Debian GNU dpkg-reconfigure(8) completion
+ #
