@@ -1,0 +1,186 @@
+diff -ur setuptools-66.0.0/pkg_resources/__init__.py ./pkg_resources/__init__.py
+--- setuptools-66.0.0/pkg_resources/__init__.py	1673837147.000000000
++++ ./pkg_resources/__init__.py	1674054533.109825314
+@@ -179,13 +179,7 @@
+     platform strings, this function should be extended accordingly.
+     """
+     plat = get_build_platform()
+-    m = macosVersionString.match(plat)
+-    if m is not None and sys.platform == "darwin":
+-        try:
+-            plat = 'macosx-%s-%s' % ('.'.join(_macos_vers()[:2]), m.group(3))
+-        except ValueError:
+-            # not macOS
+-            pass
++    # Torrekie: I dont care
+     return plat
+ 
+ 
+@@ -422,19 +416,11 @@
+     from sysconfig import get_platform
+ 
+     plat = get_platform()
+-    if sys.platform == "darwin" and not plat.startswith('macosx-'):
+-        try:
+-            version = _macos_vers()
+-            machine = os.uname()[4].replace(" ", "_")
+-            return "macosx-%d.%d-%s" % (
+-                int(version[0]),
+-                int(version[1]),
+-                _macos_arch(machine),
+-            )
+-        except ValueError:
+-            # if someone is running a non-Mac darwin system, this will fall
+-            # through to the default implementation
+-            pass
++
++    # Torrekie: yeah you were better than others that you knows there are
++    #           other Darwin platforms except macOS, but why you still
++    #           mark it as macosx since you already knows that?
++
+     return plat
+ 
+ 
+@@ -451,46 +437,9 @@
+ 
+     XXX Needs compatibility checks for Linux and other unixy OSes.
+     """
+-    if provided is None or required is None or provided == required:
+-        # easy case
+-        return True
+-
+-    # macOS special cases
+-    reqMac = macosVersionString.match(required)
+-    if reqMac:
+-        provMac = macosVersionString.match(provided)
+-
+-        # is this a Mac package?
+-        if not provMac:
+-            # this is backwards compatibility for packages built before
+-            # setuptools 0.6. All packages built after this point will
+-            # use the new macOS designation.
+-            provDarwin = darwinVersionString.match(provided)
+-            if provDarwin:
+-                dversion = int(provDarwin.group(1))
+-                macosversion = "%s.%s" % (reqMac.group(1), reqMac.group(2))
+-                if (
+-                    dversion == 7
+-                    and macosversion >= "10.3"
+-                    or dversion == 8
+-                    and macosversion >= "10.4"
+-                ):
+-                    return True
+-            # egg isn't macOS or legacy darwin
+-            return False
+-
+-        # are they the same major version and machine type?
+-        if provMac.group(1) != reqMac.group(1) or provMac.group(3) != reqMac.group(3):
+-            return False
+-
+-        # is the required OS major update >= the provided one?
+-        if int(provMac.group(2)) > int(reqMac.group(2)):
+-            return False
+-
+-        return True
++    # Torrekie: I dont want those checks, give me True
++    return True
+ 
+-    # XXX Linux and other platforms' special cases should go here
+-    return False
+ 
+ 
+ def run_script(dist_spec, script_name):
+diff -ur setuptools-66.0.0/setuptools/_distutils/spawn.py ./setuptools/_distutils/spawn.py
+--- setuptools-66.0.0/setuptools/_distutils/spawn.py	1673837147.000000000
++++ ./setuptools/_distutils/spawn.py	1674053541.972166673
+@@ -47,11 +47,13 @@
+     env = env if env is not None else dict(os.environ)
+ 
+     if sys.platform == 'darwin':
+-        from distutils.util import MACOSX_VERSION_VAR, get_macosx_target_ver
++        from distutils.util import get_darwin_target_ver
+ 
+-        macosx_target_ver = get_macosx_target_ver()
+-        if macosx_target_ver:
+-            env[MACOSX_VERSION_VAR] = macosx_target_ver
++        darwin_target_ver = get_darwin_target_ver()
++
++        # Torrekie: Don't change my environ you su**er
++        # if darwin_target_ver:
++        #     env[MACOSX_VERSION_VAR] = darwin_target_ver
+ 
+     try:
+         proc = subprocess.Popen(cmd, env=env)
+diff -ur setuptools-66.0.0/setuptools/_distutils/unixccompiler.py ./setuptools/_distutils/unixccompiler.py
+--- setuptools-66.0.0/setuptools/_distutils/unixccompiler.py	1673837147.000000000
++++ ./setuptools/_distutils/unixccompiler.py	1674053319.865267600
+@@ -297,10 +297,10 @@
+         # the configuration data stored in the Python installation, so
+         # we use this hack.
+         if sys.platform[:6] == "darwin":
+-            from distutils.util import get_macosx_target_ver, split_version
++            from distutils.util import get_darwin_target_ver, split_version
+ 
+-            macosx_target_ver = get_macosx_target_ver()
+-            if macosx_target_ver and split_version(macosx_target_ver) >= [10, 5]:
++            darwin_target_ver = get_darwin_target_ver()
++            if darwin_target_ver and split_version(darwin_target_ver) >= [10, 5]:
+                 return "-Wl,-rpath," + dir
+             else:  # no support for -rpath on earlier macOS versions
+                 return "-L" + dir
+diff -ur setuptools-66.0.0/setuptools/_distutils/util.py ./setuptools/_distutils/util.py
+--- setuptools-66.0.0/setuptools/_distutils/util.py	1673837147.000000000
++++ ./setuptools/_distutils/util.py	1674053241.793651135
+@@ -62,37 +62,39 @@
+ 
+ 
+ if sys.platform == 'darwin':
+-    _syscfg_macosx_ver = None  # cache the version pulled from sysconfig
++    _syscfg_darwin_ver = None  # cache the version pulled from sysconfig
+ MACOSX_VERSION_VAR = 'MACOSX_DEPLOYMENT_TARGET'
++IPHONEOS_VERSION_VAR = 'IPHONEOS_DEPLOYMENT_TARGET'
+ 
+ 
+-def _clear_cached_macosx_ver():
++def _clear_cached_darwin_ver():
+     """For testing only. Do not call."""
+-    global _syscfg_macosx_ver
+-    _syscfg_macosx_ver = None
++    global _syscfg_darwin_ver
++    _syscfg_darwin_ver = None
+ 
+ 
+-def get_macosx_target_ver_from_syscfg():
+-    """Get the version of macOS latched in the Python interpreter configuration.
++def get_darwin_target_ver_from_syscfg():
++    """Get the version of Darwin latched in the Python interpreter configuration.
+     Returns the version as a string or None if can't obtain one. Cached."""
+-    global _syscfg_macosx_ver
+-    if _syscfg_macosx_ver is None:
++    global _syscfg_darwin_ver
++    if _syscfg_darwin_ver is None:
+         from distutils import sysconfig
+ 
+-        ver = sysconfig.get_config_var(MACOSX_VERSION_VAR) or ''
++        ver = sysconfig.get_config_var(MACOSX_VERSION_VAR) or sysconfig.get_config_var(IPHONEOS_VERSION_VAR) or ''
+         if ver:
+-            _syscfg_macosx_ver = ver
+-    return _syscfg_macosx_ver
++            _syscfg_darwin_ver = ver
++    return _syscfg_darwin_ver
+ 
+ 
+-def get_macosx_target_ver():
++def get_darwin_target_ver():
+     """Return the version of macOS for which we are building.
+ 
+     The target version defaults to the version in sysconfig latched at time
+     the Python interpreter was built, unless overridden by an environment
+     variable. If neither source has a value, then None is returned"""
+ 
+-    syscfg_ver = get_macosx_target_ver_from_syscfg()
++    syscfg_ver = get_darwin_target_ver_from_syscfg()
++    # Torrekie: Do not detect IPHONEOS_DEPLOYMENT_TARGET to supress later logic
+     env_ver = os.environ.get(MACOSX_VERSION_VAR)
+ 
+     if env_ver:

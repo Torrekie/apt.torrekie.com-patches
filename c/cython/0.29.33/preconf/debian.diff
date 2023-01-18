@@ -1,0 +1,45 @@
+--- a/docs/_templates/layout.html	1672956786.737018000
++++ b/docs/_templates/layout.html	1674032105.159229978
+@@ -2,13 +2,7 @@
+ 
+ {% block footer %}
+ {{ super() }}
+-<script type="text/javascript">
+-var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
+-document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));
+-</script>
+-<script type="text/javascript">
+-try {
+-var pageTracker = _gat._getTracker("UA-6139100-3");
+-pageTracker._trackPageview();
+-} catch(err) {}</script>
++<!-- google analytics snippet as removed by Debian maintainers.
++     See http://lintian.debian.org/tags/privacy-breach-google-adsense.html
++     for more information -->
+ {% endblock %}
+--- a/docs/conf.py	1672956786.737018000
++++ b/docs/conf.py	1674032114.574204414
+@@ -15,7 +15,10 @@ import sys, os, os.path, re
+ import itertools
+ import datetime
+ 
+-YEAR = datetime.date.today().strftime('%Y')
++if os.environ['SOURCE_DATE_EPOCH']:
++    YEAR = datetime.datetime.utcfromtimestamp(float(os.environ.get('SOURCE_DATE_EPOCH'))).strftime('%Y')
++else:
++    YEAR = datetime.date.today().strftime('%Y')
+ 
+ # If extensions (or modules to document with autodoc) are in another directory,
+ # add these directories to sys.path here. If the directory is relative to the
+--- a/tests/bugs.txt	1672956786.749019000
++++ b/tests/bugs.txt	1674032118.977157308
+@@ -55,3 +55,9 @@ pyregr.test_urllibnet
+ 
+ # Inlined generators
+ inlined_generator_expressions
++
++# Skipped in Debian
++# https://github.com/cython/cython/issues/2308
++numpy_memoryview
++# https://github.com/cython/cython/issues/1982
++numpy_subarray

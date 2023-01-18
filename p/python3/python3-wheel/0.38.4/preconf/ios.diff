@@ -1,0 +1,181 @@
+--- a/src/wheel/bdist_wheel.py	1668026620.000000000
++++ b/src/wheel/bdist_wheel.py	1674050559.247491238
+@@ -47,7 +47,7 @@ def python_tag():
+ def get_platform(archive_root):
+     """Return our platform name 'win32', 'linux_x86_64'"""
+     result = sysconfig.get_platform()
+-    if result.startswith("macosx") and archive_root is not None:
++    if (result.startswith("macosx") or result.startswith("iphoneos")) and archive_root is not None:
+         result = calculate_macosx_platform_tag(archive_root, result)
+     elif result == "linux-x86_64" and sys.maxsize == 2147483647:
+         # pip pull request #3497
+@@ -268,7 +268,7 @@ class bdist_wheel(Command):
+             plat_name = "any"
+         else:
+             # macosx contains system version in platform name so need special handle
+-            if self.plat_name and not self.plat_name.startswith("macosx"):
++            if self.plat_name and not self.plat_name.startswith("macosx") and not self.plat_name.startswith("iphoneos"):
+                 plat_name = self.plat_name
+             else:
+                 # on macosx always limit the platform name to comply with any
+--- a/src/wheel/macosx_libfile.py	1668026620.000000000
++++ b/src/wheel/macosx_libfile.py	1674057162.449932103
+@@ -56,6 +56,8 @@ MH_MAGIC_64 = 0xFEEDFACF
+ MH_CIGAM_64 = 0xCFFAEDFE
+ 
+ LC_VERSION_MIN_MACOSX = 0x24
++LC_VERSION_MIN_IPHONEOS = 0x25
++
+ LC_BUILD_VERSION = 0x32
+ 
+ CPU_TYPE_ARM64 = 0x0100000C
+@@ -363,7 +365,7 @@ def read_mach_header(lib_file, seek=None
+         pos = lib_file.tell()
+         segment_base = read_data(SegmentBase, lib_file)
+         lib_file.seek(pos)
+-        if segment_base.cmd == LC_VERSION_MIN_MACOSX:
++        if (segment_base.cmd == LC_VERSION_MIN_MACOSX) or (segment_base.cmd == LC_VERSION_MIN_IPHONEOS):
+ 
+             class VersionMinCommand(base_class):
+                 _fields_ = version_min_command_fields
+@@ -388,13 +390,15 @@ def parse_version(version):
+     z = version & 0x000000FF
+     return x, y, z
+ 
+-
+ def calculate_macosx_platform_tag(archive_root, platform_tag):
+     """
+-    Calculate proper macosx platform tag basing on files which are included to wheel
++    Calculate proper dyld platform tag basing on files which are included to wheel
+ 
+     Example platform tag `macosx-10.14-x86_64`
+     """
++    MACOSX = False
++    IPHONEOS = False
++
+     prefix, base_version, suffix = platform_tag.split("-")
+     base_version = tuple(int(x) for x in base_version.split("."))
+     base_version = base_version[:2]
+@@ -402,17 +406,31 @@ def calculate_macosx_platform_tag(archiv
+         base_version = (base_version[0], 0)
+     assert len(base_version) == 2
+     if "MACOSX_DEPLOYMENT_TARGET" in os.environ:
++        MACOSX = True
+         deploy_target = tuple(
+             int(x) for x in os.environ["MACOSX_DEPLOYMENT_TARGET"].split(".")
+         )
+         deploy_target = deploy_target[:2]
+         if deploy_target[0] > 10:
+             deploy_target = (deploy_target[0], 0)
++    elif "IPHONEOS_DEPLOYMENT_TARGET" in os.environ:
++        IPHONEOS = True
++        deploy_target = tuple(
++            int(x) for x in os.environ["IPHONEOS_DEPLOYMENT_TARGET"].split(".")
++        )
++
++    # Torrekie: for later formatted strings
++    platform_deployment_string = "MACOSX_DEPLOYMENT_TARGET" if MACOSX else (
++        "IPHONEOS_DEPLOYMENT_TARGET" if IPHONEOS else "Deployment target"
++    )
++
++    if deploy_target:
+         if deploy_target < base_version:
+             sys.stderr.write(
+-                "[WARNING] MACOSX_DEPLOYMENT_TARGET is set to a lower value ({}) than "
++                "[WARNING] {} is set to a lower value ({}) than "
+                 "the version on which the Python interpreter was compiled ({}), and "
+                 "will be ignored.\n".format(
++                    platform_deployment_string,
+                     ".".join(str(x) for x in deploy_target),
+                     ".".join(str(x) for x in base_version),
+                 )
+@@ -447,18 +465,18 @@ def calculate_macosx_platform_tag(archiv
+         else:
+             files_form = "these files"
+         error_message = (
+-            "[WARNING] This wheel needs a higher macOS version than {}  "
+-            "To silence this warning, set MACOSX_DEPLOYMENT_TARGET to at least "
++            "[WARNING] This wheel needs a higher version than {}  "
++            "To silence this warning, set " + platform_deployment_string + " to at least "
+             + fin_base_version
+             + " or recreate "
+             + files_form
+             + " with lower "
+-            "MACOSX_DEPLOYMENT_TARGET:  \n" + problematic_files
++            + platform_deployment_string + ":  \n" + problematic_files
+         )
+ 
+-        if "MACOSX_DEPLOYMENT_TARGET" in os.environ:
++        if MACOSX or IPHONEOS:
+             error_message = error_message.format(
+-                "is set in MACOSX_DEPLOYMENT_TARGET variable."
++                "is set in environment variable."
+             )
+         else:
+             error_message = error_message.format(
+diff -urp wheel-0.38.4/src/wheel/vendored/packaging/tags.py ./src/wheel/vendored/packaging/tags.py
+--- a/src/wheel/vendored/packaging/tags.py	1668026620.000000000
++++ b/src/wheel/vendored/packaging/tags.py	1674051585.167248168
+@@ -337,9 +337,9 @@ def mac_platforms(
+     version: MacVersion | None = None, arch: str | None = None
+ ) -> Iterator[str]:
+     """
+-    Yields the platform tags for a macOS system.
++    Yields the platform tags for a Darwin system.
+ 
+-    The `version` parameter is a two-item tuple specifying the macOS version to
++    The `version` parameter is a two-item tuple specifying the Darwin version to
+     generate platform tags for. The `arch` parameter is the CPU architecture to
+     generate platform tags for. Both parameters default to the appropriate value
+     for the current system.
+@@ -361,8 +361,9 @@ def mac_platforms(
+             compat_version = 10, minor_version
+             binary_formats = _mac_binary_formats(compat_version, arch)
+             for binary_format in binary_formats:
+-                yield "macosx_{major}_{minor}_{binary_format}".format(
+-                    major=10, minor=minor_version, binary_format=binary_format
++                yield "{osname}_{major}_{minor}_{binary_format}".format(
++                    # Torrekie: Previously implemented macosx/iphoneos diverting in Python
++                    osname=sysconfig.get_platform().split('-')[0], major=10, minor=minor_version, binary_format=binary_format
+                 )
+ 
+     if version >= (11, 0):
+@@ -372,36 +373,8 @@ def mac_platforms(
+             compat_version = major_version, 0
+             binary_formats = _mac_binary_formats(compat_version, arch)
+             for binary_format in binary_formats:
+-                yield "macosx_{major}_{minor}_{binary_format}".format(
+-                    major=major_version, minor=0, binary_format=binary_format
+-                )
+-
+-    if version >= (11, 0):
+-        # Mac OS 11 on x86_64 is compatible with binaries from previous releases.
+-        # Arm64 support was introduced in 11.0, so no Arm binaries from previous
+-        # releases exist.
+-        #
+-        # However, the "universal2" binary format can have a
+-        # macOS version earlier than 11.0 when the x86_64 part of the binary supports
+-        # that version of macOS.
+-        if arch == "x86_64":
+-            for minor_version in range(16, 3, -1):
+-                compat_version = 10, minor_version
+-                binary_formats = _mac_binary_formats(compat_version, arch)
+-                for binary_format in binary_formats:
+-                    yield "macosx_{major}_{minor}_{binary_format}".format(
+-                        major=compat_version[0],
+-                        minor=compat_version[1],
+-                        binary_format=binary_format,
+-                    )
+-        else:
+-            for minor_version in range(16, 3, -1):
+-                compat_version = 10, minor_version
+-                binary_format = "universal2"
+-                yield "macosx_{major}_{minor}_{binary_format}".format(
+-                    major=compat_version[0],
+-                    minor=compat_version[1],
+-                    binary_format=binary_format,
++                yield "{osname}_{major}_{minor}_{binary_format}".format(
++                    osname=sysconfig.get_platform().split('-')[0], major=major_version, minor=0, binary_format=binary_format
+                 )
+ 
+ 
