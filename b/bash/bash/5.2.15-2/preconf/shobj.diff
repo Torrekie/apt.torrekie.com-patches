@@ -1,0 +1,13 @@
+--- support/shobj-conf.old	1638546886.000000000
++++ support/shobj-conf	1674115677.060499012
+@@ -166,7 +166,9 @@
+ 			#SHOBJ_CFLAGS=${SHOBJ_CFLAGS}' -arch i386 -arch x86_64'
+ 			;;
+ 		 esac
+-		 SHOBJ_LDFLAGS="-dynamiclib -dynamic -undefined dynamic_lookup ${SHOBJ_ARCHFLAGS}"
++		 # Torrekie: We have dynamic loaded bundles for Darwin, don't make them dynamiclibs
++		 # TODO: -bundle_loader /usr/bin/bash then we don't need dynamic_lookup anymore
++		 SHOBJ_LDFLAGS="-bundle -dynamic -undefined dynamic_lookup ${SHOBJ_ARCHFLAGS}"
+ 		 SHLIB_XLDFLAGS="-dynamiclib ${SHOBJ_ARCHFLAGS}"' -install_name $(libdir)/`echo $@ | sed "s:\\..*::"`.$(SHLIB_MAJOR).$(SHLIB_LIBSUFF) -current_version $(SHLIB_MAJOR)$(SHLIB_MINOR) -compatibility_version $(SHLIB_MAJOR)$(SHLIB_MINOR) -v'
+ 		;;
+ 	esac

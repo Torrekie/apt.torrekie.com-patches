@@ -1,5 +1,7 @@
 Patches for packages released by Torrekie's repo
 
+Cydia Repository (Upcomming): https://apt.torrekie.com/
+
 Some packaging policies(preferences):
 
  - Installation prefix is normally `/usr`, respectively
@@ -40,9 +42,24 @@ Some packaging policies(preferences):
        - Some libraries can be built as framework and that was how macOS does (e.g. liblldb -> LLDB.framework)
        - Language extensions may installed under a specific location following macOS scheme (e.g. `/System/Library/Tcl`)
        - Only back to Debian-like scheme when something works terrible (Python huh)
+
  - Packages containing launch daemons are set to onload by default
+
  - Try not use `dpkg-divert`
     - We need a better version divertion control, I would prefer how MacPorts and Xcode CLT does
        - MacPorts implemented a `port select` way to let user choose preferred packver
        - macOS created lots of "xcrun shim" executables under `/usr/bin`
           - `/usr/bin/cc` is a 'shim executable' that actually calling libxcselect/libxcrun to run the real `cc` with arguments, it searches across multiple Xcode/CLT paths installed. I would like to implement similar/same thing on iOS
+
+ - Always do static linking for essential packages (and somepackages)
+    - For some common-used packages, we would better not to do dynamic links for them, i.e. bash should link against static readline/gettext/ncurses
+       - As the reason we talked above, readline do `compatibility_version` updates, that would cause program linked with `8.0.1` cannot be ran with `8.0.0`, while readline and bash was suffering from upgrades together, bash may upgrades earlier, causing everything depending bash become broken (my previous users were gone cause of this)
+    - For somepackages (ehw...), we may better to do static links because of a high-frequency updating like GLib
+       - GLib and various projects include library version in their symbols to emulate `.symver` on Darwin, but this would break compatibility
+          - Remove versions from symbols if possible (Apple defines `-DU_DISABLE_RENAMING=1` to prevent ICU inserting symbol versions)
+          - For libraries that did not provide such option, try to make a **shim library** for them, or just static link to other rdeps
+
+ - Use system provided libraries if possible
+    - We don't always need alternative libraries for some packages, try to use the system one if capable
+    - We don't need to build another libxml2 for `xsltproc` as libxml2/libxslt presents in dsc
+

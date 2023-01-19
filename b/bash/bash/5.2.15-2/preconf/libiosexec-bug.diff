@@ -1,0 +1,24 @@
+--- execute_cmd.c	1674114296.786184780
++++ execute_cmd.c	1674114923.410354302
+@@ -5954,6 +5954,11 @@
+   int sample_len;
+ 
+   SETOSTYPE (0);		/* Some systems use for USG/POSIX semantics */
++#ifdef execve
++  /* Torrekie: Temp disable libiosexec-1.2.2's execve for now, bash's hacky workaround did work actrually
++   * Remove this patch after next libiosexec release */
++#undef execve
++#endif
+   execve (command, args, env);
+   i = errno;			/* error from execve() */
+   CHECK_TERMSIG;
+@@ -5961,7 +5966,8 @@
+ 
+   /* If we get to this point, then start checking out the file.
+      Maybe it is something we can hack ourselves. */
+-  if (i != ENOEXEC)
++  /* Torrekie: Bash's workaround works, but not detecting shebang execution errors after iOS 11 because returning EPERM */
++  if (i != ENOEXEC && i != EPERM)
+     {
+       /* make sure this is set correctly for file_error/report_error */
+       last_command_exit_value = (i == ENOENT) ?  EX_NOTFOUND : EX_NOEXEC; /* XXX Posix.2 says that exit status is 126 */
