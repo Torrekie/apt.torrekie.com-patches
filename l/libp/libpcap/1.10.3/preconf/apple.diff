@@ -1,0 +1,6064 @@
+--- a/Makefile.in	1673561087.000000000
++++ b/Makefile.in	1674379384.457679840
+@@ -93,6 +93,7 @@ MODULE_C_SRC =		@MODULE_C_SRC@
+ REMOTE_C_SRC =		@REMOTE_C_SRC@
+ COMMON_C_SRC =	pcap.c gencode.c optimize.c nametoaddr.c etherent.c \
+ 		fmtutils.c pcap-util.c \
++		pcapng.c pcap-darwin.c pcap-util-darwin.c \
+ 		savefile.c sf-pcap.c sf-pcapng.c pcap-common.c \
+ 		pcap-usb-linux-common.c bpf_image.c bpf_filter.c bpf_dump.c
+ GENERATED_C_SRC = scanner.c grammar.c
+--- a/pcap/dlt.h	1673561087.000000000
++++ b/pcap/dlt.h	1674291155.217841915
+@@ -601,6 +601,10 @@
+ #define DLT_USER14		161
+ #define DLT_USER15		162
+ 
++#ifdef __APPLE__
++#define DLT_PCAPNG      DLT_USER4
++#endif
++
+ /*
+  * For future use with 802.11 captures - defined by AbsoluteValue
+  * Systems to store a number of bits of link-layer information
+--- a/pcap/pcap.h	1673561087.000000000
++++ b/pcap/pcap.h	1674291155.219088825
+@@ -246,6 +246,9 @@ struct pcap_pkthdr {
+ 	struct timeval ts;	/* time stamp */
+ 	bpf_u_int32 caplen;	/* length of portion present */
+ 	bpf_u_int32 len;	/* length of this packet (off wire) */
++#ifdef __APPLE__
++	char comment[256];
++#endif
+ };
+ 
+ /*
+@@ -853,6 +856,12 @@ PCAP_API const char *pcap_lib_version(vo
+ 
+ #endif /* _WIN32/MSDOS/UN*X */
+ 
++#ifdef __APPLE__
++    /* Internal API. */
++    int	pcap_get_selectable_fd_list(pcap_t *, int **);
++    void	pcap_free_selectable_fd_list(int *);
++#endif /* __APPLE__ */
++
+ /*
+  * Remote capture definitions.
+  *
+@@ -1214,6 +1223,16 @@ PCAP_API int	pcap_remoteact_close(const
+ PCAP_AVAILABLE_1_9
+ PCAP_API void	pcap_remoteact_cleanup(void);
+ 
++#ifdef __APPLE__
++int pcap_apple_set_exthdr(pcap_t *p, int);
++// #ifdef PRIVATE
++/*
++ * To access DLT_PKPTAP, pcap_set_want_pktap() must be called before pcap_activate()
++ */
++int pcap_set_want_pktap(pcap_t *, int);
++// #endif /* PRIVATE */
++#endif /* __APPLE__ */
++
+ #ifdef __cplusplus
+ }
+ #endif
+--- a/pcap-bpf.c	1673561087.000000000
++++ b/pcap-bpf.c	1674291155.221158480
+@@ -133,6 +133,11 @@ static int bpf_load(char *errbuf);
+ #include "os-proto.h"
+ #endif
+ 
++#ifdef __APPLE__
++#include <sys/sysctl.h>
++#include "pcap-util.h"
++#endif /* __APPLE__ */
++
+ /*
+  * Later versions of NetBSD stick padding in front of FDDI frames
+  * to align the IP header on a 4-byte boundary.
+@@ -1054,9 +1059,21 @@ pcap_stats_bpf(pcap_t *p, struct pcap_st
+ 	ps->ps_recv = s.bs_recv;
+ 	ps->ps_drop = s.bs_drop;
+ 	ps->ps_ifdrop = 0;
++
+ 	return (0);
+ }
+ 
++static uint8_t
++get_common_prefix_size(uint8_t *a, uint8_t *b, uint8_t max)
++{
++    size_t i = 0;
++
++    while (a[i] == b[i]) {
++        i++;
++    }
++    return i;
++}
++
+ static int
+ pcap_read_bpf(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
+ {
+@@ -1107,9 +1124,20 @@ pcap_read_bpf(pcap_t *p, int cnt, pcap_h
+ 		} else
+ #endif
+ 		{
++#ifdef __APPLE__
++			cc = (int)read(p->fd, (u_char *)p->buffer + p->compress_head_space, p->bufsize);
++#else /* __APPLE__ */
+ 			cc = (int)read(p->fd, p->buffer, p->bufsize);
++#endif /* __APPLE__ */
+ 		}
+ 		if (cc < 0) {
++			if (errno == EINVAL) {
++				snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++					 "read EINVAL buffer %p %p bufsize %u compress_head_space %u",
++					 p->buffer, (u_char *)p->buffer + p->compress_head_space, p->bufsize, p->compress_head_space);
++				return (PCAP_ERROR);
++			}
++
+ 			/* Don't choke when we get ptraced */
+ 			switch (errno) {
+ 
+@@ -1182,6 +1210,9 @@ pcap_read_bpf(pcap_t *p, int cnt, pcap_h
+ 			return (PCAP_ERROR);
+ 		}
+ 		bp = (u_char *)p->buffer;
++#ifdef __APPLE__
++		bp += p->compress_head_space;
++#endif /* __APPLE__ */
+ 	} else
+ 		bp = p->bp;
+ 
+@@ -1301,6 +1332,77 @@ pcap_read_bpf(pcap_t *p, int cnt, pcap_h
+ 			pkthdr.caplen = caplen;
+ 			pkthdr.len = bhp->bh_datalen;
+ #endif
++
++#ifdef __APPLE__
++			pcap_read_bpf_header(p, bp, &pkthdr);
++
++			if (p->compression_mode == 1) {
++#ifdef HAS_BPF_HDR_COMP
++				uint8_t complen;
++
++				if (p->extendedhdr != 0) {
++					complen = ((struct bpf_hdr_ext *)bp)->bh_complen;
++				} else {
++					complen = ((struct bpf_comp_hdr *)bp)->bh_complen;
++				}
++
++				if (complen > 0 && p->compression_enabled) {
++					/*
++					 * Copy compression_mode data saved at beginning of buffer
++					 * Note this overwrites the bpf header
++					 */
++					if (p->prev_datap == NULL) {
++						snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++							 "prev_datap NULL bh_complen %u prev_caplen %u caplen %u \n", complen, p->prev_caplen, caplen);
++						return (PCAP_ERROR);
++					}
++					if (datap - complen < (u_char *)p->buffer - p->compress_head_space) {
++						snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++							 "datap underflow bh_complen %u prev_caplen %u caplen %u \n", complen, p->prev_caplen, caplen);
++						return (PCAP_ERROR);
++					}
++					if (complen > p->prev_caplen) {
++						snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++							 "bh_complen prev_caplen bh_complen %u prev_caplen %u caplen %u \n", complen, p->prev_caplen, caplen);
++						return (PCAP_ERROR);
++					}
++					/*
++					 * Move back the data pointer to make room for the common
++					 * portion from the previous packet
++					 */
++					datap -= complen;
++					memmove(datap, p->prev_datap, complen);
++					/*
++					 * Do not update caplen as it is used later to move bp
++					 */
++					pkthdr.caplen = caplen + complen;
++				}
++				p->prev_datap = datap;
++				p->prev_caplen = caplen + complen;
++			} else if (p->compression_mode == 2) {
++#endif /* HAS_BPF_HDR_COMP */
++				if (p->prev_datap != NULL) {
++					uint8_t common_prefix_size = get_common_prefix_size(datap, p->prev_datap, MIN(caplen, p->prev_caplen));
++					if (common_prefix_size > 0) {
++						p->count_common_prefix += 1;
++						p->total_common_prefix_size += common_prefix_size;
++						if (common_prefix_size > p->max_common_prefix_size) {
++							p->max_common_prefix_size = common_prefix_size;
++						}
++					} else {
++						p->count_no_common_prefix += 1;
++					}
++				} else {
++					p->total_read += 1;
++					p->count_no_common_prefix += 1;
++				}
++				p->total_size += caplen;
++				p->total_hdr_size += hdrlen;
++				p->prev_datap = datap;
++				p->prev_caplen = caplen;
++			}
++#endif /* __APPLE__ */
++
+ 			(*callback)(user, &pkthdr, datap);
+ 			bp += BPF_WORDALIGN(caplen + hdrlen);
+ 			if (++n >= cnt && !PACKET_COUNT_IS_UNLIMITED(cnt)) {
+@@ -1320,6 +1422,17 @@ pcap_read_bpf(pcap_t *p, int cnt, pcap_h
+ 			bp += BPF_WORDALIGN(caplen + hdrlen);
+ 		}
+ 	}
++#ifdef __APPLE__
++	/*
++	 * Save begining of previous data for expansion
++	 */
++	if (p->compress_head_space > 0 && p->compression_enabled) {
++		memcpy(p->saved_data_buffer, p->prev_datap,
++		       MIN(p->prev_caplen, p->compress_head_space));
++		p->prev_datap = p->saved_data_buffer;
++		p->prev_caplen = MIN(p->prev_caplen, p->compress_head_space);
++	}
++#endif /* __APPLE__ */
+ #undef bhp
+ 	p->cc = 0;
+ 	return (n);
+@@ -1825,6 +1938,77 @@ pcap_activate_bpf(pcap_t *p)
+ 	if (p->snapshot <= 0 || p->snapshot > MAXIMUM_SNAPLEN)
+ 		p->snapshot = MAXIMUM_SNAPLEN;
+ 
++#ifdef __APPLE__
++	if (ioctl(p->fd, BIOCSWANTPKTAP, (caddr_t)&p->wantpktap) < 0) {
++		snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "BIOCSWANTPKTAP: %s",
++				 pcap_strerror(errno));
++		status = PCAP_ERROR;
++		goto bad;
++	}
++
++	v = p->truncation;
++	if (v != 0 && ioctl(p->fd, BIOCSTRUNCATE, &v)) {
++		snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "BIOCSTRUNCATE: %s",
++			 pcap_strerror(errno));
++		status = PCAP_ERROR;
++		goto bad;
++	}
++
++	v = p->pktaphdrv2;
++	if (v != 0 && ioctl(p->fd, BIOCSPKTHDRV2, &v)) {
++		snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "BIOCSPKTHDRV2: %s",
++				 pcap_strerror(errno));
++		status = PCAP_ERROR;
++		goto bad;
++	}
++
++#ifdef HAS_BPF_HDR_COMP
++	v = p->compression_mode;
++	if (v == 1) {
++		if (ioctl(p->fd, BIOCSHDRCOMP, &v) != 0) {
++			snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "BIOCSHDRCOMP: %s",
++				 pcap_strerror(errno));
++			status = PCAP_ERROR;
++			goto bad;
++		}
++		/*
++		 * Verify that compression is not otherwise disabled
++		 */
++#ifdef BIOCGHDRCOMPON
++		if (ioctl(p->fd, BIOCGHDRCOMPON, &v) != 0) {
++			snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "BIOCGHDRCOMPON: %s",
++				 pcap_strerror(errno));
++			status = PCAP_ERROR;
++			goto bad;
++		}
++		if (v == 1) {
++			p->compression_enabled = 1;
++		}
++#else /* BIOCSHDRCOMPON */
++		size_t oldlen = sizeof(v);
++		if (sysctlbyname("debug.bpf_hdr_comp_enable", &v, &oldlen, NULL, 0) != 0) {
++			snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "debug.bpf_hdr_comp_enable: %s",
++				 pcap_strerror(errno));
++			status = PCAP_ERROR;
++			goto bad;
++		}
++		if (v == 1) {
++			p->compression_enabled = 1;
++		}
++#endif /* BIOCSHDRCOMPON */
++	}
++#endif /* HAS_BPF_HDR_COMP */
++	if (p->head_drop != 0) {
++		v = 1;
++		if (ioctl(p->fd, BIOCSHEADDROP, &v) != 0) {
++			snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "BIOCSHEADDROP: %s",
++				 pcap_strerror(errno));
++			status = PCAP_ERROR;
++			goto bad;
++		}
++	}
++#endif /* __APPLE__ */
++
+ #if defined(LIFNAMSIZ) && defined(ZONENAME_MAX) && defined(lifr_zoneid)
+ 	/*
+ 	 * Retrieve the zoneid of the zone we are currently executing in.
+@@ -2604,6 +2788,33 @@ pcap_activate_bpf(pcap_t *p)
+ 		goto bad;
+ 	}
+ 	p->bufsize = v;
++#ifdef __APPLE__
++	/*
++	 * Reserve some space for expansion before the header and the bpf header
++	 * We limit the size of the supported bpf header to BPF_HDR_COMP_LEN_MAX
++	 */
++#ifdef BPF_HDR_COMP_LEN_MAX
++	if (p->compression_mode != 0) {
++		p->compress_head_space = BPF_WORDALIGN(BPF_HDR_COMP_LEN_MAX);
++	}
++#endif /* BPF_HDR_COMP_LEN_MAX */
++	p->buffer = malloc(p->bufsize + p->compress_head_space);
++	if (p->buffer == NULL) {
++		pcap_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE,
++			errno, "malloc");
++		status = PCAP_ERROR;
++		goto bad;
++	}
++	if (p->compress_head_space > 0) {
++		p->saved_data_buffer = malloc(p->compress_head_space);
++		if (p->saved_data_buffer == NULL) {
++			pcap_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE,
++						  errno, "malloc");
++			status = PCAP_ERROR;
++			goto bad;
++		}
++	}
++#else /* __APPLE__ */
+ #ifdef HAVE_ZEROCOPY_BPF
+ 	if (!pb->zerocopy) {
+ #endif
+@@ -2622,6 +2833,7 @@ pcap_activate_bpf(pcap_t *p)
+ #ifdef HAVE_ZEROCOPY_BPF
+ 	}
+ #endif
++#endif /* __APPLE__ */
+ 
+ 	/*
+ 	 * If there's no filter program installed, there's
+@@ -3402,6 +3614,14 @@ pcap_setfilter_bpf(pcap_t *p, struct bpf
+ 		return (-1);
+ 	}
+ 
++#ifdef __APPLE__
++	if (p->compression_mode != 0) {
++		snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++		    "compression mode requires in kernel filtering");
++		return (-1);
++	}
++#endif /* __APPLE__*/
++
+ 	/*
+ 	 * install_bpf_program() validates the program.
+ 	 *
+--- a/pcap-common.c	1673561087.000000000
++++ b/pcap-common.c	1674291155.222293724
+@@ -297,6 +297,10 @@
+ #define LINKTYPE_USER14		161
+ #define LINKTYPE_USER15		162
+ 
++#ifdef __APPLE__
++#define LINKTYPE_PKTAP LINKTYPE_USER2
++#endif
++
+ /*
+  * For future use with 802.11 captures - defined by AbsoluteValue
+  * Systems to store a number of bits of link-layer information
+@@ -1017,7 +1021,11 @@
+  * different values for what goes in a file, as files can be moved
+  * between OSes!).
+  */
++#ifdef __APPLE__
++#ifndef LINKTYPE_PKTAP
+ #define LINKTYPE_PKTAP		258
++#endif /* LINKTYPE_PKTAP */
++#endif /* __APPLE__ */
+ 
+ /*
+  * Ethernet packets preceded by a header giving the last 6 octets
+--- a/pcap-common.h	1673561087.000000000
++++ b/pcap-common.h	1674291155.222932804
+@@ -21,6 +21,11 @@
+  * pcap-common.h - common code for pcap and pcapng files
+  */
+ 
++#ifdef __APPLE__
++#define	SWAPLONGLONG(y) \
++(((unsigned long long)SWAPLONG((unsigned long)(y)) << 32) | (SWAPLONG((unsigned long)((y) >> 32))))
++#endif /* __APPLE__ */
++
+ extern int dlt_to_linktype(int dlt);
+ 
+ extern int linktype_to_dlt(int linktype);
+--- a/pcap-int.h	1673561087.000000000
++++ b/pcap-int.h	1674378436.536157595
+@@ -40,6 +40,13 @@
+ 
+ #include <pcap/pcap.h>
+ 
++#ifdef __APPLE__
++#include <stdbool.h>
++#include <sys/time.h>
++#include "pcap/pcap-ng.h"
++#include "pcap-util-darwin.h"
++#endif /* __APPLE__ */
++
+ #ifdef MSDOS
+   #include <fcntl.h>
+   #include <io.h>
+@@ -146,7 +153,15 @@ extern int pcap_utf_8_mode;
+  *
+  * We don't enforce this in pcap_set_snaplen(), but we use it internally.
+  */
++
++#ifdef __APPLE__
++/*
++ * Note: Keep in sync with BPF_MAXBUFSIZE
++ */
++#define MAXIMUM_SNAPLEN		0x80000
++#else
+ #define MAXIMUM_SNAPLEN		262144
++#endif
+ 
+ /*
+  * Locale-independent macros for testing character types.
+@@ -210,7 +225,11 @@ typedef int	(*live_dump_ended_op_t)(pcap
+ typedef PAirpcapHandle	(*get_airpcap_handle_op_t)(pcap_t *);
+ #endif
+ typedef void	(*cleanup_op_t)(pcap_t *);
++#ifdef __APPLE__
++typedef int	(*cleanup_interface_op_t)(const char *, char *);
+ 
++#endif /* __APPLE__ */
++    
+ /*
+  * We put all the stuff used in the read code path at the beginning,
+  * to try to keep it together in the same cache line or lines.
+@@ -362,6 +381,51 @@ struct pcap {
+ 	get_airpcap_handle_op_t get_airpcap_handle_op;
+ #endif
+ 	cleanup_op_t cleanup_op;
++
++#ifdef __APPLE__
++	/*
++	 * Apple additions below
++	 */
++	int *selectable_fd_list;
++	int selectable_fd_count;
++
++	/*
++	 * The following needs to be 'int' as required by the corresponding BPF ioctls
++	 */
++	int extendedhdr;
++	int wantpktap;
++	int truncation;
++	int pktaphdrv2;
++	int head_drop;
++
++	int compression_mode;
++	int compression_enabled;
++	u_int compress_head_space;
++	void *saved_data_buffer;
++	void *prev_datap;
++	u_int prev_caplen;
++	uint64_t total_read;
++	uint64_t total_size;
++	uint64_t total_hdr_size;
++	uint64_t count_no_common_prefix;
++	uint64_t count_common_prefix;
++	uint64_t total_common_prefix_size;
++	uint8_t max_common_prefix_size;
++
++	cleanup_interface_op_t cleanup_interface_op;
++	char *pktap_ifname;
++	activate_op_t pktap_activate_op;
++	cleanup_op_t pktap_cleanup_op;
++
++	char *filter_str;
++	int shb_added;
++
++	struct pcap_if_info_set if_info_set;
++
++	struct pcap_proc_info_set proc_info_set;
++
++	cleanup_op_t cleanup_extra_op;
++#endif /* __APPLE__ */
+ };
+ 
+ /*
+@@ -455,6 +519,25 @@ struct oneshot_userdata {
+ 
+ int	pcap_offline_read(pcap_t *, int, pcap_handler, u_char *);
+ 
++#ifdef __APPLE__
++int pcap_ng_offline_read(pcap_t *, int , pcap_handler , u_char *);
++void pcap_ng_cleanup(pcap_t *);
++    
++struct pcap_dumper {
++	FILE *f;
++
++	int shb_added;
++	pcapng_block_t dump_block;
++
++	struct pcap_if_info_set dump_if_info_set;
++
++	struct pcap_proc_info_set dump_proc_info_set;
++};
++
++pcap_dumper_t *pcap_alloc_dumper(pcap_t *, FILE *);
++
++#endif /* __APPLE__ */
++
+ /*
+  * Does the packet count argument to a module's read routine say
+  * "supply packets until you run out of packets"?
+--- a/pcap.c	1673561087.000000000
++++ b/pcap.c	1674291155.226124828
+@@ -129,6 +129,13 @@ struct rtentry;		/* declarations in <net
+ #include "pcap-airpcap.h"
+ #endif
+ 
++#ifdef __APPLE__
++
++#ifdef HAVE_PKTAP_API
++#include "pcap-pktap.h"
++#endif
++#endif /* __APPLE__ */
++
+ #ifdef _WIN32
+ /*
+  * To quote the WSAStartup() documentation:
+@@ -606,8 +613,13 @@ pcap_next_ex(pcap_t *p, struct pcap_pkth
+ 		int status;
+ 
+ 		/* We are on an offline capture */
+-		status = pcap_offline_read(p, 1, p->oneshot_callback,
++#ifdef __APPLE__
++		status = p->read_op(p, 1, p->oneshot_callback,
+ 		    (u_char *)&s);
++#else
++        status = pcap_offline_read(p, 1, p->oneshot_callback,
++                                   (u_char *)&s);
++#endif /* __APPLE__ */
+ 
+ 		/*
+ 		 * Return codes for pcap_offline_read() are:
+@@ -654,6 +666,11 @@ static struct capture_source_type {
+ 	int (*findalldevs_op)(pcap_if_list_t *, char *);
+ 	pcap_t *(*create_op)(const char *, char *, int *);
+ } capture_source_types[] = {
++#ifdef __APPLE__
++#ifdef HAVE_PKTAP_API
++	{ NULL, pktap_create },
++#endif
++#endif /* __APPLE__ */
+ #ifdef HAVE_DAG_API
+ 	{ dag_findalldevs, dag_create },
+ #endif
+@@ -1617,8 +1634,15 @@ pcap_lookupnet(const char *device, bpf_u
+ 	(void)pcap_strlcpy(ifr.ifr_name, device, sizeof(ifr.ifr_name));
+ 	if (ioctl(fd, SIOCGIFADDR, (char *)&ifr) < 0) {
+ 		if (errno == EADDRNOTAVAIL) {
++#ifdef __APPLE__
++			/* No reason fail if there is no IPv4 address */
++			*netp = *maskp = 0;
++			(void)close(fd);
++			return 0;
++#else
+ 			(void)snprintf(errbuf, PCAP_ERRBUF_SIZE,
+ 			    "%s: no IPv4 address assigned", device);
++#endif /* __APPLE__ */
+ 		} else {
+ 			pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+ 			    errno, "SIOCGIFADDR: %s", device);
+@@ -2913,7 +2937,11 @@ pcap_loop(pcap_t *p, int cnt, pcap_handl
+ 			/*
+ 			 * 0 means EOF, so don't loop if we get 0.
+ 			 */
++#ifdef __APPLE__
++			n = p->read_op(p, cnt, callback, user);
++#else
+ 			n = pcap_offline_read(p, cnt, callback, user);
++#endif /* __APPLE__ */
+ 		} else {
+ 			/*
+ 			 * XXX keep reading until we get something
+@@ -3168,6 +3196,9 @@ struct dlt_choice {
+ #define DLT_CHOICE_SENTINEL { NULL, NULL, 0 }
+ 
+ static struct dlt_choice dlt_choices[] = {
++#ifdef __APPLE__
++	DLT_CHOICE(PCAPNG, "pcapng"),
++#endif /* __APPLE__ */
+ 	DLT_CHOICE(NULL, "BSD loopback"),
+ 	DLT_CHOICE(EN10MB, "Ethernet"),
+ 	DLT_CHOICE(IEEE802, "Token ring"),
+@@ -3512,6 +3543,36 @@ pcap_get_required_select_timeout(pcap_t
+ {
+ 	return (p->required_select_timeout);
+ }
++
++#ifdef __APPLE__
++int
++pcap_get_selectable_fd_list(pcap_t *p, int **fds)
++{
++	int *list;
++	unsigned int size;
++
++	if (p->selectable_fd_count == 0) {
++		size = sizeof(int);
++		list = &p->selectable_fd;
++	} else {
++		size = sizeof(int) * p->selectable_fd_count;
++		list = p->selectable_fd_list;
++	}
++	*fds = malloc(size);
++	if (*fds == NULL)
++		return (PCAP_ERROR);
++	memcpy(*fds, list, size);
++
++	return (size / sizeof(int));
++}
++
++void
++pcap_free_selectable_fd_list(int *fds)
++{
++	free(fds);
++}
++#endif /* __APPLE__ */
++
+ #endif
+ 
+ void
+--- a/portability.h	1673561087.000000000
++++ b/portability.h	1674291155.227036198
+@@ -112,6 +112,11 @@ extern int pcap_asprintf(char **, PCAP_F
+ extern int pcap_vasprintf(char **, const char *, va_list ap);
+ #endif
+ 
++#ifdef __APPLE__
++/* To silence compiler warning about redefintion of timeradd and timersub */
++#include <sys/time.h>
++#endif /* __APPLE__ */
++
+ /* For Solaris before 11. */
+ #ifndef timeradd
+ #define timeradd(a, b, result)                       \
+--- a/savefile.c	1673561087.000000000
++++ b/savefile.c	1674372814.516326559
+@@ -56,6 +56,12 @@
+ #include "pcap-common.h"
+ #include "charconv.h"
+ 
++#ifdef __APPLE__
++static pcap_t *
++pcap_fopen_offline_internal(FILE *fp, u_int precision,
++			    char *errbuf, int isng);
++#endif /* __APPLE__ */
++
+ #ifdef _WIN32
+ /*
+  * This isn't exported on Windows, because it would only work if both
+@@ -468,7 +474,11 @@ pcap_adjust_snapshot(bpf_u_int32 linktyp
+ 	return snaplen;
+ }
+ 
++#if __APPLE__
++static pcap_t *(*check_headers[])(const uint8_t *, FILE *, u_int, char *, int *, int) = {
++#else
+ static pcap_t *(*check_headers[])(const uint8_t *, FILE *, u_int, char *, int *) = {
++#endif /* __APPLE__ */
+ 	pcap_check_header,
+ 	pcap_ng_check_header
+ };
+@@ -482,6 +492,57 @@ pcap_t *
+ pcap_fopen_offline_with_tstamp_precision(FILE *fp, u_int precision,
+     char *errbuf)
+ {
++#ifdef __APPLE__
++	return pcap_fopen_offline_internal(fp, precision, errbuf, 0);
++}
++
++pcap_t *
++pcap_ng_open_offline(const char *fname, char *errbuf)
++{
++	FILE *fp;
++	pcap_t *p;
++
++    if (fname == NULL) {
++        snprintf(errbuf, PCAP_ERRBUF_SIZE,
++            "A null pointer was supplied as the file name");
++        return (NULL);
++    }
++
++    if (fname[0] == '-' && fname[1] == '\0')
++	{
++		fp = stdin;
++	}
++	else {
++		fp = fopen(fname, "r");
++		if (fp == NULL) {
++			snprintf(errbuf, PCAP_ERRBUF_SIZE, "%s: %s", fname,
++				 pcap_strerror(errno));
++			return (NULL);
++		}
++	}
++	p = pcap_fopen_offline_internal(fp,
++					  PCAP_TSTAMP_PRECISION_MICRO,
++					  errbuf, 1);
++	if (p == NULL) {
++		if (fp != stdin)
++			fclose(fp);
++	}
++	return (p);
++}
++
++pcap_t *
++pcap_ng_fopen_offline(FILE *fp, char *errbuf)
++{
++	return pcap_fopen_offline_internal(fp,
++					   PCAP_TSTAMP_PRECISION_MICRO,
++					   errbuf, 1);
++}
++
++static pcap_t *
++pcap_fopen_offline_internal(FILE *fp, u_int precision,
++    char *errbuf, int isng)
++{
++#endif /* __APPLE__ */
+ 	register pcap_t *p;
+ 	uint8_t magic[4];
+ 	size_t amt_read;
+@@ -497,10 +558,16 @@ pcap_fopen_offline_with_tstamp_precision
+ 	 */
+ 	if (fp == NULL) {
+ 		snprintf(errbuf, PCAP_ERRBUF_SIZE,
+-		    "Null FILE * pointer provided to savefile open routine");
++			 "Null FILE * pointer provided to savefile open routine");
+ 		return (NULL);
+ 	}
+ 
++#ifdef __APPLE__
++	off_t offset = ftello(fp);
++
++	p = NULL;
++#endif /* __APPLE__ */
++
+ 	/*
+ 	 * Read the first 4 bytes of the file; the network analyzer dump
+ 	 * file formats we support (pcap and pcapng), and several other
+@@ -518,14 +585,40 @@ pcap_fopen_offline_with_tstamp_precision
+ 			    "truncated dump file; tried to read %zu file header bytes, only got %zu",
+ 			    sizeof(magic), amt_read);
+ 		}
++#ifdef __APPLE__
++		goto bad;
++#else
+ 		return (NULL);
++#endif /* __APPLE__ */
++	}
++
++#ifdef __APPLE__
++	/*
++	 * When using the PCAP-NG extension APIs we are expected a PCAP-NG file
++	 */
++	if (isng) {
++		p = pcap_ng_check_header(magic, fp, precision, errbuf, &err, isng);
++		if (p != NULL) {
++				/*
++				 * Yup, that's a PCAP-NG file.
++				 */
++				goto found;
++		}
++        if (err == 0)
++            snprintf(errbuf, PCAP_ERRBUF_SIZE, "not a pcap-ng file");
++        goto bad;
+ 	}
++#endif /* __APPLE__ */
+ 
+ 	/*
+ 	 * Try all file types.
+ 	 */
+ 	for (i = 0; i < N_FILE_TYPES; i++) {
++#if __APPLE__
++		p = (*check_headers[i])(magic, fp, precision, errbuf, &err, isng);
++#else
+ 		p = (*check_headers[i])(magic, fp, precision, errbuf, &err);
++#endif /* __APPLE__ */
+ 		if (p != NULL) {
+ 			/* Yup, that's it. */
+ 			goto found;
+@@ -534,15 +627,23 @@ pcap_fopen_offline_with_tstamp_precision
+ 			/*
+ 			 * Error trying to read the header.
+ 			 */
+-			return (NULL);
++#ifdef __APPLE__
++            goto bad;
++#else
++            return (NULL);
++#endif /* __APPLE__ */
+ 		}
+ 	}
+ 
+ 	/*
+ 	 * Well, who knows what this mess is....
+ 	 */
+-	snprintf(errbuf, PCAP_ERRBUF_SIZE, "unknown file format");
+-	return (NULL);
++    snprintf(errbuf, PCAP_ERRBUF_SIZE, "unknown file format");
++#ifdef __APPLE__
++    goto bad;
++#else
++    return (NULL);
++#endif /* __APPLE__ */
+ 
+ found:
+ 	p->rfile = fp;
+@@ -562,7 +663,11 @@ found:
+ #endif
+ 
+ 	p->can_set_rfmon_op = sf_cant_set_rfmon;
++#ifdef __APPLE__
++	p->read_op = isng ? pcap_ng_offline_read : pcap_offline_read;
++#else
+ 	p->read_op = pcap_offline_read;
++#endif /* __APPLE__ */
+ 	p->inject_op = sf_inject;
+ 	p->setfilter_op = install_bpf_program;
+ 	p->setdirection_op = sf_setdirection;
+@@ -604,6 +709,14 @@ found:
+ 	p->activated = 1;
+ 
+ 	return (p);
++
++#ifdef __APPLE__
++ bad:
++	fseeko(fp, offset, SEEK_SET);
++	if (p != NULL)
++		free(p);
++	return (NULL);
++#endif /* __APPLE__ */
+ }
+ 
+ /*
+@@ -697,3 +810,66 @@ pcap_offline_read(pcap_t *p, int cnt, pc
+ 	/*XXX this breaks semantics tcpslice expects */
+ 	return (n);
+ }
++
++#ifdef __APPLE__
++/*
++ * Read blocks from a capture file, and call the callback for each
++ * packet.
++ * If cnt > 0, return after 'cnt' packets, otherwise continue until eof.
++ */
++int
++pcap_ng_offline_read(pcap_t *p, int cnt, pcap_handler callback, u_char *user)
++{
++	struct bpf_insn *fcode;
++	int status = 0;
++	int n = 0;
++	u_char *data;
++	
++	while (status == 0) {
++		struct pcap_pkthdr h;
++		
++		/*
++		 * Has "pcap_breakloop()" been called?
++		 * If so, return immediately - if we haven't read any
++		 * packets, clear the flag and return -2 to indicate
++		 * that we were told to break out of the loop, otherwise
++		 * leave the flag set, so that the *next* call will break
++		 * out of the loop without having read any packets, and
++		 * return the number of packets we've processed so far.
++		 */
++		if (p->break_loop) {
++			if (n == 0) {
++				p->break_loop = 0;
++				return (-2);
++			} else
++				return (n);
++		}
++		
++        /*
++         * The begining of the block is always returned into p->buffer 
++         * even when data is NULL (because it's not a data block)
++         */
++		status = p->next_packet_op(p, &h, &data);
++		if (status) {
++			if (status == 1)
++				return (0);
++			return (status);
++		}
++		
++		/*
++		 * TBD
++		 * Have one filter per link type 
++		 */
++		if ((fcode = p->fcode.bf_insns) == NULL ||
++			data == NULL || 
++		    bpf_filter(fcode, data, h.len, h.caplen)) {
++			(*callback)(user, &h, p->buffer);
++			if (++n >= cnt && cnt > 0)
++				break;
++		}
++	}
++	/*XXX this breaks semantics tcpslice expects */
++	return (n);
++}
++#endif /* __APPLE__ */
++
+--- a/sf-pcap.c	1673561087.000000000
++++ b/sf-pcap.c	1674372975.697091039
+@@ -56,6 +56,14 @@
+ 
+ #include "sf-pcap.h"
+ 
++#ifdef __APPLE__
++#include <limits.h>
++
++#ifndef MIN
++#define MIN(a,b) ((a)<(b)?(a):(b))
++#endif
++#endif /* __APPLE__ */
++
+ /*
+  * Setting O_BINARY on DOS/Windows is a bit tricky
+  */
+@@ -154,9 +162,15 @@ struct pcap_sf {
+  * Check whether this is a pcap savefile and, if it is, extract the
+  * relevant information from the header.
+  */
++#ifdef __APPLE__
++pcap_t *
++pcap_check_header(const uint8_t *magic, FILE *fp, u_int precision, char *errbuf,
++		  int *err, int isng)
++#else
+ pcap_t *
+ pcap_check_header(const uint8_t *magic, FILE *fp, u_int precision, char *errbuf,
+ 		  int *err)
++#endif /* __APPLE__ */
+ {
+ 	bpf_u_int32 magic_int;
+ 	struct pcap_file_header hdr;
+@@ -413,6 +427,14 @@ pcap_check_header(const uint8_t *magic,
+ 		*err = 1;
+ 		return (NULL);
+ 	}
++	p->prev_datap = NULL;
++	p->prev_caplen = 0;
++	p->total_read = 0;
++	p->total_size = 0;
++	p->count_no_common_prefix = 0;
++	p->count_common_prefix = 0;
++	p->total_common_prefix_size = 0;
++	p->max_common_prefix_size = 0;
+ 
+ 	p->cleanup_op = sf_cleanup;
+ 
+@@ -475,6 +497,9 @@ pcap_next_packet(pcap_t *p, struct pcap_
+ 			return (0);
+ 		}
+ 	}
++#ifdef __APPLE__
++	memset(hdr->comment, 0, sizeof(hdr->comment));
++#endif
+ 
+ 	if (p->swapped) {
+ 		/* these were written in opposite byte order */
+@@ -751,7 +776,11 @@ pcap_dump(u_char *user, const struct pca
+ 	register FILE *f;
+ 	struct pcap_sf_pkthdr sf_hdr;
+ 
++#ifdef __APPLE__
++	f = ((pcap_dumper_t *)user)->f;
++#else
+ 	f = (FILE *)user;
++#endif
+ 	/*
+ 	 * If the output file handle is in an error state, don't write
+ 	 * anything.
+@@ -791,9 +820,35 @@ pcap_dump(u_char *user, const struct pca
+ 	}
+ }
+ 
++#ifdef __APPLE__
++pcap_dumper_t *
++pcap_alloc_dumper(pcap_t *p, FILE *f)
++{
++	pcap_dumper_t *dumper;
++
++	dumper = calloc(1, sizeof(struct pcap_dumper));
++	if (dumper == NULL) {
++		snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++			 "cannot allocate struct pcap_dumper, error %s",
++			 strerror(errno));
++		return (NULL);
++	}
++	dumper->f = f;
++
++	return (dumper);
++}
++#endif /* __APPLE__ */
++
+ static pcap_dumper_t *
+ pcap_setup_dump(pcap_t *p, int linktype, FILE *f, const char *fname)
+ {
++#ifdef __APPLE__
++	pcap_dumper_t *dumper;
++
++	dumper = pcap_alloc_dumper(p, f);
++	if (dumper == NULL)
++		return (NULL);
++#endif /* __APPLE__ */
+ 
+ #if defined(_WIN32) || defined(MSDOS)
+ 	/*
+@@ -809,13 +864,21 @@ pcap_setup_dump(pcap_t *p, int linktype,
+ 		setvbuf(f, NULL, _IONBF, 0);
+ #endif
+ 	if (sf_write_header(p, f, linktype, p->snapshot) == -1) {
++#ifdef __APPLE__
++		free(dumper);
++#endif /* __APPLE__ */
+ 		pcap_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE,
+ 		    errno, "Can't write to %s", fname);
+ 		if (f != stdout)
+ 			(void)fclose(f);
+ 		return (NULL);
+ 	}
+-	return ((pcap_dumper_t *)f);
++#ifdef __APPLE__
++	return (dumper);
++#else
++    return ((pcap_dumper_t *)f);
++#endif /* __APPLE__ */
++
+ }
+ 
+ /*
+@@ -968,6 +1031,12 @@ pcap_dump_open_append(pcap_t *p, const c
+ 		return (NULL);
+ 	}
+ 
++#ifdef __APPLE__
++	pcap_dumper_t *dumper;
++
++	dumper = pcap_alloc_dumper(p, f);
++#endif /* __APPLE__ */
++    
+ 	/*
+ 	 * Try to read a pcap header.
+ 	 *
+@@ -983,7 +1052,11 @@ pcap_dump_open_append(pcap_t *p, const c
+ 	if (fseek(f, 0, SEEK_SET) == -1) {
+ 		pcap_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE,
+ 		    errno, "Can't seek to the beginning of %s", fname);
+-		(void)fclose(f);
++#ifdef __APPLE__
++        (void)pcap_dump_close(dumper);
++#else
++        (void)fclose(f);
++#endif /* __APPLE__ */
+ 		return (NULL);
+ 	}
+ 	amt_read = fread(&ph, 1, sizeof (ph), f);
+@@ -991,12 +1064,20 @@ pcap_dump_open_append(pcap_t *p, const c
+ 		if (ferror(f)) {
+ 			pcap_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE,
+ 			    errno, "%s", fname);
+-			(void)fclose(f);
++#ifdef __APPLE__
++            (void)pcap_dump_close(dumper);
++#else
++            (void)fclose(f);
++#endif /* __APPLE__ */
+ 			return (NULL);
+ 		} else if (feof(f) && amt_read > 0) {
+ 			snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 			    "%s: truncated pcap file header", fname);
+-			(void)fclose(f);
++#ifdef __APPLE__
++            (void)pcap_dump_close(dumper);
++#else
++            (void)fclose(f);
++#endif /* __APPLE__ */
+ 			return (NULL);
+ 		}
+ 	}
+@@ -1032,7 +1113,11 @@ pcap_dump_open_append(pcap_t *p, const c
+ 			if (p->opt.tstamp_precision != PCAP_TSTAMP_PRECISION_MICRO) {
+ 				snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 				    "%s: different time stamp precision, cannot append to file", fname);
+-				(void)fclose(f);
++#ifdef __APPLE__
++                (void)pcap_dump_close(dumper);
++#else
++                (void)fclose(f);
++#endif /* __APPLE__ */
+ 				return (NULL);
+ 			}
+ 			break;
+@@ -1041,7 +1126,11 @@ pcap_dump_open_append(pcap_t *p, const c
+ 			if (p->opt.tstamp_precision != PCAP_TSTAMP_PRECISION_NANO) {
+ 				snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 				    "%s: different time stamp precision, cannot append to file", fname);
+-				(void)fclose(f);
++#ifdef __APPLE__
++                (void)pcap_dump_close(dumper);
++#else
++                (void)fclose(f);
++#endif /* __APPLE__ */
+ 				return (NULL);
+ 			}
+ 			break;
+@@ -1050,7 +1139,11 @@ pcap_dump_open_append(pcap_t *p, const c
+ 		case SWAPLONG(NSEC_TCPDUMP_MAGIC):
+ 			snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 			    "%s: different byte order, cannot append to file", fname);
+-			(void)fclose(f);
++#ifdef __APPLE__
++                (void)pcap_dump_close(dumper);
++#else
++                (void)fclose(f);
++#endif /* __APPLE__ */
+ 			return (NULL);
+ 
+ 		case KUZNETZOV_TCPDUMP_MAGIC:
+@@ -1059,13 +1152,21 @@ pcap_dump_open_append(pcap_t *p, const c
+ 		case SWAPLONG(NAVTEL_TCPDUMP_MAGIC):
+ 			snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 			    "%s: not a pcap file to which we can append", fname);
+-			(void)fclose(f);
++#ifdef __APPLE__
++                (void)pcap_dump_close(dumper);
++#else
++                (void)fclose(f);
++#endif /* __APPLE__ */
+ 			return (NULL);
+ 
+ 		default:
+ 			snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 			    "%s: not a pcap file", fname);
+-			(void)fclose(f);
++#ifdef __APPLE__
++                (void)pcap_dump_close(dumper);
++#else
++                (void)fclose(f);
++#endif /* __APPLE__ */
+ 			return (NULL);
+ 		}
+ 
+@@ -1077,19 +1178,31 @@ pcap_dump_open_append(pcap_t *p, const c
+ 			snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 			    "%s: version is %u.%u, cannot append to file", fname,
+ 			    ph.version_major, ph.version_minor);
+-			(void)fclose(f);
++#ifdef __APPLE__
++            (void)pcap_dump_close(dumper);
++#else
++            (void)fclose(f);
++#endif /* __APPLE__ */
+ 			return (NULL);
+ 		}
+ 		if ((bpf_u_int32)linktype != ph.linktype) {
+ 			snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 			    "%s: different linktype, cannot append to file", fname);
+-			(void)fclose(f);
++#ifdef __APPLE__
++            (void)pcap_dump_close(dumper);
++#else
++            (void)fclose(f);
++#endif /* __APPLE__ */
+ 			return (NULL);
+ 		}
+ 		if ((bpf_u_int32)p->snapshot != ph.snaplen) {
+ 			snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 			    "%s: different snaplen, cannot append to file", fname);
+-			(void)fclose(f);
++#ifdef __APPLE__
++            (void)pcap_dump_close(dumper);
++#else
++            (void)fclose(f);
++#endif /* __APPLE__ */
+ 			return (NULL);
+ 		}
+ 	} else {
+@@ -1099,7 +1212,11 @@ pcap_dump_open_append(pcap_t *p, const c
+ 		if (sf_write_header(p, f, linktype, p->snapshot) == -1) {
+ 			pcap_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE,
+ 			    errno, "Can't write to %s", fname);
+-			(void)fclose(f);
++#ifdef __APPLE__
++            (void)pcap_dump_close(dumper);
++#else
++            (void)fclose(f);
++#endif /* __APPLE__ */
+ 			return (NULL);
+ 		}
+ 	}
+@@ -1114,22 +1231,38 @@ pcap_dump_open_append(pcap_t *p, const c
+ 	if (fseek(f, 0, SEEK_END) == -1) {
+ 		pcap_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE,
+ 		    errno, "Can't seek to the end of %s", fname);
+-		(void)fclose(f);
++#ifdef __APPLE__
++        (void)pcap_dump_close(dumper);
++#else
++        (void)fclose(f);
++#endif /* __APPLE__ */
+ 		return (NULL);
+ 	}
++#ifdef __APPLE__
++    return (dumper);
++#else
+ 	return ((pcap_dumper_t *)f);
++#endif /* __APPLE__ */
+ }
+ 
+ FILE *
+ pcap_dump_file(pcap_dumper_t *p)
+ {
+-	return ((FILE *)p);
++#ifdef __APPLE__
++    return (p->f);
++#else
++    return ((FILE *)p);
++#endif /* __APPLE__ */
+ }
+ 
+ long
+ pcap_dump_ftell(pcap_dumper_t *p)
+ {
++#ifdef __APPLE__
++	return (ftell(p->f));
++#else
+ 	return (ftell((FILE *)p));
++#endif /* __APPLE__ */
+ }
+ 
+ #if defined(HAVE_FSEEKO)
+@@ -1142,7 +1275,11 @@ pcap_dump_ftell(pcap_dumper_t *p)
+ int64_t
+ pcap_dump_ftell64(pcap_dumper_t *p)
+ {
++#ifdef __APPLE__
++	return (ftello(p->f));
++#else
+ 	return (ftello((FILE *)p));
++#endif /* __APPLE__ */
+ }
+ #elif defined(_MSC_VER)
+ /*
+@@ -1167,15 +1304,22 @@ pcap_dump_ftell64(pcap_dumper_t *p)
+ int64_t
+ pcap_dump_ftell64(pcap_dumper_t *p)
+ {
++#ifdef __APPLE__
++	return (ftell(p->f));
++#else
+ 	return (ftell((FILE *)p));
++#endif /* __APPLE__ */
+ }
+ #endif
+ 
+ int
+ pcap_dump_flush(pcap_dumper_t *p)
+ {
+-
++#ifdef __APPLE__
++	if (fflush(p->f) == EOF)
++#else
+ 	if (fflush((FILE *)p) == EOF)
++#endif
+ 		return (-1);
+ 	else
+ 		return (0);
+@@ -1184,6 +1328,25 @@ pcap_dump_flush(pcap_dumper_t *p)
+ void
+ pcap_dump_close(pcap_dumper_t *p)
+ {
++#ifdef __APPLE__
++	if (p == NULL)
++		return;
++
++	if (p->dump_block != NULL) {
++		pcap_ng_free_block(p->dump_block);
++		p->dump_block = NULL;
++	}
++	pcap_if_info_set_clear(&p->dump_if_info_set);
++	pcap_proc_info_set_clear(&p->dump_proc_info_set);
++
++#ifdef notyet
++	if (ferror(p->f))
++		return-an-error;
++	/* XXX should check return from fclose() too */
++#endif
++	(void)fclose(p->f);
++	free(p);
++#else /* __APPLE__ */
+ 
+ #ifdef notyet
+ 	if (ferror((FILE *)p))
+@@ -1191,4 +1354,7 @@ pcap_dump_close(pcap_dumper_t *p)
+ 	/* XXX should check return from fclose() too */
+ #endif
+ 	(void)fclose((FILE *)p);
++
++#endif /* __APPLE__ */
++
+ }
+--- a/sf-pcap.h	1673561087.000000000
++++ b/sf-pcap.h	1674291155.231309425
+@@ -31,7 +31,12 @@
+ #ifndef sf_pcap_h
+ #define	sf_pcap_h
+ 
++#ifdef __APPLE__
+ extern pcap_t *pcap_check_header(const uint8_t *magic, FILE *fp,
+-    u_int precision, char *errbuf, int *err);
++u_int precision, char *errbuf, int *err, int isng);
++#else
++extern pcap_t *pcap_check_header(const uint8_t *magic, FILE *fp,
++u_int precision, char *errbuf, int *err);
++#endif /* __APPLE__ */
+ 
+ #endif
+--- a/sf-pcapng.c	1673561087.000000000
++++ b/sf-pcapng.c	1674373557.321655716
+@@ -38,6 +38,16 @@
+ 
+ #include "pcap-common.h"
+ 
++#ifdef __APPLE__
++#include "pcap-util.h"
++#include <limits.h>
++#include <net/if.h>
++
++#ifndef MIN
++#define MIN(a,b) ((a)<(b)?(a):(b))
++#endif
++#endif /* __APPLE__ */
++
+ #ifdef HAVE_OS_PROTO_H
+ #include "os-proto.h"
+ #endif
+@@ -250,7 +260,16 @@ struct pcap_ng_sf {
+ 	 (max_snaplen) + 131072 + \
+ 	 sizeof (struct block_trailer))
+ 
++#ifdef __APPLE__
++static int pcap_ng_next_block(pcap_t *p, struct pcap_pkthdr *hdr,
++                              u_char **data);
++static int pcap_ng_next_internal(pcap_t *p, struct pcap_pkthdr *hdr,
++                                 u_char **data, int pktonly);
++void pcap_ng_cleanup(pcap_t *p);
++#else
+ static void pcap_ng_cleanup(pcap_t *p);
++#endif /* __APPLE__ */
++
+ static int pcap_ng_next_packet(pcap_t *p, struct pcap_pkthdr *hdr,
+     u_char **data);
+ 
+@@ -386,7 +405,11 @@ read_block(FILE *fp, pcap_t *p, struct b
+ 	return (1);
+ }
+ 
++#ifdef __APPLE__
++void *
++#else
+ static void *
++#endif /* __APPLE__ */
+ get_from_block_data(struct block_cursor *cursor, size_t chunk_size,
+     char *errbuf)
+ {
+@@ -766,9 +789,15 @@ add_interface(pcap_t *p, struct interfac
+  * Check whether this is a pcapng savefile and, if it is, extract the
+  * relevant information from the header.
+  */
++#ifdef __APPLE__
++pcap_t *
++pcap_ng_check_header(const uint8_t *magic, FILE *fp, u_int precision,
++    char *errbuf, int *err, int isng)
++#else
+ pcap_t *
+ pcap_ng_check_header(const uint8_t *magic, FILE *fp, u_int precision,
+     char *errbuf, int *err)
++#endif /* __APPLE__ */
+ {
+ 	bpf_u_int32 magic_int;
+ 	size_t amt_read;
+@@ -781,8 +810,12 @@ pcap_ng_check_header(const uint8_t *magi
+ 	struct pcap_ng_sf *ps;
+ 	int status;
+ 	struct block_cursor cursor;
++#ifdef __APPLE__
++	struct interface_description_block *idbp = NULL;
++	long file_offset = ftell(fp);
++#else
+ 	struct interface_description_block *idbp;
+-
++#endif /* __APPLE__ */
+ 	/*
+ 	 * Assume no read errors.
+ 	 */
+@@ -1035,7 +1068,6 @@ pcap_ng_check_header(const uint8_t *magi
+ 			 */
+ 			if (!add_interface(p, idbp, &cursor, errbuf))
+ 				goto fail;
+-
+ 			goto done;
+ 
+ 		case BT_EPB:
+@@ -1074,6 +1106,26 @@ done:
+ 	p->next_packet_op = pcap_ng_next_packet;
+ 	p->cleanup_op = pcap_ng_cleanup;
+ 
++#ifdef __APPLE__
++    /*
++     * Special using block based API
++     */
++    if (isng) {
++        p->next_packet_op = pcap_ng_next_block;
++        /*
++         * Rewind to begining of Section Header Block
++         */
++        if (file_offset < 4) {
++            snprintf(errbuf, PCAP_ERRBUF_SIZE, "bad file offset");
++            goto fail;
++        }
++        file_offset -= 4;
++        fseek(fp, file_offset, SEEK_SET);
++        
++        p->linktype = DLT_PCAPNG;
++    }
++#endif /* __APPLE__ */
++
+ 	return (p);
+ 
+ fail:
+@@ -1084,7 +1136,11 @@ fail:
+ 	return (NULL);
+ }
+ 
++#ifdef __APPLE__
++void
++#else
+ static void
++#endif /* __APPLE__ */
+ pcap_ng_cleanup(pcap_t *p)
+ {
+ 	struct pcap_ng_sf *ps = p->priv;
+@@ -1101,6 +1157,20 @@ pcap_ng_cleanup(pcap_t *p)
+ static int
+ pcap_ng_next_packet(pcap_t *p, struct pcap_pkthdr *hdr, u_char **data)
+ {
++#ifdef __APPLE__
++	return (pcap_ng_next_internal(p, hdr, data, 1));
++}
++		
++static int
++pcap_ng_next_block(pcap_t *p, struct pcap_pkthdr *hdr, u_char **data)
++{
++	return (pcap_ng_next_internal(p, hdr, data, 0));
++}
++
++static int
++pcap_ng_next_internal(pcap_t *p, struct pcap_pkthdr *hdr, u_char **data, int pktonly)
++{
++#endif /* __APPLE__ */
+ 	struct pcap_ng_sf *ps = p->priv;
+ 	struct block_cursor cursor;
+ 	int status;
+@@ -1113,6 +1183,21 @@ pcap_ng_next_packet(pcap_t *p, struct pc
+ 	FILE *fp = p->rfile;
+ 	uint64_t t, sec, frac;
+ 
++#ifdef __APPLE__
++    struct option_header *opthdr;
++    unsigned char packetpad;
++    
++    /*
++     * To silence Xcode static analyzer that doesn't know this depends on pcap_ng_check_header
++     * that initialized user_tsresol to non-zero value
++     */
++    if (ps->user_tsresol == 0) {
++        snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++                      "internal error, check_header did not set user_tsresol");
++        return (-1);
++    }
++#endif /* __APPLE__ */
++
+ 	/*
+ 	 * Look for an Enhanced Packet Block, a Simple Packet Block,
+ 	 * or a Packet Block.
+@@ -1249,6 +1334,11 @@ pcap_ng_next_packet(pcap_t *p, struct pc
+ 			 * XXX - just discard packets from those
+ 			 * interfaces?
+ 			 */
++#ifdef __APPLE__
++			if (!pktonly) {
++				goto skip_link_checks;
++			}
++#endif /* __APPLE__ */
+ 			if (p->linktype != idbp->linktype) {
+ 				snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 				    "an interface has a type %u different from the type of the first interface",
+@@ -1264,13 +1354,16 @@ pcap_ng_next_packet(pcap_t *p, struct pc
+ 			    pcap_adjust_snapshot(p->linktype, idbp->snaplen)) {
+ 				snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 				    "an interface has a snapshot length %u different from the snapshot length of the first interface",
+-				    idbp->snaplen);
++					      idbp->snaplen);
+ 				return (-1);
+ 			}
+ 
+ 			/*
+ 			 * Try to add this interface.
+ 			 */
++#ifdef __APPLE__
++skip_link_checks:
++#endif /* __APPLE__ */
+ 			if (!add_interface(p, idbp, &cursor, p->errbuf))
+ 				return (-1);
+ 			break;
+@@ -1356,6 +1449,11 @@ pcap_ng_next_packet(pcap_t *p, struct pc
+ 			 */
+ 			break;
+ 		}
++
++#ifdef __APPLE__
++		if (pktonly == 0)
++			return (0);
++#endif /* __APPLE__ */
+ 	}
+ 
+ found:
+@@ -1372,12 +1470,21 @@ found:
+ 		return (-1);
+ 	}
+ 
++#ifdef __APPLE__
++	if (hdr->caplen > (bpf_u_int32)ps->ifaces[interface_id].snaplen) {
++        snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++                 "invalid packet capture length %u, bigger than "
++                 "snaplen of %d", hdr->caplen, p->snapshot);
++		return (-1);
++	}
++#else /* __APPLE__ */
+ 	if (hdr->caplen > (bpf_u_int32)p->snapshot) {
+ 		snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
+ 		    "invalid packet capture length %u, bigger than "
+ 		    "snaplen of %d", hdr->caplen, p->snapshot);
+ 		return (-1);
+ 	}
++#endif /* __APPLE__ */
+ 
+ 	/*
+ 	 * Convert the time stamp to seconds and fractions of a second,
+@@ -1511,8 +1618,177 @@ found:
+ 	*data = get_from_block_data(&cursor, hdr->caplen, p->errbuf);
+ 	if (*data == NULL)
+ 		return (-1);
++#ifdef __APPLE__
++	/*
++	 * Skip padding.
++	 */
++	packetpad = 4 - (hdr->caplen % 4);
++	if (hdr->caplen % 4 != 0 &&
++	    get_from_block_data(&cursor, packetpad, p->errbuf) == NULL)
++		return (-1);
++
++	memset(hdr->comment, 0, sizeof(hdr->comment));
+ 
++	if ((opthdr = get_opthdr_from_block_data(p, &cursor, p->errbuf)) != NULL &&
++	    opthdr->option_code == OPT_COMMENT && opthdr->option_length > 0) {
++		char *optvalue;
++		optvalue = get_optvalue_from_block_data(&cursor, opthdr, p->errbuf);
++		if (optvalue == NULL)
++		return (-1);
++		memcpy(hdr->comment, optvalue, sizeof(hdr->comment));
++	}
++#endif /* __APPLE */
+ 	pcap_post_process(p->linktype, p->swapped, hdr, *data);
+ 
+ 	return (1);
+ }
++#ifdef __APPLE__
++
++static pcap_dumper_t *
++pcap_ng_setup_dump(pcap_t *pcap, int linktype, FILE *f, const char *fname)
++{
++	pcap_dumper_t *dumper;
++	struct pcap_if_info *if_info;
++	
++	dumper = pcap_alloc_dumper(pcap,f);
++	if (dumper == NULL)
++		return (NULL);
++	
++	if (pcap_ng_dump_shb(pcap, dumper) == 0)
++		return (0);
++	
++	/*
++	 * Add an interface info block for a new interface before filtering
++	 */
++	if_info = pcap_if_info_set_add(&dumper->dump_if_info_set, pcap->opt.device, -1,
++								   pcap->linktype, pcap->snapshot,
++								   pcap->filter_str, pcap->errbuf);
++	if (if_info == NULL) {
++		return (0);
++	}
++	/*
++	 * Dump the interface info block
++	 */
++	if_info = pcap_ng_dump_if_info(pcap, dumper, dumper->dump_block, if_info);
++	if (if_info == NULL) {
++		return (0);
++	}
++	
++	return (dumper);
++}
++
++pcap_dumper_t *
++pcap_ng_dump_open(pcap_t *p, const char *fname)
++{
++	FILE *f;
++	int linktype;
++	
++	/*
++	 * If this pcap_t hasn't been activated, it doesn't have a
++	 * link-layer type, so we can't use it.
++	 */
++	if (!p->activated) {
++		snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: not-yet-activated pcap_t passed to pcap_ng_dump_open",
++				 fname);
++		return (NULL);
++	}
++	
++	if (fname[0] == '-' && fname[1] == '\0') {
++		f = stdout;
++		fname = "standard output";
++	} else {
++		f = fopen(fname, "wb");
++		if (f == NULL) {
++			snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "%s: %s",
++					 fname, pcap_strerror(errno));
++			return (NULL);
++		}
++	}
++	
++	/*
++	 * Make sure a section header will be added and that
++	 * any information to a previous section gets cleared.
++	 */
++	pcap_ng_init_section_info(p);
++	
++	/*
++	 * When using the block based API, the section header and
++	 * interface description blocks are given by the caller
++	 */
++	if (p->linktype != DLT_PKTAP && p->linktype != DLT_PCAPNG) {
++		linktype = dlt_to_linktype(p->linktype);
++		if (linktype == -1) {
++			snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++					 "%s: link-layer type %d isn't supported in savefiles",
++					 fname, p->linktype);
++			if (f != stdout)
++				fclose(f);
++			return (NULL);
++		}
++		linktype |= p->linktype_ext;
++		
++		return (pcap_ng_setup_dump(p, linktype, f, fname));
++	} else {
++		return (pcap_alloc_dumper(p, f));
++	}
++}
++
++pcap_dumper_t *
++pcap_ng_dump_fopen(pcap_t *p, FILE *f)
++{
++	int linktype;
++	
++	linktype = dlt_to_linktype(p->linktype);
++	if (linktype == -1) {
++		snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++				 "stream: link-layer type %d isn't supported in savefiles",
++				 p->linktype);
++		return (NULL);
++	}
++	linktype |= p->linktype_ext;
++	
++	return (pcap_ng_setup_dump(p, linktype, f, "stream"));
++}
++
++void
++pcap_ng_dump(u_char *user, const struct pcap_pkthdr *h, const u_char *sp)
++{
++	pcap_dumper_t *dumper = (pcap_dumper_t *)user;
++	int retval;
++	struct pcapng_enhanced_packet_fields *epb;
++	uint64_t ts;
++	
++	retval = pcap_ng_block_reset(dumper->dump_block, PCAPNG_BT_EPB);
++	if (retval != 0) {
++		return;
++	}
++	
++	epb = pcap_ng_get_enhanced_packet_fields(dumper->dump_block);
++	epb->caplen = h->caplen;
++	epb->interface_id = 0;
++	epb->len = h->len;
++	/* Microsecond resolution */
++	ts = ((uint64_t)h->ts.tv_sec) * 1000000 + (uint64_t)h->ts.tv_usec;
++	epb->timestamp_high = ts >> 32;
++	epb->timestamp_low  = ts & 0xffffffff;
++	
++	pcap_ng_block_packet_set_data(dumper->dump_block, sp, epb->caplen);
++	
++	if (h->comment[0]) {
++		pcap_ng_block_add_option_with_string(dumper->dump_block, PCAPNG_OPT_COMMENT, &h->comment[0]);
++	}
++	(void) pcap_ng_dump_block(dumper, dumper->dump_block);
++}
++
++void
++pcap_ng_dump_close(pcap_dumper_t *p)
++{
++	/*
++	 * XXX we could add an interface statistics block at the end
++	 * of the file.
++	 */
++	return pcap_dump_close(p);
++}
++
++#endif /* __APPLE__ */
+--- a/sf-pcapng.h	1673561087.000000000
++++ b/sf-pcapng.h	1674291155.233808287
+@@ -26,7 +26,17 @@
+ #ifndef sf_pcapng_h
+ #define	sf_pcapng_h
+ 
++#ifdef __APPLE__
++extern pcap_t *pcap_ng_check_header(const uint8_t *magic, FILE *fp,
++    u_int precision, char *errbuf, int *err, int isng);
++
++struct block_cursor;
++void *
++get_from_block_data(struct block_cursor *cursor, size_t chunk_size,
++		    char *errbuf);
++#else
+ extern pcap_t *pcap_ng_check_header(const uint8_t *magic, FILE *fp,
+     u_int precision, char *errbuf, int *err);
++#endif /* __APPLE__ */
+ 
+ #endif
+--- /dev/null	1674459042.342781000
++++ b/pcap-darwin.c	1674379306.793542384
+@@ -0,0 +1,1564 @@
++/*
++ * Copyright (c) 2013-2018 Apple Inc. All rights reserved.
++ *
++ * @APPLE_LICENSE_HEADER_START@
++ *
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this
++ * file.
++ *
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ *
++ * @APPLE_LICENSE_HEADER_END@
++ */
++
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
++/*
++ * Make "pcap.h" not include "pcap/bpf.h"; we are going to include the
++ * native OS version, as we need "struct bpf_config" from it.
++ */
++#define PCAP_DONT_INCLUDE_PCAP_BPF_H
++
++#include <sys/types.h>
++#include <sys/errno.h>
++#include <sys/ioctl.h>
++#include <sys/kern_event.h>
++#include <sys/socket.h>
++#include <sys/sockio.h>
++#include <sys/utsname.h>
++#include <netinet/in.h>
++#include <net/if.h>
++#include <net/bpf.h>
++#include <net/pktap.h>
++#include <net/iptap.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <libproc.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <stddef.h>
++#include <assert.h>
++
++#include "pcap-int.h"
++#include "pcap-util.h"
++#include "pcap-pktap.h"
++
++#ifdef BPF_WAKE_PKT
++#ifndef BPF_PKTFLAGS_WAKE_PKT
++#define BPF_PKTFLAGS_WAKE_PKT BPF_WAKE_PKT
++#endif /* BPF_PKTFLAGS_WAKE_PKT */
++#endif /* BPF_WAKE_PKT */
++
++static int pcap_cleanup_pktap_interface_internal(const char *ifname, char *ebuf);
++
++/*
++ * We append the procname + PID to the description
++ */
++#define AUTO_CLONE_IF_DESCRIPTION "libpcap auto cloned device"
++#define AUTO_CLONE_IF_DESC_LEN (sizeof(AUTO_CLONE_IF_DESCRIPTION) -1)
++
++#define _CASSERT(x) _Static_assert(x, "compile-time assertion failed " #x)
++
++_CASSERT(offsetof(struct bpf_hdr_ext, bh_tstamp) == offsetof(struct bpf_hdr, bh_tstamp));
++_CASSERT(offsetof(struct bpf_hdr_ext, bh_caplen) == offsetof(struct bpf_hdr, bh_caplen));
++_CASSERT(offsetof(struct bpf_hdr_ext, bh_datalen) == offsetof(struct bpf_hdr, bh_datalen));
++_CASSERT(offsetof(struct bpf_hdr_ext, bh_hdrlen) == offsetof(struct bpf_hdr, bh_hdrlen));
++_CASSERT(MAXIMUM_SNAPLEN == BPF_MAXBUFSIZE);
++
++
++static int
++pcap_get_if_attach_count(const char *ifname, char *errbuf)
++{
++	int fd;
++	int n = 0;
++	char device[sizeof "/dev/bpf0000000000"];
++	struct ifreq ifr;
++	int count = -1;
++	
++	/*
++	 * Find an available device
++	 */
++	do {
++		(void)snprintf(device, sizeof(device), "/dev/bpf%d", n++);
++
++		fd = open(device, O_RDONLY);
++	} while (fd < 0 && errno == EBUSY);
++
++	if (fd >= 0) {
++        bzero(&ifr, sizeof(ifr));
++        
++        strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
++		if (ioctl(fd, BIOCGIFATTACHCOUNT, &ifr) == -1) {
++            snprintf(errbuf, PCAP_ERRBUF_SIZE, "ioctl BIOCGIFATTACHCOUNT %s failed - %s",
++					 ifname, strerror(errno));
++		} else {
++            count = ifr.ifr_intval;
++		}
++		close(fd);
++	}
++	return (count);
++}
++
++static int
++pcap_cleanup_pktap_interface_internal(const char *ifname, char *ebuf)
++{
++    int s = -1;
++	struct if_descreq if_descreq;
++    struct ifreq ifr;
++	int status = 0;
++
++	/*
++	 * Destroy the pktap instance we created
++	 */
++	if (ifname != NULL) {
++		s = socket(AF_INET, SOCK_DGRAM, 0);
++		if (s == -1) {
++			snprintf(ebuf, PCAP_ERRBUF_SIZE, "%s: socket failed - %s",
++					__func__, strerror(errno));
++			goto failed;
++		} else {
++            /*
++             * Verify it's been cloned by libpcap
++             */
++            bzero(&if_descreq, sizeof(struct if_descreq));
++            strlcpy(if_descreq.ifdr_name, ifname, sizeof(if_descreq.ifdr_name));
++            if (ioctl(s, SIOCGIFDESC, &if_descreq) < 0) {
++				snprintf(ebuf, PCAP_ERRBUF_SIZE, "%s: ioctl SIOCGIFDESC %s - %s",
++						 __func__, ifname, strerror(errno));
++				goto failed;
++            }
++			if (if_descreq.ifdr_len == 0) {
++                goto done;
++			}
++            if (strncmp((char *)if_descreq.ifdr_desc, AUTO_CLONE_IF_DESCRIPTION,
++						AUTO_CLONE_IF_DESC_LEN) != 0) {
++                goto done;
++			}
++            /*
++             * Verify the interface is not already attached to another BPF
++             * (and yes, there's a race with this kind of check)
++             */
++			if (pcap_get_if_attach_count(ifname, ebuf) != 1) {
++                goto done;
++			}
++            /*
++             * Now we assume it's ours 
++             */
++			bzero(&ifr, sizeof(struct ifreq));
++			strlcpy(ifr.ifr_name, ifname, sizeof (ifr.ifr_name));
++			if (ioctl(s, SIOCIFDESTROY, &ifr) < 0) {
++				snprintf(ebuf, PCAP_ERRBUF_SIZE, "%s: ioctl(SIOCIFDESTROY) fail - %s",
++						__func__, strerror(errno));
++				goto failed;
++			}
++		}
++	}
++done:
++	if (s != -1) {
++        close(s);
++	}
++	return (status);
++failed:
++	status = -1;
++	goto done;
++}
++
++void
++pcap_cleanup_pktap_interface(const char *ifname)
++{
++	char errbuf[PCAP_ERRBUF_SIZE];
++
++	if (pcap_cleanup_pktap_interface_internal(ifname, errbuf) != 0) {
++		fprintf(stderr, "%s\n", errbuf);
++	}
++}
++
++
++char *
++pcap_setup_pktap_interface(const char *device, char *ebuf)
++{
++	struct ifreq ifr;
++	int s = -1;
++	struct if_nameindex *ifnameindices = NULL, *ifnameindex;
++	int foundmatch = 0;
++	struct if_descreq if_descreq;
++	char *pktap_param = NULL;
++	int unit = -1;
++	const char *if_prefix = NULL;
++	char *ifname = NULL;
++	
++	ifname = calloc(1, PKTAP_IFXNAMESIZE);
++	if (ifname == NULL) {
++		snprintf(ebuf, PCAP_ERRBUF_SIZE, "malloc(): %s",
++				 pcap_strerror(errno));
++		goto fail;
++	}
++	
++	s = socket(AF_INET, SOCK_DGRAM, 0);
++	if (s == -1) {
++		snprintf(ebuf, PCAP_ERRBUF_SIZE, "socket(): %s",
++				 pcap_strerror(errno));
++		goto fail;
++	}
++	
++	/*
++	 * Use a pktap interface to tap on multiple physical interfaces
++	 */
++	if (strncmp(device, PKTAP_IFNAME, strlen(PKTAP_IFNAME)) == 0) {
++		size_t tocopy;
++		
++		if_prefix = PKTAP_IFNAME;
++		/*
++		 * The comma marks the optional paramaters
++		 */
++		pktap_param = strchr(device, ',');
++		
++		/*
++		 * Copy the interface name
++		 */
++		if (pktap_param != NULL)
++			tocopy = pktap_param - device;
++		else
++			tocopy = strlen(device);
++		if (tocopy + 1 > PKTAP_IFXNAMESIZE) {
++			snprintf(ebuf, PCAP_ERRBUF_SIZE, "device name too long: %s",
++					 pcap_strerror(errno));
++			goto fail;
++		}
++		bcopy(device, ifname, tocopy);
++		ifname[tocopy] = 0;
++		
++		/*
++		 * Create a device instance when no unit number is specified
++		 */
++		sscanf(ifname, PKTAP_IFNAME "%d", &unit);
++	} else if (strcmp(device, "all") == 0 || strcmp(device, "any") == 0) {
++		if_prefix = PKTAP_IFNAME;
++		pktap_param = "all";
++		unit = -1;
++	} else if (strncmp(device, IPTAP_IFNAME, strlen(IPTAP_IFNAME)) == 0) {
++		if_prefix = IPTAP_IFNAME;
++		
++		/*
++		 * Copy the interface name
++		 */
++		if (strlcpy(ifname, device, PKTAP_IFXNAMESIZE) >= PKTAP_IFXNAMESIZE) {
++			snprintf(ebuf, PCAP_ERRBUF_SIZE, "device name too long: %s",
++					 pcap_strerror(errno));
++			goto fail;
++		}
++		/*
++		 * Create a device instance when no unit number is specified
++		 */
++		sscanf(ifname, IPTAP_IFNAME "%d", &unit);
++	} else {
++		snprintf(ebuf, PCAP_ERRBUF_SIZE, "bad device name: %s",
++				 pcap_strerror(errno));
++		goto fail;
++	}
++	
++	if (unit == -1) {
++		int desclen;
++		
++		/*
++		 * Check if there is a pktap that was created by libpcap as it was
++		 * most likely leaked by a previous crash
++		 */
++		if ((ifnameindices = if_nameindex()) == NULL) {
++			snprintf(ebuf, PCAP_ERRBUF_SIZE, "if_nameindex: %s",
++					 pcap_strerror(errno));
++			goto fail;
++		}
++		for (ifnameindex = ifnameindices; ifnameindex->if_index != 0; ifnameindex++) {
++			if (strncmp(ifnameindex->if_name, if_prefix, strlen(if_prefix)) != 0)
++				continue;
++			
++			bzero(&if_descreq, sizeof(struct if_descreq));
++			strlcpy(if_descreq.ifdr_name, ifnameindex->if_name, sizeof(if_descreq.ifdr_name));
++			if (ioctl(s, SIOCGIFDESC, &if_descreq) < 0) {
++				snprintf(ebuf, PCAP_ERRBUF_SIZE, "ioctl(SIOCGIFDESC): %s",
++						 pcap_strerror(errno));
++				goto fail;
++			}
++			
++			if (if_descreq.ifdr_len == 0)
++				continue;
++			if (strncmp((const char *)if_descreq.ifdr_desc, AUTO_CLONE_IF_DESCRIPTION,
++				    AUTO_CLONE_IF_DESC_LEN) != 0)
++				continue;
++			/*
++			 * Verify the interface is not already attached to another BPF
++			 * (and yes, there's a race with this kind of check)
++			 */
++			if (pcap_get_if_attach_count(ifnameindex->if_name, ebuf) != 0) {
++				/*
++				 * Ignore the error
++				 */
++				ebuf[0] = 0;
++				continue;
++			}
++			/*
++			 * Keep the name of the matching interface around
++			 */
++			strlcpy(ifname, ifnameindex->if_name, PKTAP_IFXNAMESIZE);
++			
++			foundmatch = 1;
++		}
++		
++		if (foundmatch == 0) {
++			
++			/*
++			 * We're creating a new instance of a pktap that should be destroyed
++			 * before exiting
++			 *
++			 * Note: we may leak the interface when exiting abnormaly, by
++			 * crashing or by not calling pcap_close()
++			 */
++			memset(&ifr, 0, sizeof(ifr));
++			(void) strlcpy(ifr.ifr_name, if_prefix, sizeof(ifr.ifr_name));
++			if (ioctl(s, SIOCIFCREATE, &ifr) < 0) {
++				snprintf(ebuf, PCAP_ERRBUF_SIZE, "ioctl(SIOCIFCREATE): %s",
++						 pcap_strerror(errno));
++				goto fail;
++			}
++			snprintf(ifname, PKTAP_IFXNAMESIZE, "%s", ifr.ifr_name);
++		}
++		
++		/*
++		 * Mark the interface as being created by libpcap along with
++		 * the current process name + pid
++		 */
++		bzero(&if_descreq, sizeof(struct if_descreq));
++		strlcpy(if_descreq.ifdr_name, ifname, sizeof(if_descreq.ifdr_name));
++		
++		desclen = snprintf((char *)if_descreq.ifdr_desc, sizeof (if_descreq.ifdr_desc),
++			 "%s - %s.%d", AUTO_CLONE_IF_DESCRIPTION, getprogname(), getpid());
++		if (desclen < sizeof(if_descreq.ifdr_desc))
++			if_descreq.ifdr_len = desclen + 1;
++		else
++			if_descreq.ifdr_len = sizeof(if_descreq.ifdr_desc);
++		
++		if (ioctl(s, SIOCSIFDESC, &if_descreq) < 0) {
++			snprintf(ebuf, PCAP_ERRBUF_SIZE, "ioctl(SIOCSIFDESC): %s",
++					 pcap_strerror(errno));
++			goto fail;
++		}
++	}
++	
++	if (pktap_param != NULL) {
++		int num_filter_entries = 0;
++		struct pktap_filter pktap_if_filter[PKTAP_MAX_FILTERS];
++		
++		bzero(pktap_if_filter, sizeof(pktap_if_filter));
++		
++		/*
++		 * The comma separated parameters is a list of interfaces for
++		 * pktap to filter on
++		 */
++		while (*pktap_param != '\0') {
++			char *end_ptr;
++			struct pktap_filter entry;
++			size_t len;
++			
++			/* This makes sure the strings are zero terminated */
++			bzero(&entry, sizeof(struct pktap_filter));
++			
++			if (*pktap_param == ',') {
++				pktap_param++;
++				continue;
++			}
++			if (num_filter_entries >= PKTAP_MAX_FILTERS) {
++				snprintf(ebuf, PCAP_ERRBUF_SIZE,
++						 "Too many pktap parameters, max is %u", PKTAP_MAX_FILTERS);
++				goto fail;
++			}
++			
++			end_ptr = strchr(pktap_param, ',');
++			if (end_ptr == NULL)
++				len = strlen(pktap_param);
++			else
++				len = end_ptr - pktap_param;
++			
++			if (len > sizeof(entry.filter_param_if_name) - 1) {
++				snprintf(ebuf, PCAP_ERRBUF_SIZE,
++						 "Interface name too big for filter");
++				goto fail;
++			}
++			
++			if (strcmp(pktap_param, "all") == 0 || strcmp(pktap_param, "any") == 0) {
++				entry.filter_op = PKTAP_FILTER_OP_PASS;
++				entry.filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
++				entry.filter_param_if_type = 0;
++			} else {
++				entry.filter_op = PKTAP_FILTER_OP_PASS;
++				entry.filter_param = PKTAP_FILTER_PARAM_IF_NAME;
++				/*
++				 * filter_param_if_name is not a zero terminated string so
++				 * do not use strlcpy(3)
++				 */
++				strncpy(entry.filter_param_if_name, pktap_param,
++						MIN(sizeof(entry.filter_param_if_name), len));
++			}
++			pktap_if_filter[num_filter_entries] = entry;
++			num_filter_entries++;
++			pktap_param += len;
++		}
++		
++		if (num_filter_entries > 0) {
++			struct ifdrv ifdr;
++			
++			bzero(&ifdr, sizeof(struct ifdrv));
++			snprintf(ifdr.ifd_name, sizeof(ifdr.ifd_name), "%s", ifname);
++			ifdr.ifd_cmd = PKTP_CMD_FILTER_SET;
++			ifdr.ifd_len = sizeof(pktap_if_filter);
++			ifdr.ifd_data = &pktap_if_filter[0];
++			
++			if (ioctl(s, SIOCSDRVSPEC, &ifdr) == -1) {
++				snprintf(ebuf, PCAP_ERRBUF_SIZE, "ioctl(SIOCSDRVSPEC): %s",
++						 pcap_strerror(errno));
++				goto fail;
++			}
++		}
++	}
++cleanup:
++	if (ifnameindices != NULL)
++		if_freenameindex(ifnameindices);
++	if (s != -1)
++		close(s);
++	return (ifname);
++		
++fail:
++	if (ifname != NULL) {
++		free(ifname);
++		ifname = NULL;
++	}
++	goto cleanup;;
++}
++
++void
++pktap_cleanup(pcap_t *p)
++{
++	char errbuf[PCAP_ERRBUF_SIZE];
++
++	if (p->cleanup_interface_op != NULL)
++		p->cleanup_interface_op(p->opt.device, errbuf);
++
++	p->pktap_cleanup_op(p);
++}
++
++int
++pktap_activate(pcap_t *p)
++{
++	int status = 0;
++
++	free(p->opt.device);
++	p->opt.device = p->pktap_ifname;
++	p->pktap_ifname = NULL;
++
++	/*
++	 * Just like pcap_set_snaplen() turn invalid value into the max value
++	 * The snapshot must be adjusted before calling the actual callback
++	 */
++	if (p->snapshot < sizeof(struct pktap_header)) {
++		p->snapshot = MAXIMUM_SNAPLEN;
++	}
++
++	status = p->pktap_activate_op(p);
++	if (status != 0)
++		return (status);
++
++	p->pktap_cleanup_op = p->cleanup_op;
++	p->cleanup_op = pktap_cleanup;
++
++    return (status);
++}
++
++pcap_t *
++pktap_create(const char *device, char *ebuf, int *is_ours)
++{
++	pcap_t *p = NULL;
++	char *ifname = NULL;
++
++	/*
++	 * By default, when device is NULL, we use a pktap
++	 * to capture on physical interfaces (exclude loopback and
++	 * virtual and tunner interfaces).
++	 *
++	 * To capture on all interfaces, device can be either "any",
++	 * or "all" or even "pktap,all"
++	 */
++	if (device == NULL)
++		device = "pktap";
++	if (strncmp(device, PKTAP_IFNAME, strlen(PKTAP_IFNAME)) != 0 &&
++		strncmp(device, IPTAP_IFNAME, strlen(IPTAP_IFNAME)) != 0 &&
++		strcmp(device, "all") != 0 &&
++		strcmp(device, "any") != 0) {
++		*is_ours = 0;
++		return (NULL);
++	}
++	*is_ours = 1;
++
++	/*
++	 * Create a regular BPF network interface.
++	 */
++	p = pcap_create_interface(ebuf, 0);
++	if (p == NULL)
++		goto failed;
++
++	ifname = pcap_setup_pktap_interface(device, ebuf);
++	if (ifname == NULL)
++		goto failed;
++	p->pktap_ifname = ifname;
++	p->cleanup_interface_op = pcap_cleanup_pktap_interface_internal;
++
++	p->pktap_activate_op = p->activate_op;
++	p->activate_op = pktap_activate;
++
++
++	return (p);
++
++failed:
++	if (p != NULL)
++		pcap_close(p);
++	if (ifname != NULL)
++		pcap_cleanup_pktap_interface_internal(ifname, ebuf);
++
++	return (NULL);
++}
++
++/*
++ * Returns zero if the packet doesn't match, non-zero if it matches
++ */
++static int
++pcap_filter_pktap(pcap_t *pcap, pcap_dumper_t *dumper, struct pcap_if_info *if_info,
++				  const struct pcap_pkthdr *h, const u_char *sp)
++{
++	struct pktap_header *pktp_hdr;
++	const u_char *pkt_data;
++	int match = 0;
++	
++	pktp_hdr = (struct pktap_header *)sp;
++	
++	if (h->len < sizeof(struct pktap_header) ||
++		h->caplen < sizeof(struct pktap_header) ||
++		pktp_hdr->pth_length > h->caplen) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: Packet too short", __func__);
++		return (0);
++	}
++	
++	if (if_info == NULL) {
++		if_info = pcap_if_info_set_find_by_name(&dumper->dump_if_info_set, pktp_hdr->pth_ifname);
++		/*
++		 * New interface
++		 */
++		if (if_info == NULL) {
++			if_info = pcap_if_info_set_add(&dumper->dump_if_info_set, pktp_hdr->pth_ifname, -1,
++						       pktp_hdr->pth_dlt, pcap->snapshot,
++						       pcap->filter_str, pcap->errbuf);
++			if (if_info == NULL) {
++				return (0);
++			}
++		}
++	}
++	
++	if (if_info->if_filter_program.bf_insns == NULL)
++		match = 1;
++	else {
++		/*
++		 * The actual data packet is past the packet tap header
++		 */
++		struct pcap_pkthdr tmp_hdr;
++        
++		bcopy(h, &tmp_hdr, sizeof(struct pcap_pkthdr));
++        
++		tmp_hdr.caplen -= pktp_hdr->pth_length;
++		tmp_hdr.len -= pktp_hdr->pth_length;
++		
++		pkt_data = sp + pktp_hdr->pth_length;
++        
++		match = pcap_offline_filter(&if_info->if_filter_program, &tmp_hdr, pkt_data);
++		
++	}
++	
++	return (match);
++}
++
++/*
++ * Add a section header block when needed
++ */
++int
++pcap_ng_dump_shb_comment(pcap_t *pcap, pcap_dumper_t *dumper, const char *comment)
++{
++	pcapng_block_t block = NULL;
++	int retval;
++	static struct utsname utsname;
++	static struct proc_bsdshortinfo bsdinfo;
++	static int info_done = 0;
++
++	if (info_done == 0) {
++		if (uname(&utsname) == -1) {
++			snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: uname() failed", __func__);
++			return (0);
++		}
++		if (proc_pidinfo(getpid(), PROC_PIDT_SHORTBSDINFO, 1, &bsdinfo, sizeof(bsdinfo)) < 0) {
++			snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: proc_pidinfo(PROC_PIDT_SHORTBSDINFO) failed", __func__);
++			return (0);
++		}
++		info_done = 1;
++	}
++	
++	if (dumper->dump_block == NULL) {
++		/*
++		 * The snaplen represent the maximum length of the data so
++		 * 4 KBytes should be more than enough to fit the block header, fields,
++		 * options and trailer.
++		 */
++		dumper->dump_block = pcap_ng_block_alloc(pcap->snapshot + 4096);
++		if (dumper->dump_block == NULL) {
++			snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: pcap_ng_block_alloc() failed ", __func__);
++			return (0);
++		}
++	}
++	block = dumper->dump_block;
++
++	if (pcap->shb_added == 0 || dumper->shb_added == 0) {
++		char buf[256];
++		
++		retval = pcap_ng_block_reset(block, PCAPNG_BT_SHB);
++		if (retval != 0) {
++			snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: pcap_ng_block_reset(PCAPNG_BT_SHB) failed", __func__);
++			return (0);
++		}
++		
++		retval = pcap_ng_block_add_option_with_string(block, PCAPNG_SHB_HARDWARE,
++							      utsname.machine);
++		if(retval != 0) {
++			snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: pcap_ng_block_add_option_with_string(PCAPNG_SHB_HARDWARE) failed", __func__);
++			return (0);
++		}
++		
++		snprintf(buf, sizeof(buf), "%s", utsname.version);
++		retval = pcap_ng_block_add_option_with_string(block, PCAPNG_SHB_OS, buf);
++		if(retval != 0) {
++			snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: pcap_ng_block_add_option_with_string(PCAPNG_SHB_OS) failed", __func__);
++			return (0);
++		}
++		
++		snprintf(buf, sizeof(buf), "%s (%s)", bsdinfo.pbsi_comm, pcap_lib_version());
++		retval = pcap_ng_block_add_option_with_string(block, PCAPNG_SHB_USERAPPL, buf);
++		if(retval != 0) {
++			snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: pcap_ng_block_add_option_with_string(PCAPNG_SHB_USERAPPL) failed", __func__);
++			return (0);
++		}
++
++		if (comment != NULL && *comment != 0) {
++			retval = pcap_ng_block_add_option_with_string(block, PCAPNG_OPT_COMMENT, comment);
++			if(retval != 0) {
++				snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++					 "%s: pcap_ng_block_add_option_with_string(PCAPNG_OPT_COMMENT) failed", __func__);
++				return (0);
++			}
++		}
++
++		(void) pcap_ng_dump_block(dumper, block);
++		
++		pcap->shb_added = 1;
++		dumper->shb_added = 1;
++	}
++	return (1);
++}
++
++int
++pcap_ng_dump_shb(pcap_t *pcap, pcap_dumper_t *dumper)
++{
++	return pcap_ng_dump_shb_comment(pcap, dumper, NULL);
++}
++
++struct pcap_proc_info *
++pcap_ng_dump_proc_info(pcap_t *pcap, pcap_dumper_t *dumper, pcapng_block_t block,
++		       struct pcap_proc_info *proc_info)
++{
++	int retval;
++	struct pcapng_process_information_fields *pib;
++
++	/*
++	 * We're done when the process info block has already been saved
++	 */
++	if (proc_info->proc_block_dumped != 0)
++		return (proc_info);
++	
++	retval = pcap_ng_block_reset(block, PCAPNG_BT_PIB);
++	if (retval != 0) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: pcap_ng_block_reset(PCAPNG_BT_PIB) failed", __func__);
++		return (NULL);
++	}
++	pib = pcap_ng_get_process_information_fields(block);
++	pib->process_id = proc_info->proc_pid;
++	
++	if (pcap_ng_block_add_option_with_string(block, PCAPNG_PIB_NAME, proc_info->proc_name) != 0) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: pcap_ng_block_add_option_with_string(PCAPNG_PIB_NAME, %s) failed",
++			 __func__, proc_info->proc_name);
++		return (NULL);
++	}
++
++	if (uuid_is_null(proc_info->proc_uuid) == 0) {
++		if (pcap_ng_block_add_option_with_uuid(block, PCAPNG_PIB_UUID, proc_info->proc_uuid) != 0) {
++			snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: pcap_ng_block_add_option_with_uuid(PCAPNG_PIB_UUID) failed",
++				 __func__);
++			return (NULL);
++		}
++	}
++
++	(void) pcap_ng_dump_block(dumper, block);
++	
++	proc_info->proc_block_dumped = 1;
++	proc_info->proc_dump_index = dumper->dump_proc_info_set.proc_dump_index++;
++	
++	return (proc_info);
++}
++
++static struct pcap_proc_info *
++pcap_ng_dump_proc(pcap_t *pcap, pcap_dumper_t *dumper, pcapng_block_t block,
++		  pid_t pid, const char *pcomm, const uuid_t uu)
++{
++	struct pcap_proc_info *proc_info;
++	
++	/*
++	 * Add a process info block if needed
++	 */
++	proc_info = pcap_proc_info_set_find_uuid(&dumper->dump_proc_info_set, pid, pcomm, uu);
++	if (proc_info == NULL) {
++		proc_info = pcap_proc_info_set_add_uuid(&dumper->dump_proc_info_set, pid, pcomm,
++							uu, pcap->errbuf);
++		if (proc_info == NULL) {
++			return (NULL);
++		}
++	}
++	
++	proc_info = pcap_ng_dump_proc_info(pcap, dumper, block, proc_info);
++	
++	return (proc_info);
++}
++
++int
++pcap_ng_dump_kern_event(pcap_t *pcap, pcap_dumper_t *dumper,
++		       struct kern_event_msg *kev, struct timeval *ts)
++{
++	int retval;
++	pcapng_block_t block = NULL;
++	struct pcapng_os_event_fields *osev_fields;
++
++	if (pcap_ng_dump_shb(pcap, dumper) == 0)
++		return (0);
++	
++	block = dumper->dump_block;
++
++	retval = pcap_ng_block_reset(block, PCAPNG_BT_OSEV);
++	if (retval != 0) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: pcap_ng_block_reset(PCAPNG_BT_OSEV) failed", __func__);
++		return (0);
++	}
++	osev_fields = pcap_ng_get_os_event_fields(block);
++	osev_fields->type = PCAPNG_OSEV_KEV;
++	osev_fields->timestamp_high = (u_int32_t)ts->tv_sec;
++	osev_fields->timestamp_low = ts->tv_usec;
++	osev_fields->len = kev->total_size;
++	pcap_ng_block_packet_set_data(block, kev, kev->total_size);
++
++	(void) pcap_ng_dump_block(dumper, block);
++	
++	return (1);
++}
++
++struct pcap_if_info *
++pcap_ng_dump_if_info(pcap_t *pcap, pcap_dumper_t *dumper, pcapng_block_t block,
++		     struct pcap_if_info *if_info)
++{
++	int retval;
++	struct pcapng_interface_description_fields *idb = NULL;
++	
++	/*
++	 * We're done when the interface block has already been saved
++	 */
++	if (if_info->if_block_dumped != 0) {
++		return (if_info);
++	}
++	
++	retval = pcap_ng_block_reset(block, PCAPNG_BT_IDB);
++	if (retval != 0) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: pcap_ng_block_reset(PCAPNG_BT_IDB) failed", __func__);
++		return (0);
++	}
++	idb = pcap_ng_get_interface_description_fields(block);
++	idb->idb_linktype = dlt_to_linktype(if_info->if_linktype);
++	idb->idb_snaplen = if_info->if_snaplen;
++	
++	if (pcap_ng_block_add_option_with_string(block, PCAPNG_IF_NAME,
++						 if_info->if_name) != 0) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: pcap_ng_block_add_option_with_string(PCAPNG_IF_NAME, %s) failed",
++			 __func__, if_info->if_name);
++		return (0);
++	}
++	
++	(void) pcap_ng_dump_block(dumper, block);
++	
++	if_info->if_block_dumped = 1;
++	if_info->if_dump_id = dumper->dump_if_info_set.if_dump_id++;
++	
++	return (if_info);
++}
++
++/*
++ * To minimize memory allocation we use a single block object that
++ * we reuse by calling pcap_ng_block_reset()
++ */
++int
++pcap_ng_dump_pktap_comment(pcap_t *pcap, pcap_dumper_t *dumper,
++			   const struct pcap_pkthdr *h, const u_char *sp,
++			   const char *comment)
++{
++	pcapng_block_t block = NULL;
++	struct pktap_header *pktp_hdr;
++	const u_char *pkt_data;
++	struct pcap_if_info *if_info = NULL;
++	struct pcapng_enhanced_packet_fields *epb;
++	uint64_t ts;
++	struct pcap_proc_info *proc_info = NULL;
++	struct pcap_proc_info *e_proc_info = NULL;
++	uint32_t pktflags = 0;
++	uint32_t pmdflags = 0;
++	int retval;
++	
++	pktp_hdr = (struct pktap_header *)sp;
++	
++	if (h->len < sizeof(struct pktap_header) ||
++	    h->caplen < sizeof(struct pktap_header) ||
++	    pktp_hdr->pth_length > h->caplen) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: Packet too short", __func__);
++		return (0);
++	}
++	
++	if (pcap_ng_dump_shb(pcap, dumper) == 0)
++		return (0);
++	
++	block = dumper->dump_block;
++	
++	/*
++	 * Add an interface info block for a new interface before filtering
++	 */
++	if_info = pcap_if_info_set_find_by_name(&dumper->dump_if_info_set, pktp_hdr->pth_ifname);
++	if (if_info == NULL) {
++		if_info = pcap_if_info_set_add(&dumper->dump_if_info_set, pktp_hdr->pth_ifname, -1,
++					       pktp_hdr->pth_dlt, pcap->snapshot,
++					       pcap->filter_str, pcap->errbuf);
++		if (if_info == NULL) {
++			return (0);
++		}
++	}
++	
++	/*
++	 * Check the packet matches the filter
++	 */
++	if (pcap_filter_pktap(pcap, dumper, if_info, h, sp) == 0)
++		return (0);
++	
++	/*
++	 * Dump the interface info block (if needed)
++	 */
++	if_info = pcap_ng_dump_if_info(pcap, dumper, block, if_info);
++	if (if_info == NULL) {
++		return (0);
++	}
++	
++	if ((pktp_hdr->pth_pid != -1 && pktp_hdr->pth_pid != 0) ||
++	    pktp_hdr->pth_comm[0] != 0 || uuid_is_null(pktp_hdr->pth_uuid) == 0) {
++		proc_info = pcap_ng_dump_proc(pcap, dumper, block,
++					      pktp_hdr->pth_pid, pktp_hdr->pth_comm, pktp_hdr->pth_uuid);
++		if (proc_info == NULL)
++			return (0);
++	}
++	if ((pktp_hdr->pth_epid != -1 && pktp_hdr->pth_epid != 0) ||
++	    pktp_hdr->pth_ecomm[0] != 0 || uuid_is_null(pktp_hdr->pth_euuid) == 0) {
++		e_proc_info = pcap_ng_dump_proc(pcap, dumper, block,
++						pktp_hdr->pth_epid, pktp_hdr->pth_ecomm, pktp_hdr->pth_euuid);
++		if (e_proc_info == NULL)
++			return (0);
++	}
++	
++	retval = pcap_ng_block_reset(block, PCAPNG_BT_EPB);
++	if (retval != 0) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: pcap_ng_block_reset(PCAPNG_BT_EPB) failed", __func__);
++		return (0);
++	}
++	/*
++	 * The actual data packet is past the packet tap header
++	 */
++	pkt_data = sp + pktp_hdr->pth_length;
++	epb = pcap_ng_get_enhanced_packet_fields(block);
++	epb->caplen = h->caplen - pktp_hdr->pth_length;
++	epb->interface_id = if_info->if_dump_id;
++	epb->len = h->len - pktp_hdr->pth_length;
++	/* Microsecond resolution */
++	ts = ((uint64_t)h->ts.tv_sec) * 1000000 + (uint64_t)h->ts.tv_usec;
++	epb->timestamp_high = ts >> 32;
++	epb->timestamp_low  = ts & 0xffffffff;
++	
++	pcap_ng_block_packet_set_data(block, pkt_data, epb->caplen);
++	
++	if (proc_info != NULL) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_PIB_INDEX, &proc_info->proc_dump_index, 4);
++	}
++	if (e_proc_info != NULL) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_E_PIB_INDEX, &e_proc_info->proc_dump_index, 4);
++	}
++	if ((pktp_hdr->pth_flags & PTH_FLAG_DIR_IN)) {
++		pktflags = PCAPNG_PBF_DIR_INBOUND;
++	} else if ((pktp_hdr->pth_flags & PTH_FLAG_DIR_OUT)) {
++		pktflags = PCAPNG_PBF_DIR_OUTBOUND;
++	}
++	if (pktflags != 0) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_FLAGS , &pktflags, 4);
++	}
++	if (pktp_hdr->pth_svc != -1) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_SVC , &pktp_hdr->pth_svc, 4);
++	}
++	if (pktp_hdr->pth_flowid != 0) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_FLOW_ID , &pktp_hdr->pth_flowid, 4);
++	}
++#ifdef PKTAP_HAS_TRACE_TAG
++	if (pktp_hdr->pth_trace_tag != 0) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_TRACE_TAG , &pktp_hdr->pth_trace_tag, 2);
++	}
++#endif /* PKTAP_HAS_TRACE_TAG */
++	if (comment != NULL && *comment != 0) {
++		pcap_ng_block_add_option_with_string(block, PCAPNG_OPT_COMMENT, comment);
++	}
++	if (pktp_hdr->pth_flags & PTH_FLAG_NEW_FLOW) {
++		pmdflags |= PCAPNG_EPB_PMDF_NEW_FLOW;
++	}
++	if (pktp_hdr->pth_flags & PTH_FLAG_REXMIT) {
++		pmdflags |= PCAPNG_EPB_PMDF_REXMIT;
++	}
++	if (pktp_hdr->pth_flags & PTH_FLAG_KEEP_ALIVE) {
++		pmdflags |= PCAPNG_EPB_PMDF_KEEP_ALIVE;
++	}
++	if (pktp_hdr->pth_flags & PTH_FLAG_SOCKET) {
++		pmdflags |= PCAPNG_EPB_PMDF_SOCKET;
++	}
++	if (pktp_hdr->pth_flags & PTH_FLAG_NEXUS_CHAN) {
++		pmdflags |= PCAPNG_EPB_PMDF_NEXUS_CHANNEL;
++	}
++#ifdef PTH_FLAG_WAKE_PKT
++	if (pktp_hdr->pth_flags & PTH_FLAG_WAKE_PKT) {
++		pmdflags |= PCAPNG_EPB_PMDF_WAKE_PKT;
++	}
++#endif
++	if (pmdflags != 0) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_PMD_FLAGS, &pmdflags, 4);
++	}
++
++	(void) pcap_ng_dump_block(dumper, block);
++	
++	return (1);
++}
++
++int
++pcap_ng_dump_pktap(pcap_t *pcap, pcap_dumper_t *dumper,
++		   const struct pcap_pkthdr *h, const u_char *sp)
++{
++	return (pcap_ng_dump_pktap_comment(pcap, dumper, h, sp, NULL));
++}
++
++int
++pcap_ng_dump_decryption_secrets(pcap_t *pcap, pcap_dumper_t *dumper,
++				const uint32_t type, const size_t len, const uint8_t *sp)
++{
++	int retval;
++	pcapng_block_t block = NULL;
++	struct pcapng_decryption_secrets_fields *dsb_fields;
++
++	if (len > UINT32_MAX) {
++		return 0;
++	}
++
++	if (pcap_ng_dump_shb(pcap, dumper) == 0)
++		return (0);
++
++	block = dumper->dump_block;
++
++	retval = pcap_ng_block_reset(block, PCAPNG_BT_DSB);
++	if (retval != 0) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: pcap_ng_block_reset(PCAPNG_BT_DSB) failed", __func__);
++		return (0);
++	}
++	dsb_fields = pcap_ng_get_decryption_secrets_fields(block);
++	dsb_fields->secrets_type = type;
++	dsb_fields->secrets_length = (uint32_t)len;
++	pcap_ng_block_packet_set_data(block, sp, (uint32_t)len);
++
++	(void) pcap_ng_dump_block(dumper, block);
++
++	return (1);
++}
++
++int
++pcap_apple_set_exthdr(pcap_t *p, int v)
++{
++	int status = -1;
++
++#ifdef BIOCSEXTHDR
++	if (ioctl(p->fd, BIOCSEXTHDR, (caddr_t)&v) < 0) {
++		snprintf(p->errbuf, PCAP_ERRBUF_SIZE, "BIOCSEXTHDR: %s",
++			 pcap_strerror(errno));
++		status = PCAP_ERROR;
++	} else {
++		p->extendedhdr = v;
++		status = 0;
++	}
++#endif /* BIOCSEXTHDR */
++
++	return (status);
++}
++
++int
++pcap_set_want_pktap(pcap_t *p, int v)
++{
++	p->wantpktap = !!v;
++
++	return (0);
++}
++
++int
++pcap_set_truncation_mode(pcap_t *p, bool on)
++{
++	int status = PCAP_ERROR;
++
++#ifdef BIOCSTRUNCATE
++	p->truncation = on;
++	status = 0;
++#endif /* BIOCSTRUNCATE */
++
++	return (status);
++}
++
++int
++pcap_set_pktap_hdr_v2(pcap_t *p, bool on)
++{
++	int status = PCAP_ERROR;
++
++#ifdef BIOCSPKTHDRV2
++	p->pktaphdrv2 = on;
++	status = 0;
++#endif /* BIOCSPKTHDRV2 */
++
++	return (status);
++}
++
++int
++pcap_set_compression(pcap_t *p, int v)
++{
++	int status = PCAP_ERROR;
++
++	if (v >= 0 && v <= 2) {
++		p->compression_mode = v;
++		status = 0;
++	}
++
++	return status;
++}
++
++int
++pcap_set_head_drop(pcap_t *p, int v)
++{
++	p->head_drop = !!v;
++
++	return 0;
++}
++
++int
++pcap_get_head_drop(pcap_t *p)
++{
++	return p->head_drop;
++}
++
++int
++pcap_get_compression_stats(pcap_t *p, void *bufp, size_t buflen)
++{
++	if (p->compression_mode == 1) {
++#ifdef HAS_BPF_HDR_COMP
++		struct bpf_comp_stats bcs;
++
++		if (ioctl(p->fd, BIOCGHDRCOMPSTATS, (caddr_t)&bcs) < 0) {
++			pcap_fmt_errmsg_for_errno(p->errbuf, PCAP_ERRBUF_SIZE,
++									  errno, "BIOCGHDRCOMPSTATS");
++			return PCAP_ERROR;
++		}
++
++		(void)snprintf(bufp, buflen,
++					   "K tot_rd %llu tot_sz %llu tot_hdr_sz %llu no_prfx_cnt %llu prfx_cnt %llu tot_prfx_sz %llu max_prfx_sz %llu",
++					   bcs.bcs_total_read,
++					   bcs.bcs_total_size,
++					   bcs.bcs_total_hdr_size,
++					   bcs.bcs_count_no_common_prefix,
++					   bcs.bcs_count_compressed_prefix,
++					   bcs.bcs_total_compressed_prefix_size,
++					   bcs.bcs_max_compressed_prefix_size);
++		return 0;
++#endif /* HAS_BPF_HDR_COMP */
++	} else if (p->compression_mode == 2) {
++		(void)snprintf(bufp, buflen,
++					   "U tot_rd %llu tot_sz %llu tot_hdr_sz %llu no_prfx_cnt %llu prfx_cnt %llu tot_prfx_sz %llu max_prfx_sz %u",
++					   p->total_read,
++					   p->total_size,
++					   p->total_hdr_size,
++					   p->count_no_common_prefix,
++					   p->count_common_prefix,
++					   p->total_common_prefix_size,
++					   p->max_common_prefix_size);
++		return 0;
++	}
++	return -1;
++}
++
++static char *
++pcap_svc2str(uint32_t svc)
++{
++	static char svcstr[10];
++
++	switch (svc) {
++		case SO_TC_BK_SYS:
++			return "BK_SYS";
++		case SO_TC_BK:
++			return "BK";
++		case SO_TC_BE:
++			return "BE";
++		case SO_TC_RD:
++			return "RD";
++		case SO_TC_OAM:
++			return "OAM";
++		case SO_TC_AV:
++			return "AV";
++		case SO_TC_RV:
++			return "RV";
++		case SO_TC_VI:
++			return "VI";
++		case SO_TC_VO:
++			return "VO";
++		case SO_TC_CTL:
++			return "CTL";
++		case SO_TC_NETSVC_SIG:
++			return "SIG";
++		default:
++			snprintf(svcstr, sizeof(svcstr), "%u", svc);
++			return svcstr;
++	}
++}
++
++void
++pcap_read_bpf_header(pcap_t *p, u_char *bp, struct pcap_pkthdr *pkthdr)
++{
++	struct bpf_hdr_ext *bhep = ((struct bpf_hdr_ext *)bp);
++	char tmpbuf[100];
++	int tlen;
++	char *strsep = "";
++
++	pkthdr->comment[0] = 0;
++
++	if (p->extendedhdr == 0) {
++		return;
++	}
++
++	if (bhep->bh_comm[0] != 0) {
++		bzero(&tmpbuf, sizeof (tmpbuf));
++		tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++				"%sproc %s:%d", strsep, bhep->bh_comm, bhep->bh_pid);
++		if (tlen > 0) {
++			strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++			strsep = ", ";
++		}
++	}
++
++	bzero(&tmpbuf, sizeof (tmpbuf));
++	tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++			"%ssvc %s", strsep, pcap_svc2str(bhep->bh_svc));
++	if (tlen > 0) {
++		strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++		strsep = ", ";
++	}
++
++	if (bhep->bh_pktflags != 0) {
++		if (bhep->bh_pktflags & BPF_PKTFLAGS_TCP_REXMT) {
++			bzero(&tmpbuf, sizeof (tmpbuf));
++			tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++					"%sre", strsep);
++			if (tlen > 0) {
++				strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++				strsep = ", ";
++			}
++		}
++		if (bhep->bh_pktflags & BPF_PKTFLAGS_START_SEQ) {
++			bzero(&tmpbuf, sizeof (tmpbuf));
++			tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++					"%sst", strsep);
++			if (tlen > 0) {
++				strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++				strsep = ", ";
++			}
++		}
++		if (bhep->bh_pktflags & BPF_PKTFLAGS_LAST_PKT) {
++			bzero(&tmpbuf, sizeof (tmpbuf));
++			tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++					"%slp", strsep);
++			if (tlen > 0) {
++				strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++				strsep = ", ";
++			}
++		}
++#ifdef BPF_WAKE_PKT
++		if (bhep->bh_pktflags & BPF_PKTFLAGS_WAKE_PKT) {
++			bzero(&tmpbuf, sizeof (tmpbuf));
++			tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++					"%swk", strsep);
++			if (tlen > 0) {
++				strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++				strsep = ", ";
++			}
++		}
++#endif
++	}
++
++	if (bhep->bh_unsent_bytes > 0) {
++		bzero(&tmpbuf, sizeof (tmpbuf));
++		tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++				"%sunsent %u", strsep, bhep->bh_unsent_bytes);
++		if (tlen > 0) {
++			strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++			strsep = ", ";
++		}
++	}
++
++#define BPF_HDR_EXT_FLAGS_DIR_MASK (BPF_HDR_EXT_FLAGS_DIR_IN | BPF_HDR_EXT_FLAGS_DIR_OUT)
++	if ((bhep->bh_flags & BPF_HDR_EXT_FLAGS_DIR_MASK) == BPF_HDR_EXT_FLAGS_DIR_IN) {
++		bzero(&tmpbuf, sizeof (tmpbuf));
++		tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++				"%sin", strsep);
++		if (tlen > 0) {
++			strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++			strsep = ", ";
++		}
++	} else {
++		bzero(&tmpbuf, sizeof (tmpbuf));
++		tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++				"%sout", strsep);
++		if (tlen > 0) {
++			strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++			strsep = ", ";
++		}
++	}
++
++	if (bhep->bh_flowid > 0) {
++		bzero(&tmpbuf, sizeof (tmpbuf));
++		tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++				"%sflowid 0x%x", strsep, bhep->bh_flowid);
++		if (tlen > 0) {
++			strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++			strsep = ", ";
++		}
++	}
++#if BPF_HDR_EXT_HAS_TRACE_TAG
++	if (bhep->bh_trace_tag > 0) {
++		bzero(&tmpbuf, sizeof (tmpbuf));
++		tlen = snprintf(tmpbuf, sizeof (tmpbuf),
++				"%sttag 0x%x", strsep, bhep->bh_trace_tag);
++		if (tlen > 0) {
++			strlcat(pkthdr->comment, tmpbuf, sizeof (pkthdr->comment));
++			strsep = ", ";
++		}
++	}
++#endif /* BPF_HDR_EXT_HAS_TRACE_TAG */
++}
++
++#ifdef PTH_FLAG_V2_HDR
++/*
++ * Returns zero if the packet doesn't match, non-zero if it matches
++ */
++static int
++pcap_filter_pktap_v2(pcap_t *pcap, pcap_dumper_t *dumper, struct pcap_if_info *if_info,
++		     const struct pcap_pkthdr *h, const u_char *sp)
++{
++	struct pktap_v2_hdr *pktap_v2_hdr;
++	const u_char *pkt_data;
++	int match = 0;
++	const char *ifname;
++	
++	pktap_v2_hdr = (struct pktap_v2_hdr *)sp;
++	
++	if (h->len < sizeof(struct pktap_v2_hdr) ||
++	    h->caplen < sizeof(struct pktap_v2_hdr) ||
++	    pktap_v2_hdr->pth_length > h->caplen) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: Packet too short", __func__);
++		return (0);
++	}
++
++	if (pktap_v2_hdr->pth_ifname_offset == 0) {
++		return (0);
++	}
++	ifname = ((char *) pktap_v2_hdr) + pktap_v2_hdr->pth_ifname_offset;
++		
++	if (if_info == NULL) {
++		if_info = pcap_if_info_set_find_by_name(&dumper->dump_if_info_set, ifname);
++		/*
++		 * New interface
++		 */
++		if (if_info == NULL) {
++			if_info = pcap_if_info_set_add(&dumper->dump_if_info_set, ifname, -1,
++						       pktap_v2_hdr->pth_dlt, pcap->snapshot,
++						       pcap->filter_str, pcap->errbuf);
++			if (if_info == NULL) {
++				return (0);
++			}
++		}
++	}
++	
++	if (if_info->if_filter_program.bf_insns == NULL) {
++		match = 1;
++	} else {
++		/*
++		 * The actual data packet is past the packet tap header
++		 */
++		struct pcap_pkthdr tmp_hdr;
++		
++		bcopy(h, &tmp_hdr, sizeof(struct pcap_pkthdr));
++		
++		tmp_hdr.caplen -= pktap_v2_hdr->pth_length;
++		tmp_hdr.len -= pktap_v2_hdr->pth_length;
++		
++		pkt_data = sp + pktap_v2_hdr->pth_length;
++		
++		match = pcap_offline_filter(&if_info->if_filter_program, &tmp_hdr, pkt_data);
++	}
++	
++	return (match);
++}
++#endif /* PTH_FLAG_V2_HDR */
++
++int
++pcap_ng_dump_pktap_v2(pcap_t *pcap, pcap_dumper_t *dumper,
++		      const struct pcap_pkthdr *h, const u_char *sp,
++		      const char *comment)
++{
++#ifdef PTH_FLAG_V2_HDR
++	pcapng_block_t block = NULL;
++	struct pktap_v2_hdr *pktap_v2_hdr;
++	const u_char *pkt_data;
++	struct pcap_if_info *if_info = NULL;
++	struct pcapng_enhanced_packet_fields *epb;
++	uint64_t ts;
++	struct pcap_proc_info *proc_info = NULL;
++	struct pcap_proc_info *e_proc_info = NULL;
++	uint32_t pktflags = 0;
++	uint32_t pmdflags = 0;
++	int retval;
++	const char *ifname = NULL;
++	const char *comm = NULL;
++	const uuid_t *uuid = NULL;
++	const char *e_comm = NULL;
++	const uuid_t *e_uuid = NULL;
++	
++	pktap_v2_hdr = (struct pktap_v2_hdr *)sp;
++	
++	if (h->len < sizeof(struct pktap_v2_hdr) ||
++	    h->caplen < sizeof(struct pktap_v2_hdr) ||
++	    pktap_v2_hdr->pth_length > h->caplen) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: Packet too short", __func__);
++		return (0);
++	}
++	
++	if (pktap_v2_hdr->pth_ifname_offset == 0) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: No ifame", __func__);
++		return (0);
++	}
++	ifname = ((char *) pktap_v2_hdr) + pktap_v2_hdr->pth_ifname_offset;
++	
++	if (pcap_ng_dump_shb(pcap, dumper) == 0)
++		return (0);
++	
++	block = dumper->dump_block;
++	
++	/*
++	 * Add an interface info block for a new interface before filtering
++	 */
++	if_info = pcap_if_info_set_find_by_name(&dumper->dump_if_info_set, ifname);
++	if (if_info == NULL) {
++		if_info = pcap_if_info_set_add(&dumper->dump_if_info_set, ifname, -1,
++					       pktap_v2_hdr->pth_dlt, pcap->snapshot,
++					       pcap->filter_str, pcap->errbuf);
++		if (if_info == NULL) {
++			return (0);
++		}
++	}
++	
++	/*
++	 * Check the packet matches the filter
++	 */
++	if (pcap_filter_pktap_v2(pcap, dumper, if_info, h, sp) == 0)
++		return (0);
++	
++	/*
++	 * Dump the interface info block (if needed)
++	 */
++	if_info = pcap_ng_dump_if_info(pcap, dumper, block, if_info);
++	if (if_info == NULL) {
++		return (0);
++	}
++	
++	if (pktap_v2_hdr->pth_comm_offset != 0)
++		comm = ((char *) pktap_v2_hdr) + pktap_v2_hdr->pth_comm_offset;
++	if (pktap_v2_hdr->pth_uuid_offset != 0)
++		uuid = (uuid_t *)(((char *) pktap_v2_hdr) + pktap_v2_hdr->pth_uuid_offset);
++	if ((pktap_v2_hdr->pth_pid != 0 && pktap_v2_hdr->pth_pid != -1) ||
++	    comm != NULL || uuid != NULL) {
++		proc_info = pcap_ng_dump_proc(pcap, dumper, block,
++					      pktap_v2_hdr->pth_pid,
++					      comm,
++					      *uuid);
++		if (proc_info == NULL)
++			return (0);
++	}
++	
++	if (pktap_v2_hdr->pth_e_comm_offset != 0)
++		e_comm = ((char *) pktap_v2_hdr) + pktap_v2_hdr->pth_e_comm_offset;
++	if (pktap_v2_hdr->pth_e_uuid_offset != 0)
++		e_uuid = (uuid_t *)(((char *) pktap_v2_hdr) + pktap_v2_hdr->pth_e_uuid_offset);
++	
++	if ((pktap_v2_hdr->pth_e_pid != 0 && pktap_v2_hdr->pth_e_pid != -1) ||
++	    e_comm != NULL || e_uuid != NULL) {
++		e_proc_info = pcap_ng_dump_proc(pcap, dumper, block,
++						pktap_v2_hdr->pth_e_pid,
++						e_comm,
++						*e_uuid);
++		if (e_proc_info == NULL)
++			return (0);
++	}
++	
++	retval = pcap_ng_block_reset(block, PCAPNG_BT_EPB);
++	if (retval != 0) {
++		snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: pcap_ng_block_reset(PCAPNG_BT_EPB) failed", __func__);
++		return (0);
++	}
++	/*
++	 * The actual data packet is past the packet tap header
++	 */
++	pkt_data = sp + pktap_v2_hdr->pth_length;
++	epb = pcap_ng_get_enhanced_packet_fields(block);
++	epb->caplen = h->caplen - pktap_v2_hdr->pth_length;
++	epb->interface_id = if_info->if_dump_id;
++	epb->len = h->len - pktap_v2_hdr->pth_length;
++	/* Microsecond resolution */
++	ts = ((uint64_t)h->ts.tv_sec) * 1000000 + (uint64_t)h->ts.tv_usec;
++	epb->timestamp_high = ts >> 32;
++	epb->timestamp_low  = ts & 0xffffffff;
++	
++	pcap_ng_block_packet_set_data(block, pkt_data, epb->caplen);
++	
++	if (proc_info != NULL) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_PIB_INDEX, &proc_info->proc_dump_index, 4);
++	}
++	if (e_proc_info != NULL) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_E_PIB_INDEX, &e_proc_info->proc_dump_index, 4);
++	}
++	if ((pktap_v2_hdr->pth_flags & PTH_FLAG_DIR_IN)) {
++		pktflags = PCAPNG_PBF_DIR_INBOUND;
++	} else if ((pktap_v2_hdr->pth_flags & PTH_FLAG_DIR_OUT)) {
++		pktflags = PCAPNG_PBF_DIR_OUTBOUND;
++	}
++	if (pktflags != 0) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_FLAGS , &pktflags, 4);
++	}
++	if (pktap_v2_hdr->pth_svc != (uint16_t)-1) {
++		uint32_t svc = pktap_v2_hdr->pth_svc;
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_SVC , &svc, 4);
++	}
++	if (pktap_v2_hdr->pth_flowid != 0) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_FLOW_ID , &pktap_v2_hdr->pth_flowid, 4);
++	}
++	if (comment != NULL && *comment != 0) {
++		pcap_ng_block_add_option_with_string(block, PCAPNG_OPT_COMMENT, comment);
++	}
++	if (pktap_v2_hdr->pth_flags & PTH_FLAG_NEW_FLOW) {
++		pmdflags |= PCAPNG_EPB_PMDF_NEW_FLOW;
++	}
++	if (pktap_v2_hdr->pth_flags & PTH_FLAG_REXMIT) {
++		pmdflags |= PCAPNG_EPB_PMDF_REXMIT;
++	}
++	if (pktap_v2_hdr->pth_flags & PTH_FLAG_KEEP_ALIVE) {
++		pmdflags |= PCAPNG_EPB_PMDF_KEEP_ALIVE;
++	}
++	if (pktap_v2_hdr->pth_flags & PTH_FLAG_SOCKET) {
++		pmdflags |= PCAPNG_EPB_PMDF_SOCKET;
++	}
++	if (pktap_v2_hdr->pth_flags & PTH_FLAG_NEXUS_CHAN) {
++		pmdflags |= PCAPNG_EPB_PMDF_NEXUS_CHANNEL;
++	}
++#ifdef PTH_FLAG_WAKE_PKT
++	if (pktap_v2_hdr->pth_flags & PTH_FLAG_WAKE_PKT) {
++		pmdflags |= PCAPNG_EPB_PMDF_WAKE_PKT;
++	}
++#endif
++	if (pmdflags != 0) {
++		pcap_ng_block_add_option_with_value(block, PCAPNG_EPB_PMD_FLAGS, &pmdflags, 4);
++	}
++
++	(void) pcap_ng_dump_block(dumper, block);
++	
++	return (1);
++#else /* PTH_FLAG_V2_HDR */
++#pragma unused(dumper, h, sp, comment)
++	snprintf(pcap->errbuf, PCAP_ERRBUF_SIZE,
++		 "%s: Packet too short", __func__);
++	return (0);
++#endif /* PTH_FLAG_V2_HDR */
++}
++
++void
++pcap_ng_dump_init_section_info(pcap_dumper_t *dumper)
++{
++	dumper->shb_added = 0;
++	pcap_if_info_set_clear(&dumper->dump_if_info_set);
++	pcap_proc_info_set_clear(&dumper->dump_proc_info_set);
++}
+--- /dev/null	1674459176.366185000
++++ b/pcap-pktap.h	1674378789.818208801
+@@ -0,0 +1,55 @@
++/*
++ * Copyright (c) 2018 Apple Inc. All rights reserved.
++ *
++ * @APPLE_LICENSE_HEADER_START@
++ *
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this
++ * file.
++ *
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ *
++ * @APPLE_LICENSE_HEADER_END@
++ */
++
++#ifndef pcap_pktap_h
++#define pcap_pktap_h
++
++#include <net/pktap.h>
++
++#include <stdbool.h>
++
++#ifndef PTH_FLAG_REXMIT
++#define	PTH_FLAG_REXMIT		0x00008000 /* Packet is a retransmission */
++#endif /* PTH_FLAG_REXMIT */
++
++#ifndef PTH_FLAG_KEEP_ALIVE
++#define	PTH_FLAG_KEEP_ALIVE	0x00010000 /* Is keep alive packet */
++#endif /* PTH_FLAG_KEEP_ALIVE */
++
++#ifndef PTH_FLAG_SOCKET
++#define	PTH_FLAG_SOCKET		0x00020000 /* Packet on a Socket */
++#endif /* PTH_FLAG_SOCKET */
++
++#ifndef PTH_FLAG_NEXUS_CHAN
++#define	PTH_FLAG_NEXUS_CHAN	0x00040000 /* Packet on a nexus channel */
++#endif /* PTH_FLAG_NEXUS_CHAN */
++
++#ifndef PTH_FLAG_V2_HDR
++#define PTH_FLAG_V2_HDR		0x00080000 /* Version 2 of pktap */
++#endif /* PTH_FLAG_V2_HDR */
++
++
++pcap_t *pktap_create(const char *device, char *ebuf, int *is_ours);
++
++
++#endif /* pcap_pktap_h */
+--- /dev/null	1674459186.496611000
++++ b/pcap-util-darwin.c	1674379360.494720902
+@@ -0,0 +1,458 @@
++/*
++ * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
++ *
++ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
++ *
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. The rights granted to you under the License
++ * may not be used to create, or enable the creation or redistribution of,
++ * unlawful or unlicensed copies of an Apple operating system, or to
++ * circumvent, violate, or enable the circumvention or violation of, any
++ * terms of an Apple operating system software license agreement.
++ *
++ * Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this file.
++ *
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ *
++ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
++ */
++
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
++#include <sys/types.h>
++#include <sys/queue.h>
++#include <stdio.h>
++#include <string.h>
++#include <stdlib.h>
++#include <stdint.h>
++
++#include "pcap-int.h"
++#include "pcap-util-darwin.h"
++
++static int null_uu_inited = 0;
++static uuid_t null_uu;
++
++void
++pcap_if_info_set_clear(struct pcap_if_info_set *if_info_set)
++{
++	int i;
++	
++	if (if_info_set->if_infos != NULL) {
++		for (i = 0; i < if_info_set->if_info_count; i++)
++			pcap_if_info_set_free(if_info_set, if_info_set->if_infos[i]);
++		
++		free(if_info_set->if_infos);
++		if_info_set->if_infos = NULL;
++	}
++	if_info_set->if_info_count = 0;
++	if_info_set->if_dump_id = 0;
++}
++
++struct pcap_if_info *
++pcap_if_info_set_find_by_name(struct pcap_if_info_set *if_info_set, const char *name)
++{
++	int i;
++	
++	for (i = 0; i < if_info_set->if_info_count; i++) {
++		if (strcmp(name, if_info_set->if_infos[i]->if_name) == 0)
++			return (if_info_set->if_infos[i]);
++	}
++	return (NULL);
++}
++
++struct pcap_if_info *
++pcap_if_info_set_find_by_id(struct pcap_if_info_set *if_info_set, int if_id)
++{
++	int i;
++	
++	if (if_id == -1)
++		return (NULL);
++	
++	for (i = 0; i < if_info_set->if_info_count; i++) {
++		if (if_id == if_info_set->if_infos[i]->if_id)
++			return (if_info_set->if_infos[i]);
++	}
++	return (NULL);
++}
++
++void
++pcap_if_info_set_free(struct pcap_if_info_set *if_info_set, struct pcap_if_info *if_info)
++{
++	if (if_info != NULL) {
++		int i;
++		
++		for (i = 0; i < if_info_set->if_info_count; i++) {
++			if (if_info_set->if_infos[i] == if_info) {
++				if_info_set->if_infos[i] = NULL;
++				break;
++			}
++		}
++		
++		pcap_freecode(&if_info->if_filter_program);
++		free(if_info);
++	}
++}
++
++/*
++ * entry point for using the compiler with no pcap open
++ * pass in all the stuff that is needed explicitly instead.
++ */
++static int
++pcap_compile_nopcap_err(int snaplen_arg, int linktype_arg,
++						struct bpf_program *program,
++						const char *buf, int optimize, bpf_u_int32 mask,
++						char *errbuf)
++{
++	pcap_t *p;
++	int ret;
++
++	p = pcap_open_dead(linktype_arg, snaplen_arg);
++	if (p == NULL)
++		return (-1);
++	ret = pcap_compile(p, program, buf, optimize, mask);
++	if (ret != 0 && errbuf != NULL) {
++		pcap_strlcpy(errbuf, p->errbuf, PCAP_ERRBUF_SIZE);
++	}
++	pcap_close(p);
++	return (ret);
++}
++
++struct pcap_if_info *
++pcap_if_info_set_add(struct pcap_if_info_set *if_info_set, const char *name,
++		 int if_id, int linktype, int snaplen,
++		 const char *filter_str, char *errbuf)
++{
++	struct pcap_if_info *if_info = NULL;
++	size_t ifname_len = strlen(name);
++	struct pcap_if_info **newarray;
++
++	/*
++	 * Stash the interface name after the structure
++	 */
++	if_info = calloc(1, sizeof(struct pcap_if_info) + ifname_len + 1);
++	if (if_info == NULL) {
++		if (errbuf != NULL) {
++			snprintf(errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: calloc() failed", __func__);
++		}
++		return (NULL);
++	}
++	if_info->if_name = (char *)(if_info + 1);
++	if (ifname_len > 0)
++		bcopy(name, if_info->if_name, ifname_len);
++	if_info->if_name[ifname_len] = 0;
++	if (if_id == -1)
++		if_info->if_id = if_info_set->if_info_count;
++	else
++		if_info->if_id = if_id;
++	if_info->if_linktype = linktype;
++	if_info->if_snaplen = snaplen;
++	
++	/*
++	 * The compilation of a BPF filter expression depends on
++	 * the DLT so we store the program in the if_info
++	 */
++	if (filter_str != NULL && *filter_str != 0) {
++		if (pcap_compile_nopcap_err(if_info->if_snaplen,
++					    if_info->if_linktype,
++					    &if_info->if_filter_program,
++					    filter_str, 0, PCAP_NETMASK_UNKNOWN,
++					    errbuf) == -1) {
++			free(if_info);
++			return (NULL);
++		}
++	}
++	
++	/*
++	 * Resize pointer array
++	 */
++	newarray = realloc(if_info_set->if_infos,
++			   (if_info_set->if_info_count + 1) * sizeof(struct pcap_if_info *));
++	if (newarray == NULL) {
++		if (errbuf != NULL) {
++			snprintf(errbuf, PCAP_ERRBUF_SIZE,
++				 "%s: realloc() failed", __func__);
++				 }
++		pcap_if_info_set_free(if_info_set, if_info);
++		return (NULL);
++	}
++	if_info_set->if_infos = newarray;
++	if_info_set->if_infos[if_info_set->if_info_count] = if_info;
++	if_info_set->if_info_count += 1;
++	
++	return (if_info);
++}
++
++void
++pcap_clear_if_infos(pcap_t * pcap)
++{
++	pcap_if_info_set_clear(&pcap->if_info_set);
++}
++
++struct pcap_if_info *
++pcap_find_if_info_by_name(pcap_t * pcap, const char *name)
++{
++	return (pcap_if_info_set_find_by_name(&pcap->if_info_set, name));
++}
++
++struct pcap_if_info *
++pcap_find_if_info_by_id(pcap_t * pcap, int if_id)
++{
++	return (pcap_if_info_set_find_by_id(&pcap->if_info_set, if_id));
++}
++
++void
++pcap_free_if_info(pcap_t * pcap, struct pcap_if_info *if_info)
++{
++	pcap_if_info_set_free(&pcap->if_info_set, if_info);
++}
++
++struct pcap_if_info *
++pcap_add_if_info(pcap_t * pcap, const char *name,
++		 int if_id, int linktype, int snaplen)
++{
++	struct pcap_if_info *if_info = NULL;
++
++	pcap->cleanup_extra_op = pcap_ng_init_section_info;
++
++	if_info = pcap_if_info_set_add(&pcap->if_info_set,
++		name, if_id, linktype, snaplen,
++		pcap->filter_str, pcap->errbuf);
++	
++	return (if_info);
++}
++
++void
++pcap_proc_info_set_clear(struct pcap_proc_info_set *proc_info_set)
++{
++	int i;
++	
++	if (proc_info_set->proc_infos != NULL) {
++		for (i = 0; i < proc_info_set->proc_info_count; i++)
++			pcap_proc_info_set_free(proc_info_set, proc_info_set->proc_infos[i]);
++		
++		free(proc_info_set->proc_infos);
++		proc_info_set->proc_infos = NULL;
++	}
++	proc_info_set->proc_info_count = 0;
++	proc_info_set->proc_dump_index = 0;
++}
++
++struct pcap_proc_info *
++pcap_proc_info_set_find(struct pcap_proc_info_set *proc_info_set,
++	uint32_t pid, const char *name)
++{
++	return (pcap_proc_info_set_find_uuid(proc_info_set, pid, name, NULL));
++}
++
++struct pcap_proc_info *
++pcap_proc_info_set_find_uuid(struct pcap_proc_info_set *proc_info_set,
++	uint32_t pid, const char *name, const uuid_t uu)
++{
++	int i;
++
++	if (name != NULL && uu != NULL) {
++		for (i = 0; i < proc_info_set->proc_info_count; i++) {
++			struct pcap_proc_info *proc_info = proc_info_set->proc_infos[i];
++		
++		if (pid == proc_info->proc_pid &&
++		    strcmp(name, proc_info->proc_name) == 0 &&
++		    uuid_compare(uu, proc_info->proc_uuid) == 0)
++				return (proc_info);
++		}
++	} else if (name != NULL) {
++		for (i = 0; i < proc_info_set->proc_info_count; i++) {
++			struct pcap_proc_info *proc_info = proc_info_set->proc_infos[i];
++			
++			if (pid == proc_info->proc_pid &&
++			    strcmp(name, proc_info->proc_name) == 0)
++				return (proc_info);
++		}
++	} else if (uu != NULL) {
++		for (i = 0; i < proc_info_set->proc_info_count; i++) {
++			struct pcap_proc_info *proc_info = proc_info_set->proc_infos[i];
++			
++			if (pid == proc_info->proc_pid &&
++			    uuid_compare(uu, proc_info->proc_uuid) == 0)
++			return (proc_info);
++	}
++	}
++	return (NULL);
++}
++
++struct pcap_proc_info *
++pcap_proc_info_set_find_by_index(struct pcap_proc_info_set *proc_info_set,
++	uint32_t index)
++{
++	int i;
++	
++	for (i = 0; i < proc_info_set->proc_info_count; i++) {
++		struct pcap_proc_info *proc_info = proc_info_set->proc_infos[i];
++		
++		if (index == proc_info->proc_index)
++			return (proc_info);
++	}
++	return (NULL);
++}
++
++void
++pcap_proc_info_set_free(struct pcap_proc_info_set *proc_info_set,
++	struct pcap_proc_info *proc_info)
++{
++	
++	if (proc_info != NULL) {
++		int i;
++		
++		for (i = 0; i < proc_info_set->proc_info_count; i++) {
++			if (proc_info_set->proc_infos[i] == proc_info) {
++				proc_info_set->proc_infos[i] = NULL;
++				break;
++			}
++		}
++		free(proc_info);
++	}
++}
++
++struct pcap_proc_info *
++pcap_proc_info_set_add_uuid(struct pcap_proc_info_set *proc_info_set,
++	uint32_t pid, const char *name, const uuid_t uu, char *errbuf)
++{
++	struct pcap_proc_info *proc_info = NULL;
++	size_t name_len = name != NULL ? strlen(name) : 0;
++	struct pcap_proc_info **newarray;
++	uuid_string_t uu_str;
++	
++	if (uu == NULL && null_uu_inited == 0) {
++		uuid_clear(null_uu);
++		null_uu_inited = 1;
++	}
++	
++	/*
++	 * Stash the process name after the structure
++	 */
++	proc_info = calloc(1, sizeof(struct pcap_proc_info) + name_len + 1);
++	if (proc_info == NULL) {
++		if (errbuf != NULL) {
++			snprintf(errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: calloc() failed", __func__);
++		}
++		return (NULL);
++	}
++	proc_info->proc_name = (char *)(proc_info + 1);
++	if (name_len > 0)
++		bcopy(name, proc_info->proc_name, name_len);
++	proc_info->proc_name[name_len] = 0;
++	proc_info->proc_pid = pid;
++	proc_info->proc_index = proc_info_set->proc_info_count;
++	uuid_copy(proc_info->proc_uuid, uu != NULL ? uu : null_uu);
++
++	uuid_unparse_lower(proc_info->proc_uuid, uu_str);
++	
++	/*
++	 * Resize pointer array
++	 */
++	newarray = realloc(proc_info_set->proc_infos,
++			   (proc_info_set->proc_info_count + 1) * sizeof(struct pcap_proc_info *));
++	if (newarray == NULL) {
++		if (errbuf != NULL) {
++			snprintf(errbuf, PCAP_ERRBUF_SIZE,
++			 "%s: malloc() failed", __func__);
++		}
++		free(proc_info);
++		return (NULL);
++	}
++	proc_info_set->proc_infos = newarray;
++	proc_info_set->proc_infos[proc_info_set->proc_info_count] = proc_info;
++	proc_info_set->proc_info_count += 1;
++
++	return (proc_info);
++}
++
++void
++pcap_clear_proc_infos(pcap_t * pcap)
++{
++	pcap_proc_info_set_clear(&pcap->proc_info_set);
++}
++
++struct pcap_proc_info *
++pcap_find_proc_info(pcap_t * pcap, uint32_t pid, const char *name)
++{
++	return (pcap_proc_info_set_find(&pcap->proc_info_set, pid, name));
++}
++
++struct pcap_proc_info *
++pcap_find_proc_info_uuid(pcap_t * pcap, uint32_t pid, const char *name, const uuid_t uu)
++{
++	return (pcap_proc_info_set_find_uuid(&pcap->proc_info_set, pid, name, uu));
++}
++
++struct pcap_proc_info *
++pcap_find_proc_info_by_index(pcap_t * pcap, uint32_t index)
++{
++	return (pcap_proc_info_set_find_by_index(&pcap->proc_info_set, index));
++}
++
++void
++pcap_free_proc_info(pcap_t * pcap, struct pcap_proc_info *proc_info)
++{
++	pcap_proc_info_set_free(&pcap->proc_info_set, proc_info);
++}
++
++struct pcap_proc_info *
++pcap_add_proc_info_uuid(pcap_t * pcap, uint32_t pid, const char *name, const uuid_t uu)
++{
++	struct pcap_proc_info *proc_info = NULL;
++
++	pcap->cleanup_extra_op = pcap_ng_init_section_info;
++
++	proc_info = pcap_proc_info_set_add_uuid(&pcap->proc_info_set,
++						pid, name,
++						uu,
++						pcap->errbuf);
++	
++	return (proc_info);
++}
++
++
++struct pcap_proc_info *
++pcap_add_proc_info(pcap_t * pcap, uint32_t pid, const char *name)
++{
++	return (pcap_add_proc_info_uuid(pcap, pid, name, NULL));
++}
++
++int
++pcap_set_filter_info(pcap_t *pcap, const char *str, int optimize, bpf_u_int32 netmask)
++{
++	if (pcap->filter_str != NULL)
++		free(pcap->filter_str);
++
++	if (str == NULL) {
++		pcap->filter_str = NULL;
++	} else {
++		pcap->filter_str = strdup(str);
++		if (pcap->filter_str == NULL)
++			return (PCAP_ERROR);
++	}
++
++	return (0);
++}
++
++void
++pcap_ng_init_section_info(pcap_t *p)
++{
++	p->shb_added = 0;
++	pcap_clear_if_infos(p);
++	pcap_clear_proc_infos(p);
++}
++
+--- /dev/null	1674459190.798477000
++++ b/pcap-util-darwin.h	1674378417.179899006
+@@ -0,0 +1,150 @@
++/*
++ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
++ *
++ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
++ *
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. The rights granted to you under the License
++ * may not be used to create, or enable the creation or redistribution of,
++ * unlawful or unlicensed copies of an Apple operating system, or to
++ * circumvent, violate, or enable the circumvention or violation of, any
++ * terms of an Apple operating system software license agreement.
++ *
++ * Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this file.
++ *
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ *
++ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
++ */
++
++#ifndef libpcap_pcap_util_h
++#define libpcap_pcap_util_h
++
++#ifdef PRIVATE
++
++#include <stdbool.h>
++#include <pcap/pcap.h>
++#include <uuid/uuid.h>
++
++extern int pcap_ng_dump_shb(pcap_t *, pcap_dumper_t *);
++extern int pcap_ng_dump_shb_comment(pcap_t *, pcap_dumper_t *, const char *);
++
++struct pcap_if_info {
++	int if_id;
++	int if_dump_id; /* may be different from if_id because of filtering */
++	char *if_name;
++	int if_linktype;
++	int if_snaplen;
++	struct bpf_program if_filter_program;
++	int if_block_dumped;
++};
++extern struct pcap_if_info * pcap_find_if_info_by_name(pcap_t *, const char *);
++extern struct pcap_if_info * pcap_find_if_info_by_id(pcap_t *, int);
++extern struct pcap_if_info * pcap_add_if_info(pcap_t *, const char *, int, int, int);
++extern void pcap_free_if_info(pcap_t *, struct pcap_if_info *);
++extern void pcap_clear_if_infos(pcap_t *);
++
++int pcap_set_filter_info(pcap_t *, const char *, int, bpf_u_int32);
++
++struct pcap_proc_info {
++	uint32_t proc_index;
++	uint32_t proc_dump_index;  /* may be different from proc_index because of filtering */
++	uint32_t proc_pid;
++	char *proc_name;
++	int proc_block_dumped;
++	uuid_t proc_uuid;
++};
++extern struct pcap_proc_info * pcap_find_proc_info(pcap_t *, uint32_t, const char *);
++extern struct pcap_proc_info * pcap_find_proc_info_uuid(pcap_t *, uint32_t, const char *, const uuid_t);
++extern struct pcap_proc_info * pcap_find_proc_info_by_index(pcap_t *, uint32_t);
++extern struct pcap_proc_info * pcap_add_proc_info(pcap_t *, uint32_t, const char *);
++extern struct pcap_proc_info * pcap_add_proc_info_uuid(pcap_t *, uint32_t, const char *, const uuid_t);
++extern void pcap_free_proc_info(pcap_t *, struct pcap_proc_info *);
++extern void pcap_clear_proc_infos(pcap_t *);
++
++
++struct pcap_if_info_set {
++	int if_info_count;
++	struct pcap_if_info **if_infos;
++	int if_dump_id;
++};
++
++void pcap_if_info_set_clear(struct pcap_if_info_set *if_info_set);
++struct pcap_if_info * pcap_if_info_set_find_by_name(struct pcap_if_info_set *if_info_set, const char *name);
++struct pcap_if_info * pcap_if_info_set_find_by_id(struct pcap_if_info_set *if_info_set, int if_id);
++void pcap_if_info_set_free(struct pcap_if_info_set *if_info_set, struct pcap_if_info *if_info);
++struct pcap_if_info * pcap_if_info_set_add(struct pcap_if_info_set *if_info_set, const char *name,
++					   int if_id, int linktype, int snaplen,
++					   const char *filter_str, char *errbuf);
++
++struct pcap_proc_info_set {
++	int proc_info_count;
++	struct pcap_proc_info **proc_infos;
++	int proc_dump_index;
++	
++};
++
++void pcap_proc_info_set_clear(struct pcap_proc_info_set *proc_info_set);
++struct pcap_proc_info * pcap_proc_info_set_find(struct pcap_proc_info_set *proc_info_set,
++						uint32_t pid, const char *name);
++struct pcap_proc_info * pcap_proc_info_set_find_uuid(struct pcap_proc_info_set *proc_info_set,
++						     uint32_t pid, const char *name, const uuid_t uu);
++struct pcap_proc_info * pcap_proc_info_set_find_by_index(struct pcap_proc_info_set *proc_info_set,
++							 uint32_t index);
++void pcap_proc_info_set_free(struct pcap_proc_info_set *proc_info_set,
++			     struct pcap_proc_info *proc_info);
++struct pcap_proc_info * pcap_proc_info_set_add_uuid(struct pcap_proc_info_set *proc_info_set,
++						    uint32_t pid, const char *name, const uuid_t uu, char *errbuf);
++
++/*
++ * To reset information that are specific to each section.
++ * Should be called when adding a new section header block.
++ */
++extern void pcap_ng_init_section_info(pcap_t *);
++
++extern char * pcap_setup_pktap_interface(const char *, char *);
++extern void pcap_cleanup_pktap_interface(const char *);
++
++extern int pcap_ng_dump_pktap(pcap_t *, pcap_dumper_t *, const struct pcap_pkthdr *, const u_char *);
++extern int pcap_ng_dump_pktap_comment(pcap_t *, pcap_dumper_t *, const struct pcap_pkthdr *, const u_char *, const char *);
++extern int pcap_ng_dump_pktap_v2(pcap_t *, pcap_dumper_t *, const struct pcap_pkthdr *, const u_char *, const char *);
++
++struct kern_event_msg;
++extern int pcap_ng_dump_kern_event(pcap_t *, pcap_dumper_t *,
++				   struct kern_event_msg *, struct timeval *);
++
++extern struct pcap_if_info *pcap_ng_dump_if_info(pcap_t *, pcap_dumper_t *, pcapng_block_t,
++						 struct pcap_if_info *);
++
++extern struct pcap_proc_info *pcap_ng_dump_proc_info(pcap_t *, pcap_dumper_t *, pcapng_block_t,
++						 struct pcap_proc_info *);
++
++extern void pcap_ng_dump_init_section_info(pcap_dumper_t *);
++
++extern void pcap_read_bpf_header(pcap_t *p, u_char *bp, struct pcap_pkthdr *pkthdr);
++
++int pcap_set_truncation_mode(pcap_t *p, bool on);
++int pcap_set_pktap_hdr_v2(pcap_t *p, bool on);
++
++#define HAS_PCAP_SET_COMPRESSION 1
++int pcap_set_compression(pcap_t *, int);
++
++#define HAS_PCAP_HEAD_DROP 1
++int pcap_set_head_drop(pcap_t *, int);
++int pcap_get_head_drop(pcap_t *);
++
++int pcap_get_compression_stats(pcap_t *, void *, size_t);
++
++
++#endif /* PRIVATE */
++
++#endif
+--- /dev/null	1674459201.663283000
++++ b/pcapng.c	1674378721.006012127
+@@ -0,0 +1,1405 @@
++/*
++ * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
++ *
++ * @APPLE_LICENSE_HEADER_START@
++ *
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this
++ * file.
++ *
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ *
++ * @APPLE_LICENSE_HEADER_END@
++ */
++
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
++#include <sys/param.h>
++#include <netinet/in.h>
++#include <stdlib.h>
++#include <string.h>
++#include <stdio.h>
++#include <err.h>
++#include <sysexits.h>
++#include <unistd.h>
++#include <sys/uio.h>
++#include "pcapng-private.h"
++
++#include "pcap-int.h"
++#include "pcap-common.h"
++#include "sf-pcapng.h"
++#include "pcap-util.h"
++
++/*
++ * Block cursor - used when processing the contents of a block.
++ * Contains a pointer into the data being processed and a count
++ * of bytes remaining in the block.
++ */
++struct block_cursor {
++	u_char		*data;
++	size_t		data_remaining;
++	bpf_u_int32	block_type;
++};
++
++
++#define PAD_32BIT(x) ((x + 3) & ~3)
++#define PAD_64BIT(x) ((x + 7) & ~7)
++#define PADDED_OPTION_LEN(x) ((x) ? PAD_32BIT(x) + sizeof(struct pcapng_option_header) : 0)
++
++
++void *
++pcap_ng_block_header_ptr(pcapng_block_t block)
++{
++	return (block->pcapng_bufptr);
++}
++
++void *
++pcap_ng_block_fields_ptr(pcapng_block_t block)
++{
++	return (block->pcapng_bufptr +
++		sizeof(struct pcapng_block_header));
++}
++
++void *
++pcap_ng_block_data_ptr(pcapng_block_t block)
++{
++	if (block->pcapng_data_is_external)
++		return (block->pcapng_data_ptr);
++	else
++		return (block->pcapng_bufptr +
++			sizeof(struct pcapng_block_header) +
++			block->pcapng_fields_len);
++}
++
++void *
++pcap_ng_block_records_ptr(pcapng_block_t block)
++{
++	if (block->pcapng_block_type != PCAPNG_BT_NRB)
++		return (NULL);
++	
++	if (block->pcapng_data_is_external)
++		return (block->pcapng_bufptr +
++			sizeof(struct pcapng_block_header) +
++			block->pcapng_fields_len);
++	else
++		return (block->pcapng_bufptr +
++			sizeof(struct pcapng_block_header) +
++			block->pcapng_fields_len +
++			block->pcapng_data_len);
++}
++
++void *
++pcap_ng_block_options_ptr(pcapng_block_t block)
++{
++	if (block->pcapng_block_type == PCAPNG_BT_SPB)
++		return (NULL);
++	
++	if (block->pcapng_data_is_external)
++		return (block->pcapng_bufptr +
++			sizeof(struct pcapng_block_header) +
++			block->pcapng_fields_len +
++			block->pcapng_records_len);
++	else
++		return (block->pcapng_bufptr +
++			sizeof(struct pcapng_block_header) +
++			block->pcapng_fields_len +
++			block->pcapng_data_len +
++			block->pcapng_records_len);
++}
++
++void *
++pcap_ng_block_trailer_ptr(pcapng_block_t block)
++{
++	if (block->pcapng_data_is_external)
++		return (block->pcapng_bufptr +
++			sizeof(struct pcapng_block_header) +
++			block->pcapng_fields_len +
++			block->pcapng_records_len +
++			block->pcapng_options_len);
++	else
++		return (block->pcapng_bufptr +
++			sizeof(struct pcapng_block_header) +
++			block->pcapng_fields_len +
++			block->pcapng_data_len +
++			block->pcapng_records_len +
++			block->pcapng_options_len);
++}
++
++pcapng_block_t
++pcap_ng_block_alloc(size_t len)
++{
++	size_t totallen;
++	u_char *ptr;
++	struct pcapng_block *block;
++	
++	if (len > pcap_ng_block_size_max())
++		return (NULL);
++	
++	/*
++	 * The internal block structure is prepended
++	 */
++	totallen = PAD_64BIT(sizeof(struct pcapng_block)) + len;
++	ptr = malloc(totallen);
++	if (ptr == NULL)
++		return (NULL);
++	
++	block = (struct pcapng_block *)ptr;
++	bzero(block, sizeof(struct pcapng_block));
++	
++	block->pcapng_bufptr = ptr + PAD_64BIT(sizeof(struct pcapng_block));
++	block->pcapng_buflen = len;
++	
++	return (block);
++}
++
++size_t
++pcap_ng_block_size_max()
++{
++    return (2 * MAXIMUM_SNAPLEN);
++}
++
++void
++pcap_ng_free_block(pcapng_block_t block)
++{
++	free(block);
++}
++
++bpf_u_int32
++pcap_ng_block_get_type(pcapng_block_t block)
++{
++	return (block->pcapng_block_type);
++}
++
++bpf_u_int32
++pcap_ng_block_get_len(pcapng_block_t block)
++{
++	return ((bpf_u_int32)block->pcapng_block_len);
++}
++
++int
++pcap_ng_block_is_swapped(pcapng_block_t block)
++{
++	return (block->pcapng_block_swapped);
++}
++
++int
++pcapng_update_block_length(pcapng_block_t block)
++{
++	block->pcapng_block_len = sizeof(struct pcapng_block_header) +
++		block->pcapng_fields_len +
++		block->pcapng_data_len +
++		block->pcapng_records_len +
++		block->pcapng_options_len +
++		sizeof(struct pcapng_block_trailer);
++	
++	if (block->pcapng_block_len > block->pcapng_buflen) {
++		errx(EX_SOFTWARE, "%s block len %lu greater than buffer size %lu",
++		     __func__, block->pcapng_block_len, block->pcapng_buflen);
++	}
++	
++	return (0);
++}
++
++int
++pcap_ng_block_reset(pcapng_block_t block, bpf_u_int32 type)
++{
++	bzero(&block->block_fields_, sizeof(block->block_fields_));
++	
++	switch (type) {
++		case PCAPNG_BT_SHB:
++			block->pcapng_block_type = type;
++			block->pcapng_fields_len = sizeof(struct pcapng_section_header_fields);
++
++			block->pcap_ng_shb_fields.byte_order_magic = PCAPNG_BYTE_ORDER_MAGIC;
++			block->pcap_ng_shb_fields.major_version = PCAPNG_VERSION_MAJOR;
++			block->pcap_ng_shb_fields.minor_version = PCAPNG_VERSION_MINOR;
++			block->pcap_ng_shb_fields.section_length = (uint64_t)-1;
++			break;
++		
++		case PCAPNG_BT_IDB:
++			block->pcapng_block_type = type;
++			block->pcapng_fields_len = sizeof(struct pcapng_interface_description_fields);
++			break;
++		
++		case PCAPNG_BT_PB:
++			block->pcapng_block_type = type;
++			block->pcapng_fields_len = sizeof(struct pcapng_packet_fields);
++			break;
++		
++		case PCAPNG_BT_SPB:
++			block->pcapng_block_type = type;
++			block->pcapng_fields_len = sizeof(struct pcapng_simple_packet_fields);
++			break;
++		
++		case PCAPNG_BT_NRB:
++			block->pcapng_block_type = type;
++			block->pcapng_fields_len = 0;
++			break;
++		
++		case PCAPNG_BT_ISB:
++			block->pcapng_block_type = type;
++			block->pcapng_fields_len = sizeof(struct pcapng_interface_statistics_fields);
++			break;
++		
++		case PCAPNG_BT_EPB:
++			block->pcapng_block_type = type;
++			block->pcapng_fields_len = sizeof(struct pcapng_enhanced_packet_fields);
++			break;
++		
++		case PCAPNG_BT_PIB:
++			block->pcapng_block_type = type;
++			block->pcapng_fields_len = sizeof(struct pcapng_process_information_fields);
++			break;
++		
++		case PCAPNG_BT_OSEV:
++			block->pcapng_block_type = type;
++			block->pcapng_fields_len = sizeof(struct pcapng_os_event_fields);
++			break;
++
++		case PCAPNG_BT_DSB:
++			block->pcapng_block_type = PCAPNG_BT_DSB;
++			block->pcapng_fields_len = sizeof(struct pcapng_decryption_secrets_fields);
++			break;
++
++		default:
++			return (PCAP_ERROR);
++	}
++	
++	block->pcapng_data_ptr = NULL;
++	block->pcapng_data_len = 0;
++	block->pcapng_cap_len = 0;
++	block->pcapng_data_is_external = 0;
++	
++	block->pcapng_records_len = 0;
++	
++	block->pcapng_options_len = 0;
++	
++	pcapng_update_block_length(block);
++	
++	return (0);
++}
++
++struct pcapng_section_header_fields *
++pcap_ng_get_section_header_fields(pcapng_block_t block)
++{
++	if (block != NULL && block->pcapng_block_type == PCAPNG_BT_SHB)
++		return &block->pcap_ng_shb_fields;
++	else
++		return NULL;
++}
++
++struct pcapng_interface_description_fields *
++pcap_ng_get_interface_description_fields(pcapng_block_t block)
++{
++	if (block != NULL && block->pcapng_block_type == PCAPNG_BT_IDB)
++		return &block->pcap_ng_idb_fields;
++	else
++		return NULL;
++}
++
++struct pcapng_enhanced_packet_fields *
++pcap_ng_get_enhanced_packet_fields(pcapng_block_t block)
++{
++	if (block != NULL && block->pcapng_block_type == PCAPNG_BT_EPB)
++		return &block->pcap_ng_epb_fields;
++	else
++		return NULL;
++}
++
++struct pcapng_simple_packet_fields *
++pcap_ng_get_simple_packet_fields(pcapng_block_t block)
++{
++	if (block != NULL && block->pcapng_block_type == PCAPNG_BT_SPB)
++		return &block->pcap_ng_spb_fields;
++	else
++		return NULL;
++}
++
++struct pcapng_packet_fields *
++pcap_ng_get_packet_fields(pcapng_block_t block)
++{
++	if (block != NULL && block->pcapng_block_type == PCAPNG_BT_PB)
++		return &block->pcap_ng_opb_fields;
++	else
++		return NULL;
++}
++
++struct pcapng_interface_statistics_fields *
++pcap_ng_get_interface_statistics_fields(pcapng_block_t block)
++{
++	if (block != NULL && block->pcapng_block_type == PCAPNG_BT_ISB)
++		return &block->pcap_ng_isb_fields;
++	else
++		return NULL;
++}
++
++struct pcapng_process_information_fields *
++pcap_ng_get_process_information_fields(pcapng_block_t block)
++{
++	if (block != NULL && block->pcapng_block_type == PCAPNG_BT_PIB)
++		return &block->pcap_ng_pib_fields;
++	else
++		return NULL;
++}
++
++struct pcapng_os_event_fields *
++pcap_ng_get_os_event_fields(pcapng_block_t block)
++{
++	if (block != NULL && block->pcapng_block_type == PCAPNG_BT_OSEV)
++		return &block->pcap_ng_osev_fields;
++	else
++		return NULL;
++}
++
++struct pcapng_decryption_secrets_fields *
++pcap_ng_get_decryption_secrets_fields(pcapng_block_t block)
++{
++	if (block != NULL && block->pcapng_block_type == PCAPNG_BT_DSB)
++		return &block->pcap_ng_dsb_fields;
++	else
++		return NULL;
++}
++
++int
++pcap_ng_block_does_support_data(pcapng_block_t block)
++{
++	switch (block->pcapng_block_type) {
++		case PCAPNG_BT_PB:
++		case PCAPNG_BT_SPB:
++		case PCAPNG_BT_EPB:
++		case PCAPNG_BT_OSEV:
++		case PCAPNG_BT_DSB:
++			return (1);
++			/* NOT REACHED */
++			
++		default:
++			break;
++	}
++	return (0);
++}
++
++void *
++pcap_ng_block_packet_get_data_ptr(pcapng_block_t block)
++{
++	if (pcap_ng_block_does_support_data(block) == 0)
++		return (NULL);
++	
++	return (block->pcapng_data_ptr);
++}
++
++bpf_u_int32
++pcap_ng_block_packet_get_data_len(pcapng_block_t block)
++{
++	if (pcap_ng_block_does_support_data(block) == 0)
++		return (0);
++	
++	return (block->pcapng_cap_len);
++}
++
++bpf_u_int32
++pcap_ng_block_packet_copy_data(pcapng_block_t block, const void *ptr,
++                               bpf_u_int32 caplen)
++{
++	bpf_u_int32 padding_len = PAD_32BIT(caplen) - caplen;
++	
++	if (pcap_ng_block_does_support_data(block) == 0)
++		return (PCAP_ERROR);
++	
++	if (block->pcapng_block_len + PAD_32BIT(caplen) > block->pcapng_buflen) {
++		warnx("%s block len %lu greater than buffer size %lu",
++			  __func__, block->pcapng_block_len, block->pcapng_buflen);
++		return (PCAP_ERROR);
++	}
++	/*
++	 * Move the name records and options if necessary
++	 */
++	if (block->pcapng_records_len > 0 || block->pcapng_options_len > 0) {
++		u_char *tmp = pcap_ng_block_records_ptr(block) ?
++			pcap_ng_block_records_ptr(block) :
++			pcap_ng_block_options_ptr(block);
++		size_t len = block->pcapng_records_len + block->pcapng_options_len;
++		int32_t offset = PAD_32BIT(caplen) - (int32_t)block->pcapng_data_len;
++		
++		bcopy(tmp, tmp + offset, len);
++	}
++	
++	/*
++	 * TBD: if records or options exist, should move them or error out
++	 */
++	block->pcapng_data_is_external = 0;
++	block->pcapng_data_ptr = pcap_ng_block_data_ptr(block);
++	bcopy(ptr, block->pcapng_data_ptr, caplen);
++	if (padding_len > 0)
++		bzero(block->pcapng_data_ptr + caplen, padding_len);
++	block->pcapng_cap_len = caplen;
++	block->pcapng_data_len = PAD_32BIT(caplen);
++	
++	pcapng_update_block_length(block);
++	
++	return (0);
++}
++
++bpf_u_int32
++pcap_ng_block_packet_set_data(pcapng_block_t block, const void *ptr,
++                              bpf_u_int32 caplen)
++{
++	if (pcap_ng_block_does_support_data(block) == 0)
++		return (PCAP_ERROR);
++	
++	block->pcapng_data_is_external = 1;
++	block->pcapng_data_ptr = (u_char *)ptr;
++	block->pcapng_cap_len = caplen;
++	block->pcapng_data_len = PAD_32BIT(caplen);
++	
++	pcapng_update_block_length(block);
++	
++	return (0);
++}
++
++int
++pcap_ng_block_add_option_with_value(pcapng_block_t block, u_short code,
++                                    const void *value, u_short value_len)
++{
++	size_t optlen = sizeof(struct pcapng_option_header) + PAD_32BIT(value_len);
++	struct pcapng_option_header *opt_header;
++	bpf_u_int32 padding_len = PAD_32BIT(value_len) - value_len;
++	u_char *buffer;
++	u_char *block_option_ptr = pcap_ng_block_options_ptr(block);
++	
++	if (block_option_ptr == NULL) {
++		warnx("%s options not supported for block type %u",
++			  __func__, block->pcapng_block_type);
++		return (PCAP_ERROR);
++	}
++	
++	if (optlen + block->pcapng_block_len > block->pcapng_buflen) {
++		warnx("%s block len %lu greater than buffer size %lu",
++			  __func__, block->pcapng_block_len, block->pcapng_buflen);
++		return (PCAP_ERROR);
++	}
++	
++	opt_header = (struct pcapng_option_header *)(block_option_ptr + block->pcapng_options_len);
++	/* Insert before the end of option */
++	if (block->pcapng_options_len > 0)
++		opt_header -= 1;
++	opt_header->option_code = code;
++	opt_header->option_length = value_len;
++	
++	buffer = (u_char *)(opt_header + 1);
++	
++	bcopy(value, buffer, value_len);
++	
++	if (padding_len > 0)
++		bzero(buffer + value_len, padding_len);
++	
++	/* Add end of option when first option added */
++	if (block->pcapng_options_len == 0)
++		block->pcapng_options_len = sizeof(struct pcapng_option_header);
++	
++	block->pcapng_options_len += optlen;
++	
++	/* Set the end of option at the end of the options */
++	opt_header = (struct pcapng_option_header *)(block_option_ptr + block->pcapng_options_len);
++	opt_header -= 1;
++	opt_header->option_code = PCAPNG_OPT_ENDOFOPT;
++	opt_header->option_length = 0;
++	
++	pcapng_update_block_length(block);
++	
++	return (0);
++}
++
++int
++pcap_ng_block_add_option_with_string(pcapng_block_t block, u_short code, const char *str)
++{
++	return (pcap_ng_block_add_option_with_value(block, code, str, strlen(str)));
++}
++
++int
++pcap_ng_block_add_option_with_uuid(pcapng_block_t block, u_short code, const uuid_t uu)
++{
++	return (pcap_ng_block_add_option_with_value(block, code, uu, sizeof(uuid_t)));
++}
++
++
++static struct pcapng_option_header *
++get_opthdr_from_block_data(struct pcapng_option_header *opthdr, int swapped,
++			   struct block_cursor *cursor, char *errbuf)
++{
++	struct pcapng_option_header *optp;
++	
++	optp = get_from_block_data(cursor, sizeof(*opthdr), errbuf);
++	if (optp == NULL) {
++		/*
++		 * Option header is cut short.
++		 */
++		return (NULL);
++	}
++	*opthdr = *optp;
++	/*
++	 * Byte-swap it if necessary.
++	 */
++	if (swapped) {
++		opthdr->option_code = SWAPSHORT(opthdr->option_code);
++		opthdr->option_length = SWAPSHORT(opthdr->option_length);
++	}
++	
++	return (opthdr);
++}
++
++static void *
++get_optvalue_from_block_data(struct block_cursor *cursor,
++			     struct pcapng_option_header *opthdr, char *errbuf)
++{
++	size_t padded_option_len;
++	void *optvalue;
++	
++	/* Pad option length to 4-byte boundary */
++	padded_option_len = opthdr->option_length;
++	padded_option_len = ((padded_option_len + 3)/4)*4;
++	
++	optvalue = get_from_block_data(cursor, padded_option_len, errbuf);
++	if (optvalue == NULL) {
++		/*
++		 * Option value is cut short.
++		 */
++		return (NULL);
++	}
++	
++	return (optvalue);
++}
++
++
++int
++pcap_ng_block_get_option(pcapng_block_t block, u_short code, struct pcapng_option_info *option_info)
++{
++	struct pcapng_option_header opthdr;
++	int swapped;
++	int num_of_options = 0;
++	struct block_cursor cursor;
++	static char errbuf[PCAP_ERRBUF_SIZE + 1];
++
++	if (option_info == NULL)
++		return (PCAP_ERROR);
++	if (block->pcapng_options_len == 0)
++		goto done;
++	
++	swapped = block->pcapng_block_swapped;
++	
++	cursor.block_type = block->pcapng_block_type;
++	cursor.data = pcap_ng_block_options_ptr(block);
++	cursor.data_remaining = block->pcapng_options_len;
++	
++	while (get_opthdr_from_block_data(&opthdr, swapped, &cursor, errbuf)) {
++		void *value = get_optvalue_from_block_data(&cursor, &opthdr, errbuf);
++		
++		/*
++		 * If option is cut short we cannot parse it, give up
++		 */
++		if (opthdr.option_length != 0 && value == NULL)
++			break;
++		
++		if (code == opthdr.option_code) {
++			option_info->code = opthdr.option_code;
++			option_info->length = opthdr.option_length;
++			option_info->value = value;
++			
++			num_of_options = 1;
++			break;
++		}
++		/*
++		 * Detect end of option delimiter
++		 */
++		if (opthdr.option_code == PCAPNG_OPT_ENDOFOPT)
++			break;
++	}
++	
++done:
++	return (num_of_options);
++}
++
++int
++pcnapng_block_iterate_options(pcapng_block_t block,
++                              pcapng_option_iterator_func opt_iterator_func,
++                              void *context)
++{
++	struct pcapng_option_header opthdr;
++	int swapped;
++	int num_of_options = 0;
++	struct block_cursor cursor;
++	static char errbuf[PCAP_ERRBUF_SIZE + 1];
++
++	if (block == NULL || opt_iterator_func == NULL)
++		return (PCAP_ERROR);
++	swapped = block->pcapng_block_swapped;
++
++	cursor.block_type = block->pcapng_block_type;
++	cursor.data = pcap_ng_block_options_ptr(block);
++	cursor.data_remaining = block->pcapng_options_len;
++
++	while (get_opthdr_from_block_data(&opthdr, swapped, &cursor, errbuf)) {
++		void *value = get_optvalue_from_block_data(&cursor, &opthdr, errbuf);
++		struct pcapng_option_info option_info;
++
++		/*
++		 * If option is cut short we cannot parse it, give up
++		 */
++		if (opthdr.option_length != 0 && value == NULL)
++			break;
++		
++		option_info.code = opthdr.option_code;
++		option_info.length = opthdr.option_length;
++		option_info.value = value;
++			
++		num_of_options++;
++		
++		opt_iterator_func(block, &option_info, context);
++
++		/*
++		 * Detect end of option delimiter
++		 */
++		if (opthdr.option_code == PCAPNG_OPT_ENDOFOPT)
++			break;
++	}
++	
++done:
++	return (num_of_options);
++}
++
++int
++pcnapng_block_iterate_name_records(pcapng_block_t block,
++                                   pcapng_name_record_iterator_func record_iterator_func,
++                                   void *context)
++{
++	struct pcapng_record_header recordhdr;
++	int swapped;
++	int num_of_records = 0;
++	struct block_cursor cursor;
++	static char errbuf[PCAP_ERRBUF_SIZE + 1];
++
++	if (block == NULL || record_iterator_func == NULL)
++		return (PCAP_ERROR);
++	swapped = block->pcapng_block_swapped;
++
++	cursor.block_type = block->pcapng_block_type;
++	cursor.data = pcap_ng_block_records_ptr(block);
++	cursor.data_remaining = block->pcapng_records_len;
++	
++	/*
++	 * Note that we take advantage of the fact that name record headers
++	 * have the same layout as option headers
++	 */
++	while (get_opthdr_from_block_data((struct pcapng_option_header *)&recordhdr,
++									  swapped, &cursor, errbuf)) {
++		struct pcapng_name_record_info record_info;
++		void *value =
++			get_optvalue_from_block_data(&cursor,
++			                             (struct pcapng_option_header *)&recordhdr,
++			                             errbuf);
++
++		/*
++		 * If record is cut short we cannot parse it, give up
++		 */
++		if (recordhdr.record_length != 0 && value == NULL)
++			break;
++		
++		record_info.code = recordhdr.record_type;
++		record_info.length = recordhdr.record_length;
++		record_info.value = value;
++
++		num_of_records++;
++
++		/*
++		 * Detect end of option delimiter
++		 */
++		if (record_info.code == PCAPNG_NRES_ENDOFRECORD)
++			break;
++	}
++	
++done:
++	return (num_of_records);
++}
++
++int
++pcap_ng_block_add_name_record_common(pcapng_block_t block, uint32_t type,
++                                     size_t addrlen, void *addr, const char **names)
++{
++	size_t names_len = 0;
++	int i;
++	const char *p;
++	size_t record_len = 0;
++	struct pcapng_record_header	*record_hdr;
++	size_t padding_len;
++	u_char *buffer;
++	size_t offset;
++	u_char *block_records_ptr = pcap_ng_block_records_ptr(block);
++
++	if (block_records_ptr == NULL)
++		return (PCAP_ERROR);
++	
++	for (i = 0; ; i++) {
++		p = names[i];
++		if (p == NULL || *p == 0)
++			break;
++		names_len += strlen(p) + 1;
++	}
++	
++	record_len = sizeof(struct pcapng_record_header) + addrlen + PAD_32BIT(names_len);
++	if (record_len + block->pcapng_block_len > block->pcapng_buflen) {
++		warnx("%s block len %lu greater than buffer size %lu",
++		      __func__, block->pcapng_block_len, block->pcapng_buflen);
++		return (PCAP_ERROR);
++	}
++	
++	/*
++	 * Move the options if necessary
++	 */
++	if (block->pcapng_options_len > 0) {
++		u_char *tmp = pcap_ng_block_options_ptr(block);
++		
++		bcopy(tmp, tmp + record_len, block->pcapng_options_len);
++	}
++	
++	padding_len = PAD_32BIT(names_len) - names_len;
++	
++	record_hdr = (struct pcapng_record_header*)(block_records_ptr + block->pcapng_records_len);
++	if (block->pcapng_records_len > 0)
++		record_hdr -= 1;
++	record_hdr->record_type = type;
++	record_hdr->record_length = addrlen + PAD_32BIT(names_len);
++	
++	buffer = (u_char *)(record_hdr + 1);
++	bcopy(addr, buffer, addrlen);
++	offset = addrlen;
++	for (i = 0; ; i++) {
++		p = names[i];
++		if (p == NULL || *p == 0)
++			break;
++		u_short slen = strlen(p) + 1;
++		bcopy(p, buffer, slen);
++		offset += slen;
++	}
++	if (padding_len > 0)
++		bzero(buffer + offset, padding_len);
++	
++	block->pcapng_records_len += record_len;
++	
++	pcapng_update_block_length(block);
++
++	return (0);
++}
++
++int
++pcap_ng_block_add_name_record_with_ip4(pcapng_block_t block,
++                                       struct in_addr *in4,
++                                       const char **names)
++{
++	if (block->pcapng_block_type != PCAPNG_BT_NRB)
++		return (PCAP_ERROR);
++	
++	return pcap_ng_block_add_name_record_common(block,
++	                                            PCAPNG_NRES_IP4RECORD,
++	                                            sizeof(struct in_addr),
++	                                            in4,
++	                                            names);
++}
++
++int
++pcap_ng_block_add_name_record_with_ip6(pcapng_block_t block,
++                                       struct in6_addr *in6,
++                                       const char **names)
++{
++	if (block->pcapng_block_type != PCAPNG_BT_NRB)
++		return (PCAP_ERROR);
++	
++	return pcap_ng_block_add_name_record_common(block,
++	                                            PCAPNG_NRES_IP4RECORD,
++	                                            sizeof(struct in6_addr),
++	                                            in6,
++	                                            names);
++}
++
++bpf_u_int32
++pcap_ng_externalize_block(void *buffer, size_t buflen, pcapng_block_t block)
++{
++	struct pcapng_block_header block_header;
++	struct pcapng_block_trailer block_trailer;
++	bpf_u_int32 bytes_written = 0;
++	u_char *ptr;
++	
++	if (buffer == NULL || buflen < block->pcapng_block_len)
++		return (0);
++	
++	ptr = buffer;
++	block_header.block_type = block->pcapng_block_type;
++	block_header.total_length = (bpf_u_int32)block->pcapng_block_len;
++	bcopy(&block_header, ptr + bytes_written, sizeof(struct pcapng_block_header));
++	bytes_written += sizeof(struct pcapng_block_header);
++	
++	switch (block->pcapng_block_type) {
++		case PCAPNG_BT_SHB:
++		case PCAPNG_BT_IDB:
++		case PCAPNG_BT_PB:
++		case PCAPNG_BT_SPB:
++		case PCAPNG_BT_NRB:
++		case PCAPNG_BT_ISB:
++		case PCAPNG_BT_EPB:
++		case PCAPNG_BT_PIB:
++		case PCAPNG_BT_OSEV:
++			if (block->pcapng_block_type == PCAPNG_BT_PB) {
++				if(block->pcap_ng_opb_fields.caplen == 0)
++					block->pcap_ng_opb_fields.caplen = block->pcapng_cap_len;
++				if(block->pcap_ng_opb_fields.len == 0)
++					block->pcap_ng_opb_fields.len = block->pcapng_cap_len;
++			}
++			if (block->pcapng_block_type == PCAPNG_BT_SPB) {
++				if(block->pcap_ng_spb_fields.len == 0)
++					block->pcap_ng_spb_fields.len = block->pcapng_cap_len;
++			}
++			if (block->pcapng_block_type == PCAPNG_BT_EPB) {
++				if(block->pcap_ng_epb_fields.caplen == 0)
++					block->pcap_ng_epb_fields.caplen = block->pcapng_cap_len;
++				if(block->pcap_ng_epb_fields.len == 0)
++					block->pcap_ng_epb_fields.len = block->pcapng_cap_len;
++			}
++			if (block->pcapng_block_type == PCAPNG_BT_OSEV) {
++				if(block->pcap_ng_osev_fields.len == 0)
++					block->pcap_ng_osev_fields.len = block->pcapng_cap_len;
++			}
++			
++			if (block->pcapng_fields_len > 0) {
++				bcopy(&block->pcap_ng_shb_fields, ptr + bytes_written, block->pcapng_fields_len);
++				bytes_written += block->pcapng_fields_len;
++			}
++			break;
++		default:
++			/* Unknown block */
++			return (0);
++			break;
++	}
++	
++	
++	if (block->pcapng_data_len > 0) {
++		bpf_u_int32 padding_len = PAD_32BIT(block->pcapng_cap_len) - block->pcapng_cap_len;
++				
++		bcopy(block->pcapng_data_ptr, ptr + bytes_written, block->pcapng_cap_len);
++		bytes_written += block->pcapng_cap_len;
++		
++		if (padding_len > 0) {
++			bzero(ptr + bytes_written, padding_len);
++			bytes_written += padding_len;
++		}
++	}
++	
++	if (block->pcapng_records_len > 0) {
++		bcopy(pcap_ng_block_records_ptr(block), ptr + bytes_written, block->pcapng_records_len);
++		bytes_written += block->pcapng_records_len;
++	}
++	if (block->pcapng_options_len > 0) {
++		bcopy(pcap_ng_block_options_ptr(block), ptr + bytes_written, block->pcapng_options_len);
++		bytes_written += block->pcapng_options_len;
++	}
++
++	block_trailer.total_length = (bpf_u_int32)block->pcapng_block_len;
++	bcopy(&block_trailer, ptr + bytes_written, bytes_written);
++	bytes_written += sizeof(struct pcapng_block_trailer);		
++		
++	return (bytes_written);
++}
++
++bpf_u_int32
++pcap_ng_dump_block(pcap_dumper_t *p, pcapng_block_t block)
++{
++	struct pcapng_block_header *block_header;
++	struct pcapng_block_trailer *block_trailer;
++	bpf_u_int32 bytes_written = 0;
++	struct iovec iov[4];
++	int iovcnt;
++	char data_padding[3] = { 0, 0, 0 };
++	
++	block_header = (struct pcapng_block_header *)pcap_ng_block_header_ptr(block);
++	block_header->block_type = block->pcapng_block_type;
++	block_header->total_length = (bpf_u_int32)block->pcapng_block_len;
++	
++	switch (block->pcapng_block_type) {
++		case PCAPNG_BT_SHB:
++		case PCAPNG_BT_IDB:
++		case PCAPNG_BT_PB:
++		case PCAPNG_BT_NRB:
++		case PCAPNG_BT_ISB:
++		case PCAPNG_BT_EPB:
++		case PCAPNG_BT_PIB:
++		case PCAPNG_BT_OSEV:
++		case PCAPNG_BT_DSB:
++			if (block->pcapng_block_type == PCAPNG_BT_PB) {
++				if (block->pcap_ng_opb_fields.caplen == 0)
++					block->pcap_ng_opb_fields.caplen = block->pcapng_cap_len;
++				if (block->pcap_ng_opb_fields.len == 0)
++					block->pcap_ng_opb_fields.len = block->pcapng_cap_len;
++			}
++			if (block->pcapng_block_type == PCAPNG_BT_SPB) {
++				if (block->pcap_ng_spb_fields.len == 0)
++					block->pcap_ng_spb_fields.len = block->pcapng_cap_len;
++			}
++			if (block->pcapng_block_type == PCAPNG_BT_EPB) {
++				if (block->pcap_ng_epb_fields.caplen == 0)
++					block->pcap_ng_epb_fields.caplen = block->pcapng_cap_len;
++				if (block->pcap_ng_epb_fields.len == 0)
++					block->pcap_ng_epb_fields.len = block->pcapng_cap_len;
++			}
++
++			// Copy the fixed fields if any
++			if (block->pcapng_fields_len > 0) {
++				bcopy(&block->pcap_ng_shb_fields, pcap_ng_block_fields_ptr(block), block->pcapng_fields_len);
++			}
++			break;
++		default:
++			/* Unknown block */
++			return (0);
++			break;
++	}
++	
++	block_trailer = pcap_ng_block_trailer_ptr(block);
++	block_trailer->total_length = block_header->total_length;
++	
++	iovcnt = 0;
++	iov[iovcnt].iov_len = sizeof(struct pcapng_block_header) + block->pcapng_fields_len;
++	iov[iovcnt].iov_base = block->pcapng_bufptr;
++	iovcnt++;
++	
++	if (block->pcapng_data_len > 0) {
++		bpf_u_int32 padding_len = PAD_32BIT(block->pcapng_cap_len) - block->pcapng_cap_len;
++		
++		iov[iovcnt].iov_len = block->pcapng_cap_len;
++		iov[iovcnt].iov_base = block->pcapng_data_ptr;
++		iovcnt++;
++		
++		/* This is suboptimal... */
++		if (padding_len > 0) {
++			iov[iovcnt].iov_len = padding_len;
++			iov[iovcnt].iov_base = data_padding;
++			iovcnt++;
++		}
++	}
++	/*
++	 * The name records, options and block trailer are contiguous
++	 */
++	iov[iovcnt].iov_len = block->pcapng_records_len +
++		block->pcapng_options_len +
++		sizeof(struct pcapng_block_trailer);
++	if (block->pcapng_records_len > 0)
++		iov[iovcnt].iov_base = pcap_ng_block_records_ptr(block);
++	else if (block->pcapng_options_len > 0)
++		iov[iovcnt].iov_base = pcap_ng_block_options_ptr(block);
++	else
++		iov[iovcnt].iov_base = block_trailer;
++	iovcnt++;
++
++	bytes_written += writev(p->f->_file, iov, iovcnt);
++	
++	return (bytes_written);
++}
++
++int
++pcap_ng_block_internalize_common(pcapng_block_t *pblock, pcap_t *p, u_char *raw_block)
++{
++	pcapng_block_t block = NULL;
++	struct pcapng_block_header bh = *(struct pcapng_block_header *)raw_block;
++	struct block_cursor cursor;
++	int swapped = 0;
++	
++	if (pblock == NULL || raw_block == NULL)
++		return (PCAP_ERROR);
++	
++	if (p != NULL)
++		swapped = p->swapped;
++	
++	if (swapped) {
++		bh.block_type = SWAPLONG(bh.block_type);
++		bh.total_length = SWAPLONG(bh.total_length);
++	}
++	
++	switch (bh.block_type) {
++		case PCAPNG_BT_SHB:
++		    pcap_ng_init_section_info(p);
++		    break;
++		case PCAPNG_BT_IDB:
++		case PCAPNG_BT_PB:
++		case PCAPNG_BT_SPB:
++		case PCAPNG_BT_NRB:
++		case PCAPNG_BT_ISB:
++		case PCAPNG_BT_EPB:
++		case PCAPNG_BT_PIB:
++		case PCAPNG_BT_OSEV:
++		case PCAPNG_BT_DSB:
++			break;
++		default:
++			(void) snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++			                "%s: Unknown block type length %u",
++			                __func__, bh.block_type);
++			goto fail;
++	}
++	/* Check the length is reasonable, limit to 1 MBytes */
++	if (bh.total_length > 1024 * 1024) {
++		(void) snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++		                "%s: Block total length %u is greater than 16 MB",
++		                __func__, bh.total_length);
++		goto fail;
++	}
++	
++	/*
++	 * Some ntar files from wireshark.org do not round up the total block length to
++	 * a multiple of 4 bytes -- they must ignore the 32 bit alignment of the block body!
++	 */
++	bh.total_length = PAD_32BIT(bh.total_length);
++	
++	if (*pblock == NULL) {
++		block = pcap_ng_block_alloc(bh.total_length);
++		if (block == NULL) {
++			(void) snprintf(p->errbuf, PCAP_ERRBUF_SIZE,
++			                "%s: Unknown block type %u",
++			                __func__, bh.block_type);
++			goto fail;
++		}
++	} else {
++		block = *pblock;
++	}
++	block->pcapng_bufptr = raw_block;
++	block->pcapng_buflen = bh.total_length;
++	block->pcapng_buf_is_external = 1;
++	pcap_ng_block_reset(block, bh.block_type);
++	block->pcapng_block_len = bh.total_length;
++	block->pcapng_block_swapped = swapped;
++	
++	cursor.data = raw_block + sizeof(struct pcapng_block_header);
++	cursor.data_remaining = bh.total_length -
++		sizeof(struct pcapng_block_header) -
++		sizeof(struct pcapng_block_trailer);
++	cursor.block_type = bh.block_type;
++	
++	switch (bh.block_type) {
++		case PCAPNG_BT_SHB: {
++			struct pcapng_section_header_fields *shbp = pcap_ng_get_section_header_fields(block);
++			struct pcapng_section_header_fields *rawshb;
++			
++			rawshb = get_from_block_data(&cursor, sizeof(struct pcapng_section_header_fields), p->errbuf);
++			if (rawshb == NULL)
++				goto fail;
++
++			shbp->byte_order_magic = rawshb->byte_order_magic;
++			shbp->major_version = rawshb->major_version;
++			shbp->minor_version = rawshb->minor_version;
++			shbp->section_length = rawshb->section_length;
++			if (swapped) {
++				shbp->byte_order_magic = SWAPLONG(shbp->byte_order_magic);
++				shbp->major_version = SWAPSHORT(shbp->major_version);
++				shbp->minor_version = SWAPSHORT(shbp->minor_version);
++				shbp->section_length = SWAPLONGLONG(shbp->section_length);
++			}
++			
++			break;
++		}
++		case PCAPNG_BT_IDB: {
++			struct pcapng_interface_description_fields *idbp = pcap_ng_get_interface_description_fields(block);
++			struct pcapng_interface_description_fields *rawidb;
++			
++			rawidb = get_from_block_data(&cursor, sizeof(struct pcapng_interface_description_fields), p->errbuf);
++			if (rawidb == NULL)
++				goto fail;
++			
++			idbp->idb_linktype = rawidb->idb_linktype;
++			idbp->idb_reserved = rawidb->idb_reserved;
++			idbp->idb_snaplen = rawidb->idb_snaplen;
++			if (swapped) {
++				idbp->idb_linktype = SWAPSHORT(idbp->idb_linktype);
++				idbp->idb_reserved = SWAPSHORT(idbp->idb_reserved);
++				idbp->idb_snaplen = SWAPLONG(idbp->idb_snaplen);
++			}
++			
++			break;
++		}
++		case PCAPNG_BT_ISB: {
++			struct pcapng_interface_statistics_fields *isbp = pcap_ng_get_interface_statistics_fields(block);
++			struct pcapng_interface_statistics_fields *rawisb;
++			
++			rawisb = get_from_block_data(&cursor, sizeof(struct pcapng_interface_statistics_fields), p->errbuf);
++			if (rawisb == NULL)
++				goto fail;
++			
++			isbp->interface_id = rawisb->interface_id;
++			isbp->timestamp_high = rawisb->timestamp_high;
++			isbp->timestamp_low = rawisb->timestamp_low;
++			if (swapped) {
++				isbp->interface_id = SWAPSHORT(isbp->interface_id);
++				isbp->timestamp_high = SWAPLONG(isbp->timestamp_high);
++				isbp->timestamp_low = SWAPLONG(isbp->timestamp_low);
++			}
++
++			break;
++		}
++		case PCAPNG_BT_EPB: {
++			struct pcapng_enhanced_packet_fields *epbp = pcap_ng_get_enhanced_packet_fields(block);
++			struct pcapng_enhanced_packet_fields *rawepb;
++			void *data;
++			
++			rawepb = get_from_block_data(&cursor, sizeof(struct pcapng_enhanced_packet_fields), p->errbuf);
++			if (rawepb == NULL)
++				goto fail;
++			
++			epbp->interface_id = rawepb->interface_id;
++			epbp->timestamp_high = rawepb->timestamp_high;
++			epbp->timestamp_low = rawepb->timestamp_low;
++			epbp->caplen = rawepb->caplen;
++			epbp->len = rawepb->len;
++			if (swapped) {
++				epbp->interface_id = SWAPLONG(epbp->interface_id);
++				epbp->timestamp_high = SWAPLONG(epbp->timestamp_high);
++				epbp->timestamp_low = SWAPLONG(epbp->timestamp_low);
++				epbp->caplen = SWAPLONG(epbp->caplen);
++				epbp->len = SWAPLONG(epbp->len);
++			}
++			data = get_from_block_data(&cursor, PAD_32BIT(epbp->caplen), p->errbuf);
++			if (data == NULL)
++				goto fail;
++			block->pcapng_data_is_external = 0;
++			block->pcapng_data_ptr = (u_char *)data;
++			block->pcapng_cap_len = epbp->caplen;
++			block->pcapng_data_len = PAD_32BIT(epbp->caplen);
++			
++			break;
++		}
++		case PCAPNG_BT_SPB: {
++			struct pcapng_simple_packet_fields *spbp = pcap_ng_get_simple_packet_fields(block);
++			struct pcapng_simple_packet_fields *rawspb;
++			void *data;
++			uint32_t caplen;
++			
++			rawspb = get_from_block_data(&cursor, sizeof(struct pcapng_simple_packet_fields), p->errbuf);
++			if (rawspb == NULL)
++				goto fail;
++			
++			spbp->len = rawspb->len;
++			if (swapped) {
++				spbp->len = SWAPLONG(spbp->len);
++			}
++			caplen = bh.total_length - sizeof(struct pcapng_simple_packet_fields) -
++				sizeof(struct pcapng_block_header) - sizeof(struct pcapng_block_trailer);
++			if (caplen > spbp->len)
++				caplen = spbp->len;
++			data = get_from_block_data(&cursor, PAD_32BIT(caplen), p->errbuf);
++			if (data == NULL)
++				goto fail;
++			block->pcapng_data_is_external = 0;
++			block->pcapng_data_ptr = (u_char *)data;
++			block->pcapng_cap_len = caplen;
++			block->pcapng_data_len = PAD_32BIT(caplen);
++						
++			break;
++		}
++		case PCAPNG_BT_PB: {
++			struct pcapng_packet_fields *pbp = pcap_ng_get_packet_fields(block);
++			struct pcapng_packet_fields *rawpb;
++			void *data;
++			
++			rawpb = get_from_block_data(&cursor, sizeof(struct pcapng_packet_fields), p->errbuf);
++			if (rawpb == NULL)
++				goto fail;
++			
++			pbp->interface_id = rawpb->interface_id;
++			pbp->drops_count = rawpb->drops_count;
++			pbp->timestamp_high = rawpb->timestamp_high;
++			pbp->timestamp_low = rawpb->timestamp_low;
++			pbp->caplen = rawpb->caplen;
++			pbp->len = rawpb->len;
++			if (swapped) {
++				/* these were written in opposite byte order */
++				pbp->interface_id = SWAPSHORT(pbp->interface_id);
++				pbp->drops_count = SWAPSHORT(pbp->drops_count);
++				pbp->timestamp_high = SWAPLONG(pbp->timestamp_high);
++				pbp->timestamp_low = SWAPLONG(pbp->timestamp_low);
++				pbp->caplen = SWAPLONG(pbp->caplen);
++				pbp->len = SWAPLONG(pbp->len);
++			}
++			
++			data = get_from_block_data(&cursor, PAD_32BIT(pbp->caplen), p->errbuf);
++			if (data == NULL)
++				goto fail;
++			block->pcapng_data_is_external = 0;
++			block->pcapng_data_ptr = (u_char *)data;
++			block->pcapng_cap_len = pbp->caplen;
++			block->pcapng_data_len = PAD_32BIT(pbp->caplen);
++						
++			break;
++		}
++		case PCAPNG_BT_PIB: {
++			struct pcapng_process_information_fields *pibp = pcap_ng_get_process_information_fields(block);
++			struct pcapng_process_information_fields *rawpib;
++			
++			rawpib = get_from_block_data(&cursor, sizeof(struct pcapng_process_information_fields), p->errbuf);
++			if (rawpib == NULL)
++				goto fail;
++			
++			pibp->process_id = rawpib->process_id;
++			if (swapped) {
++				pibp->process_id = SWAPSHORT(rawpib->process_id);
++			}
++			break;
++		}
++		case PCAPNG_BT_NRB: {
++			struct pcapng_record_header *rh;
++
++			while (1) {
++				size_t record_len;
++				
++				rh = get_from_block_data(&cursor, sizeof(struct pcapng_record_header), p->errbuf);
++				if (rh == NULL)
++					goto fail;
++				
++				if (swapped)
++					record_len = SWAPSHORT(rh->record_length);
++				else
++					record_len = rh->record_length;
++				
++				if (get_from_block_data(&cursor, PCAPNG_ROUNDUP32(record_len), p->errbuf) == NULL)
++					goto fail;
++
++				block->pcapng_records_len += sizeof(struct pcapng_record_header) +
++					PCAPNG_ROUNDUP32(record_len);
++				
++				if (rh->record_type == PCAPNG_NRES_ENDOFRECORD)
++					break;
++			}			
++			break;
++		}
++		case PCAPNG_BT_OSEV: {
++			struct pcapng_os_event_fields *osevp = pcap_ng_get_os_event_fields(block);
++			struct pcapng_os_event_fields *rawosevp;
++			void *data;
++			uint32_t caplen;
++			
++			rawosevp = get_from_block_data(&cursor, sizeof(struct pcapng_os_event_fields), p->errbuf);
++			if (rawosevp == NULL)
++				goto fail;
++			
++			osevp->type = rawosevp->type;
++			osevp->timestamp_high = rawosevp->timestamp_high;
++			osevp->timestamp_low = rawosevp->timestamp_low;
++			osevp->len = rawosevp->len;
++			if (swapped) {
++				osevp->type = SWAPLONG(osevp->type);
++				osevp->timestamp_high = SWAPLONG(osevp->timestamp_high);
++				osevp->timestamp_low = SWAPLONG(osevp->timestamp_low);
++				osevp->len = SWAPLONG(osevp->len);
++			}
++			caplen = bh.total_length - sizeof(struct pcapng_os_event_fields) -
++				sizeof(struct pcapng_block_header) - sizeof(struct pcapng_block_trailer);
++			if (caplen > osevp->len)
++				caplen = osevp->len;
++			data = get_from_block_data(&cursor, PAD_32BIT(caplen), p->errbuf);
++			if (data == NULL)
++				goto fail;
++			block->pcapng_data_is_external = 0;
++			block->pcapng_data_ptr = (u_char *)data;
++			block->pcapng_cap_len = caplen;
++			block->pcapng_data_len = PAD_32BIT(caplen);
++			break;
++		}
++		case PCAPNG_BT_DSB: {
++			struct pcapng_decryption_secrets_fields *dsp = pcap_ng_get_decryption_secrets_fields(block);
++			struct pcapng_decryption_secrets_fields *rawdsp;
++			void *data;
++			uint32_t caplen;
++
++			rawdsp = get_from_block_data(&cursor, sizeof(struct pcapng_decryption_secrets_fields), p->errbuf);
++			if (rawdsp == NULL)
++				goto fail;
++			dsp->secrets_type = rawdsp->secrets_type;
++			dsp->secrets_length = rawdsp->secrets_length;
++			if (swapped) {
++				dsp->secrets_type = SWAPLONG(dsp->secrets_type);
++				dsp->secrets_length = SWAPLONG(dsp->secrets_length);
++			}
++
++			caplen = bh.total_length - sizeof(struct pcapng_decryption_secrets_fields) -
++				sizeof(struct pcapng_block_header) - sizeof(struct pcapng_block_trailer);
++			if (caplen > dsp->secrets_length)
++				caplen = dsp->secrets_length;
++			data = get_from_block_data(&cursor, PAD_32BIT(caplen), p->errbuf);
++			if (data == NULL)
++				goto fail;
++			block->pcapng_data_is_external = 0;
++			block->pcapng_data_ptr = (u_char *)data;
++			block->pcapng_cap_len = caplen;
++			block->pcapng_data_len = PAD_32BIT(caplen);
++			break;
++		}
++		default:
++			goto fail;
++	}
++	
++	/*
++	 * Finally compute the length of the options as options come last in blocks
++	 */
++	while (1) {
++		size_t optlen;
++		struct pcapng_option_header *opt;
++
++		opt = get_from_block_data(&cursor, sizeof(struct pcapng_option_header), p->errbuf);
++		/* 
++		 * No, or no more options
++		 */
++		if (opt == NULL)
++			break;
++		
++		if (swapped)
++			optlen = SWAPSHORT(opt->option_length);
++		else
++			optlen = opt->option_length;
++
++		if (get_from_block_data(&cursor, PCAPNG_ROUNDUP32(optlen), p->errbuf) == NULL)
++			goto fail;
++
++		block->pcapng_options_len += sizeof(struct pcapng_option_header) + PCAPNG_ROUNDUP32(optlen);
++
++		if (opt->option_code == PCAPNG_OPT_ENDOFOPT)
++			break;
++	}
++				
++	/* Success */
++	if (*pblock == NULL)
++		*pblock = block;
++	return (0);
++	
++fail:
++	if (*pblock == NULL && block != NULL)
++		pcap_ng_free_block(block);
++	return (PCAP_ERROR);
++}
++
++int
++pcap_ng_block_init_with_raw_block(pcapng_block_t block, pcap_t *p, u_char *raw_block)
++{
++	return pcap_ng_block_internalize_common(&block, p, raw_block);
++}
++
++pcapng_block_t
++pcap_ng_block_alloc_with_raw_block(pcap_t *p, u_char *raw_block)
++{
++	pcapng_block_t block = NULL;
++	
++	if (pcap_ng_block_internalize_common(&block, p, raw_block) == 0)
++		return (block);
++	else
++		return (NULL);
++}
+--- /dev/null	1674459210.464264000
++++ b/pcapng-private.h	1674378728.993706524
+@@ -0,0 +1,78 @@
++/*
++ * Copyright (c) 2012-2015 Apple Inc. All rights reserved.
++ *
++ * @APPLE_LICENSE_HEADER_START@
++ *
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this
++ * file.
++ *
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ *
++ * @APPLE_LICENSE_HEADER_END@
++ */
++
++#ifndef libpcapng_pcapng_private_h
++#define libpcapng_pcapng_private_h
++
++#include <sys/queue.h>
++
++#include "pcap/pcap-ng.h"
++
++struct pcapng_block {
++	u_char		*pcapng_bufptr;
++	size_t		pcapng_buflen;
++	int		pcapng_buf_is_external;
++
++	uint32_t	pcapng_block_type;
++	size_t		pcapng_block_len;
++	int		pcapng_block_swapped;
++
++	size_t		pcapng_fields_len;
++
++	u_char		*pcapng_data_ptr;
++	size_t		pcapng_data_len;
++	u_int32_t	pcapng_cap_len;
++	int		pcapng_data_is_external;
++
++	size_t		pcapng_records_len;
++	size_t		pcapng_options_len;
++
++	union {
++		struct pcapng_section_header_fields		_section_header;
++		struct pcapng_interface_description_fields	_interface_description;
++		struct pcapng_packet_fields			_packet;
++		struct pcapng_simple_packet_fields		_simple_packet;
++		struct pcapng_interface_statistics_fields	_interface_statistics;
++		struct pcapng_enhanced_packet_fields		_enhanced_packet;
++		struct pcapng_process_information_fields	_process_information;
++		struct pcapng_os_event_fields			_os_event_information;
++		struct pcapng_decryption_secrets_fields		_decryption_secrets;
++	} block_fields_;
++};
++
++#define pcap_ng_shb_fields		block_fields_._section_header
++#define pcap_ng_idb_fields		block_fields_._interface_description
++#define pcap_ng_opb_fields		block_fields_._packet
++#define pcap_ng_spb_fields		block_fields_._simple_packet
++#define pcap_ng_isb_fields		block_fields_._interface_statistics
++#define pcap_ng_epb_fields		block_fields_._enhanced_packet
++#define pcap_ng_pib_fields		block_fields_._process_information
++#define pcap_ng_osev_fields		block_fields_._os_event_information
++#define pcap_ng_dsb_fields		block_fields_._decryption_secrets
++
++/* Representation of on file data structure items */
++#define PCAPNG_BYTE_ORDER_MAGIC	0x1A2B3C4D
++#define PCAPNG_MAJOR_VERSION	1
++#define PCAPNG_MINOR_VERSION	0
++
++#endif
+--- /dev/null	1674459289.109814000
++++ b/pcap/pcap-ng.h	1674377221.250444661
+@@ -0,0 +1,566 @@
++/*
++ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
++ *
++ * @APPLE_LICENSE_HEADER_START@
++ *
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this
++ * file.
++ *
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ *
++ * @APPLE_LICENSE_HEADER_END@
++ */
++
++#ifndef libpcap_pcap_ng_h
++#define	libpcap_pcap_ng_h
++
++#include <pcap/pcap.h>
++
++#ifdef PRIVATE
++
++#include <uuid/uuid.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/*
++ * Reference: https://www.winpcap.org/ntar/draft/PCAP-DumpFileFormat.html
++ */
++
++/*
++ * A useful and efficient macro to round up a number to a multiple of 4
++ */
++#define	PCAPNG_ROUNDUP32(x) (((x) + 3) & ~3)
++
++/*
++ * Pcapng blocks share a similar format:
++ * - a block header composed of the block type and the block length
++ * - a set of fixed fields specific to the block type
++ * - for some block types a list of records
++ * - a list of option
++ * - a block trailer that repeats the block length
++ */
++
++/*
++ * Common part at the beginning of all blocks.
++ */
++struct pcapng_block_header {
++	bpf_u_int32	block_type;
++	bpf_u_int32	total_length;
++};
++
++/*
++ * Common trailer at the end of all blocks.
++ */
++struct pcapng_block_trailer {
++	bpf_u_int32	total_length;
++};
++
++/*
++ * Option header.
++ */
++struct pcapng_option_header {
++	u_short		option_code;
++	u_short		option_length;  /* Actual length of option value, not rounded up */
++	/* Followed by option value that is aligned to 32 bits */
++};
++
++/*
++ * Common options that may appear within most types of blocks
++ */
++#define	PCAPNG_OPT_ENDOFOPT	0	/* Zero length option to mark the end of list of options */
++#define	PCAPNG_OPT_COMMENT	1	/* UTF-8 string */
++
++/*
++ * The pcap_ng_xxx_fields structures describe for each type of block
++ * the part of the block body that follows the common block header.
++ *
++ * When using the raw block APIs and format, numbers are in the byte order of the host
++ * that created the blokck.
++ *
++ * When using the high level API, numbers are in the local host byte order.
++ *
++ * Note that addresses and port are always in network byte order.
++ */
++
++/*
++ * Section Header Block.
++ */
++#define	PCAPNG_BT_SHB			0x0A0D0D0A
++
++struct pcapng_section_header_fields {
++	bpf_u_int32	byte_order_magic;
++	u_short		major_version;
++	u_short		minor_version;
++	u_int64_t	section_length;     /* 0xFFFFFFFFFFFFFFFF means length not specified */
++	/* followed by options and trailer */
++};
++
++/*
++ * Byte-order magic value.
++ */
++#define	PCAPNG_BYTE_ORDER_MAGIC	0x1A2B3C4D
++
++/*
++ * Current version number.
++ * If major_version isn't PCAPNG_VERSION_MAJOR,
++ * that means that this code can't read the file.
++ */
++#define	PCAPNG_VERSION_MAJOR	1
++#define	PCAPNG_VERSION_MINOR	0
++
++/*
++ * Option codes for Section Header Block
++ */
++#define	PCAPNG_SHB_HARDWARE     0x00000002	/* UTF-8 string */
++#define	PCAPNG_SHB_OS           0x00000003	/* UTF-8 string */
++#define	PCAPNG_SHB_USERAPPL     0x00000004	/* UTF-8 string */
++
++/*
++ * Interface Description Block.
++ *
++ * Integer values are in the local host byte order
++ */
++#define	PCAPNG_BT_IDB			0x00000001
++
++struct pcapng_interface_description_fields {
++	u_short		idb_linktype;
++	u_short		idb_reserved;
++	bpf_u_int32	idb_snaplen;
++	/* followed by options and trailer */
++};
++
++/*
++ * Options in the IDB.
++ */
++#define	PCAPNG_IF_NAME			2	/* UTF-8 string with the interface name  */
++#define	PCAPNG_IF_DESCRIPTION	3	/* UTF-8 string with the interface description */
++#define	PCAPNG_IF_IPV4ADDR		4	/* 8 bytes long IPv4 address and netmask (may be repeated) */
++#define	PCAPNG_IF_IPV6ADDR		5	/* 17 bytes long IPv6 address and prefix length (may be repeated) */
++#define	PCAPNG_IF_MACADDR		6	/* 6 bytes long interface's MAC address */
++#define	PCAPNG_IF_EUIADDR		7	/* 8 bytes long interface's EUI address */
++#define	PCAPNG_IF_SPEED			8	/* 64 bits number for the interface's speed, in bits/s */
++#define	PCAPNG_IF_TSRESOL		9	/* 8 bits number with interface's time stamp resolution */
++#define	PCAPNG_IF_TZONE			10	/* interface's time zone */
++#define	PCAPNG_IF_FILTER		11	/* variable length filter used when capturing on interface */
++#define	PCAPNG_IF_OS			12	/* UTF-8 string with the OS on which the interface was installed */
++#define	PCAPNG_IF_FCSLEN		13	/* 8 bits number with the FCS length for this interface */
++#define	PCAPNG_IF_TSOFFSET		14	/* 64 bits number offset to add to get absolute time stamps  */
++
++/*
++ * The following options are experimental Apple additions
++ */
++#define	PCAPNG_IF_E_IF_ID		0x8001 /* Interface index of the effective interface */
++	
++/*
++ * Packet Block.
++ *
++ * This block type is obsolete and should not be used to create new capture files.
++ * Use instead Simple Packet Block or Enhanced Packet Block.
++ */
++#define	PCAPNG_BT_PB			0x00000002
++
++struct pcapng_packet_fields {
++	u_short		interface_id;
++	u_short		drops_count;
++	bpf_u_int32	timestamp_high;
++	bpf_u_int32	timestamp_low;
++	bpf_u_int32	caplen;
++	bpf_u_int32	len;
++	/* followed by packet data, options, and trailer */
++};
++
++#define	PCAPNG_PACK_FLAGS       2	/* 32 bits flags word containing link-layer information */
++#define	PCAPNG_PACK_HASH        3	/* Variable length */
++
++/*
++ * Simple Packet Block.
++ */
++#define	PCAPNG_BT_SPB			0x00000003
++
++struct pcapng_simple_packet_fields {
++	bpf_u_int32	len;
++	/* followed by packet data and trailer */
++};
++
++/*
++ * Name Resolution Block
++ *
++ * Block body has no fields and is made of list of name records followed by options
++ */
++#define	PCAPNG_BT_NRB               0x00000004  /* Name Resolution Block */
++
++/*
++ * Record header
++ * Looks very much like an option header
++ */
++struct pcapng_record_header {
++	u_short		record_type;
++	u_short		record_length;  /* Actual length of record value, not rounded up */
++	/* Followed by record value that is aligned to 32 bits */
++};
++
++/*
++ * Name Resolution Record
++ */
++#define	PCAPNG_NRES_ENDOFRECORD     0	/* Zero length record to mark end of list of records */
++#define	PCAPNG_NRES_IP4RECORD       1	/* Variable: 4 bytes IPv4 address followed by zero-terminated strings */
++#define	PCAPNG_NRES_IP6RECORD       2	/* Variable: 16 bytes IPv6 address followed by zero-terminated strings */
++
++/*
++ * Options for Name Resolution Block
++ */
++#define	PCAPNG_NS_DNSNAME       2	/* UTF-8 string with the name of the DNS server */
++#define	PCAPNG_NS_DNSIP4ADDR    3	/* 4 bytes IPv4 address of the DNS server */
++#define	PCAPNG_NS_DNSIP6ADDR    4	/* 16 bytes IPv6 address of the DNS server */
++
++
++/*
++ * Interface Statistics Block
++ */
++#define	PCAPNG_BT_ISB               0x00000005
++
++struct pcapng_interface_statistics_fields {
++	u_short			interface_id;
++	bpf_u_int32		timestamp_high;
++	bpf_u_int32		timestamp_low;
++};
++
++/*
++ * Options for Interface Statistics Block
++ */
++#define	PCAPNG_ISB_STARTTIIME   2	/* 64 bits timestamp in same format as timestamp in packets */
++#define	PCAPNG_ISB_ENDTIME      3	/* 64 bits timestamp in same format as timestamp in packets */
++#define	PCAPNG_ISB_IFRECV       4	/* 64 bits number of packet received during capture */
++#define	PCAPNG_ISB_IFDROP       5	/* 64 bits number of packet dropped due to lack of resources */
++#define	PCAPNG_ISB_FILTERACCEPT 6	/* 64 bits number of packet accepted by filter */
++#define	PCAPNG_ISB_OSDROP       7	/* 64 bits number of packet dropped by OS */
++#define	PCAPNG_ISB_USRDELIV     8	/* 64 bits number of packets delivered to the user */
++
++/*
++ * Enhanced Packet Block.
++ */
++#define	PCAPNG_BT_EPB			0x00000006
++
++struct pcapng_enhanced_packet_fields {
++	bpf_u_int32	interface_id;
++	bpf_u_int32	timestamp_high;
++	bpf_u_int32	timestamp_low;
++	bpf_u_int32	caplen;
++	bpf_u_int32	len;
++	/* followed by packet data, options, and trailer */
++};
++
++#define	PCAPNG_EPB_FLAGS        2	/* 32 bits flags word containing link-layer information */
++#define	PCAPNG_EPB_HASH         3	/* Variable length */
++#define	PCAPNG_EPB_DROPCOUNT    4	/* 64 bits number of packets lost between this packet and the preceding one */
++
++/*
++ * Packet Block Flags (PCAPNG_EPB_FLAGS option)
++ */
++#define	PCAPNG_PBF_DIR_MASK		0x00000003 /* Bits 0-1 Direction */
++#define	PCAPNG_PBF_DIR_INBOUND		0x00000001
++#define	PCAPNG_PBF_DIR_OUTBOUND		0x00000002
++
++#define	PCAPNG_PBF_RT_MASK		0x0000001C /* Bits 2-4 Reception Type */
++#define	PCAPNG_PBF_RT_UNICAST		0x00000004
++#define	PCAPNG_PBF_RT_MULTICAST		0x00000008
++#define	PCAPNG_PBF_RT_BROADCAST		0x0000000C
++#define	PCAPNG_PBF_RT_PROMISC		0x00000010
++
++#define	PCAPNG_PBF_FCS_LEN_MASK		0x000001E0 /* Bits 5-8 FCS length */
++#define	PCAPNG_PBF_FCS_LEN_SHIFT	5
++
++#define	PCAPNG_PBF_RESERVED		0x0000FE00 /* Bits 9-15 Reserved (must be zero) */
++
++#define	PCAPNG_PBF_LL_SYMBOL_ERR	0x80000000 /* Bit 31 Symbol Error */
++#define	PCAPNG_PBF_LL_PREAMBLE_ERR	0x40000000 /* Bit 30 Preamble Error */
++#define	PCAPNG_PBF_LL_STRT_FRM_DEL_ERR	0x20000000 /* Bit 29 Start Frame Delimiter Error */
++#define	PCAPNG_PBF_LL_UNALIGN_FR_ERR	0x10000000 /* Bit 28 Unaligned Frame Error */
++#define	PCAPNG_PBF_LL_INTR_FR_GAP_ERR	0x08000000 /* Bit 27 wrong Inter Frame Gap error */
++#define	PCAPNG_PBF_LL_PKT_TOO_SHORT_ERR	0x04000000 /* Bit 26 Packet Too Short  Error */
++#define	PCAPNG_PBF_LL_PKT_TOO_LONG_ERR	0x02000000 /* Bit 25 Packet Too Short  Error */
++#define	PCAPNG_PBF_LL_CRC_ERROR		0x01000000 /* Bit 24 CRC Error */
++
++/*
++ * Decryption Secrets Block
++ *
++ * based on: https://tools.ietf.org/html/draft-tuexen-opsawg-pcapng-01#section-4.8
++ */
++#define PCAPNG_BT_DSB			0x0000000A
++
++struct pcapng_decryption_secrets_fields {
++	bpf_u_int32	secrets_type;
++	bpf_u_int32	secrets_length;		/* Nnpadded length of secrets data */
++	/* followed by secrets data, options, and trailer */
++};
++
++#define PCAPNG_DST_TLS_KEY_LOG		0x544c534b /* TLS Key Log secrets type */
++#define PCAPNG_DST_WG_KEY_LOG		0x57474b4c /* WireGuard Key Log secrets type */
++
++/*
++ * The following options are experimental Apple additions
++ */
++#define	PCAPNG_EPB_PIB_INDEX	0x8001	/* 32 bits number of process information block within the section */
++#define	PCAPNG_EPB_SVC		0x8002	/* 32 bits number with type of service code */
++#define	PCAPNG_EPB_E_PIB_INDEX	0x8003	/* 32 bits number of the effective process information block */
++#define	PCAPNG_EPB_PMD_FLAGS	0x8004  /* 32 bits flags word of packet metadata flags */
++#define	PCAPNG_EPB_FLOW_ID	0x8005  /* 32 bits flowid */
++#define	PCAPNG_EPB_TRACE_TAG	0x8006  /* 16 bits trace tag */
++
++/*
++ * Packet Metadata Flags (PCAPNG_EPB_PMD_FLAGS option)
++ */
++#define	PCAPNG_EPB_PMDF_NEW_FLOW        0x00000001 /* New Flow */
++#define	PCAPNG_EPB_PMDF_KEEP_ALIVE      0x00000002 /* Keep Alive */
++#define	PCAPNG_EPB_PMDF_REXMIT          0x00000004 /* Retransmit */
++#define	PCAPNG_EPB_PMDF_SOCKET          0x00000008 /* Socket */
++#define	PCAPNG_EPB_PMDF_NEXUS_CHANNEL   0x00000010 /* Nexus Channel */
++#define	PCAPNG_EPB_PMDF_WAKE_PKT        0x00000020 /* Wake packet */
++
++/*
++ * Process Information Block
++ *
++ * NOTE: Experimental, this block type is not standardized
++ */
++#define	PCAPNG_BT_PIB			0x80000001
++
++struct pcapng_process_information_fields {
++	bpf_u_int32	process_id;				/* As reported by OS, may wrap */
++	/* followed by options and trailer */
++};
++
++#define	PCAPNG_PIB_NAME			2	/* UTF-8 string with name of process */
++#define	PCAPNG_PIB_PATH			3	/* UTF-8 string with path of process */
++#define	PCAPNG_PIB_UUID			4	/* 16 bytes of the process UUID */
++
++/*
++ * Process Information Block
++ *
++ * NOTE: Experimental, this block type is not standardized
++ *
++ * Format simiar to simple packet block
++ */
++#define	PCAPNG_BT_OSEV			0x80000002
++	
++struct pcapng_os_event_fields {
++	bpf_u_int32	type;
++	bpf_u_int32	timestamp_high;
++	bpf_u_int32	timestamp_low;
++	bpf_u_int32	len;
++	/* followed by event structure (of size len), options and trailer */
++};
++
++#define	PCAPNG_OSEV_KEV	0x0001
++
++/*
++ * To open for reading a file in pcap-ng file format
++ */
++pcap_t *pcap_ng_fopen_offline(FILE *, char *);
++pcap_t *pcap_ng_open_offline(const char *, char *);
++
++/* 
++ * Open for writing a capture file -- a "savefile" in pcap-ng file format
++ */
++pcap_dumper_t *pcap_ng_dump_open(pcap_t *, const char *);
++pcap_dumper_t *pcap_ng_dump_fopen(pcap_t *, FILE *);
++
++/*
++ * Close a "savefile" being written to
++ */
++void pcap_ng_dump_close(pcap_dumper_t *);
++
++/*
++ * Write a packet to of a save file
++ * This assume the packet are all of the same link type
++ * pcap_ng_dump() is obsolete
++ */
++void pcap_ng_dump(u_char *, const struct pcap_pkthdr *, const u_char *);
++
++/*
++ * Opaque type for internalized pcap-ng blocks
++ * 
++ * Internalized pcap-ng blocks provide a convenient way to 
++ * read and write pcap-ng blocks by hidding most of the detail 
++ * of the block format
++ */
++typedef struct pcapng_block * pcapng_block_t;
++
++/*
++ * Allocate an internalized pcap-ng block data structure.
++ * This allocate a work buffer of the given size to 
++ * hold raw data block content.
++ * The size should be large enough to hold the largest
++ * expected block size.
++ * If the given size is greater than the value returned by
++ * pcap_ng_block_size_max() the allocation fails and NULL
++ * is returned.
++ */
++pcapng_block_t pcap_ng_block_alloc(size_t );
++
++/*
++ * Returns the maximum size that can be passed to pcap_ng_block_alloc().
++ */
++size_t pcap_ng_block_size_max(void);
++
++/*
++ * To intialize or reuse a existing internalized pcap-ng block.
++ * Re-using pcapng_block_t is more efficient than using  
++ * pcap_ng_block_alloc() for each block. 
++ */
++int pcap_ng_block_reset(pcapng_block_t, bpf_u_int32 );
++
++/*
++ * Free the memory associated internalized pcap-ng block
++ */
++void pcap_ng_free_block(pcapng_block_t);
++	
++/*
++ * Write a internalized pcap-ng block into a savefile
++ */
++bpf_u_int32 pcap_ng_dump_block(pcap_dumper_t *, pcapng_block_t);
++
++/*
++ * Write a internalized pcap-ng block into a memory buffer
++ */
++bpf_u_int32 pcap_ng_externalize_block(void *, size_t, pcapng_block_t );
++
++/*
++ * To allocate or initialize a raw block read from pcap-ng file
++ */
++pcapng_block_t pcap_ng_block_alloc_with_raw_block(pcap_t *, u_char *);
++int pcap_ng_block_init_with_raw_block(pcapng_block_t block, pcap_t *p, u_char *);
++
++/*
++ * Essential accessors
++ */
++bpf_u_int32 pcap_ng_block_get_type(pcapng_block_t);
++bpf_u_int32 pcap_ng_block_get_len(pcapng_block_t);
++int pcap_ng_block_is_swapped(pcapng_block_t);
++
++/*
++ * Provide access to field of the block header in the native host byte order
++ */
++struct pcapng_section_header_fields *pcap_ng_get_section_header_fields(pcapng_block_t );
++struct pcapng_interface_description_fields *pcap_ng_get_interface_description_fields(pcapng_block_t );
++struct pcapng_enhanced_packet_fields *pcap_ng_get_enhanced_packet_fields(pcapng_block_t );
++struct pcapng_simple_packet_fields *pcap_ng_get_simple_packet_fields(pcapng_block_t );
++struct pcapng_packet_fields *pcap_ng_get_packet_fields(pcapng_block_t );
++struct pcapng_process_information_fields *pcap_ng_get_process_information_fields(pcapng_block_t );
++struct pcapng_os_event_fields *pcap_ng_get_os_event_fields(pcapng_block_t );
++struct pcapng_decryption_secrets_fields *pcap_ng_get_decryption_secrets_fields(pcapng_block_t );
++
++/*
++ * Set the packet data to the passed buffer by copying into the internal block buffer
++ */
++bpf_u_int32 pcap_ng_block_packet_copy_data(pcapng_block_t, const void *, bpf_u_int32 );
++	
++/*
++ * Set the packet data by referencing an external buffer.
++ */
++bpf_u_int32 pcap_ng_block_packet_set_data(pcapng_block_t block, const void *, bpf_u_int32 );
++	
++/*
++ * Return the first byte of the packet data (if any, or NULL otherwise)
++ */
++void *pcap_ng_block_packet_get_data_ptr(pcapng_block_t);
++	
++/*
++ * Returns the length of the packet data
++ */
++bpf_u_int32 pcap_ng_block_packet_get_data_len(pcapng_block_t);
++	
++/*
++ * Returns zero if the block does not support packet data
++ */
++int pcap_ng_block_does_support_data(pcapng_block_t);
++
++/*
++ * Add a option with the given code and value
++ */
++int pcap_ng_block_add_option_with_value(pcapng_block_t, u_short, const void *, u_short );
++int pcap_ng_block_add_option_with_string(pcapng_block_t, u_short, const char *);
++int pcap_ng_block_add_option_with_uuid(pcapng_block_t, u_short, const uuid_t);
++
++/*
++ * To access option of an internalized block
++ * The fields code and length are in the natural host byte order
++ * The value content may be byte swapped if the block was read from a savefile
++ */
++struct pcapng_option_info {
++	u_short code;
++	u_short length;
++	void *value;
++};
++
++/*
++ * Get an option of the give code
++ * This should be used for otions that may appear at most once in a block as
++ * this returns the first option with the given code
++ * Returns zero their is no option with that code in the block
++ */
++int pcap_ng_block_get_option(pcapng_block_t block, u_short code, struct pcapng_option_info *option_info);
++	
++/*
++ * To walk the list of options in a block.
++ */
++typedef void (*pcapng_option_iterator_func)(pcapng_block_t ,
++											struct pcapng_option_info *,
++											void *);
++int pcnapng_block_iterate_options(pcapng_block_t block,
++								  pcapng_option_iterator_func opt_iterator_func,
++								  void *context);
++int pcap_ng_block_iterate_options(pcapng_block_t block,
++                                  pcapng_option_iterator_func opt_iterator_func,
++                                  void *context);
++
++/*
++ * To access name records
++ * The fields code and length are in the natural host byte order
++ */
++
++struct pcapng_name_record_info {
++	u_short code;
++	u_short length;
++	void *value;
++};
++typedef void (*pcapng_name_record_iterator_func)(pcapng_block_t ,
++												struct pcapng_name_record_info *,
++												void * );
++
++int pcnapng_block_iterate_name_records(pcapng_block_t ,
++									   pcapng_name_record_iterator_func ,
++									   void *);
++int pcap_ng_block_iterate_name_records(pcapng_block_t ,
++                                       pcapng_name_record_iterator_func ,
++                                       void *);
++struct in_addr;
++struct in6_addr;
++
++int pcap_ng_block_add_name_record_with_ip4(pcapng_block_t, struct in_addr *, const char **);
++int pcap_ng_block_add_name_record_with_ip6(pcapng_block_t, struct in6_addr *, const char **);
++	
++/*
++ * To map between DLT and Link Type
++ */
++int dlt_to_linktype(int );
++int linktype_to_dlt(int );
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* PRIVATE */
++
++#endif /* libpcap_pcap_ng_h */
