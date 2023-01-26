@@ -1,0 +1,4 @@
+TORR_CONF_TYPE=autoconf
+
+# Before libiosexec fixes their execve(), we should mark that to use bash's workaround
+ac_cv_sys_interpreter=no
