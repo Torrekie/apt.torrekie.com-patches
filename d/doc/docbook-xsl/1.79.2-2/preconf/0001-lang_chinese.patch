@@ -1,0 +1,193 @@
+--- a/docbook-xsl/common/zh.xml
++++ b/docbook-xsl/common/zh.xml
+@@ -249,15 +249,15 @@
+ <l:context name="webhelp"><l:template name="Search" text="搜索"/>
+ <l:template name="Enter_a_term_and_click" text="输入字词，然后点击 "/>
+ <l:template name="Go" text="去"/>
+-<l:template name="to_perform_a_search" text=" to perform a search."/>
++<l:template name="to_perform_a_search" text=" 以进行搜索。"/>
+ <l:template name="txt_filesfound" text="条结果"/>
+ <l:template name="txt_enter_at_least_1_char" text="您必须输入至少一个字符。"/>
+-<l:template name="txt_browser_not_supported" text="JavaScript is disabled on your browser. Please enable JavaScript to enjoy all the features of this site."/>
++<l:template name="txt_browser_not_supported" text="您的浏览器未启用JavaScript。打开JavaScript以享受本站所有内容。"/>
+ <l:template name="txt_please_wait" text="请稍候。搜索中..."/>
+ <l:template name="txt_results_for" text="结果： "/>
+-<l:template name="TableofContents" text="Contents"/>
+-<l:template name="HighlightButton" text="Toggle search result highlighting"/>
+-<l:template name="Your_search_returned_no_results" text="Your search returned no results."/>
++<l:template name="TableofContents" text="内容"/>
++<l:template name="HighlightButton" text="搜索结果高亮"/>
++<l:template name="Your_search_returned_no_results" text="未能根据您的搜索得到任何结果。"/>
+ </l:context>
+ <l:context name="styles"><l:template name="person-name" text="first-last"/>
+ </l:context>
+@@ -607,7 +607,7 @@
+ <l:template name="Sat" text="周六"/>
+ <l:template name="Sun" text="周日"/>
+ </l:context>
+-<l:context name="htmlhelp"><l:template name="langcode" text="0x0804 Chinese (CHINA)"/>
++<l:context name="htmlhelp"><l:template name="langcode" text="0x0804 Chinese (Simplified)"/>
+ </l:context>
+ <l:context name="index"><l:template name="term-separator" text="，"/>
+ <l:template name="number-separator" text="，"/>
+--- a/docbook-xsl/common/zh_cn.xml
++++ b/docbook-xsl/common/zh_cn.xml
+@@ -249,15 +249,15 @@
+ <l:context name="webhelp"><l:template name="Search" text="搜索"/>
+ <l:template name="Enter_a_term_and_click" text="输入字词，然后点击 "/>
+ <l:template name="Go" text="去"/>
+-<l:template name="to_perform_a_search" text=" to perform a search."/>
++<l:template name="to_perform_a_search" text=" 以进行搜索。"/>
+ <l:template name="txt_filesfound" text="条结果"/>
+ <l:template name="txt_enter_at_least_1_char" text="您必须输入至少一个字符。"/>
+-<l:template name="txt_browser_not_supported" text="JavaScript is disabled on your browser. Please enable JavaScript to enjoy all the features of this site."/>
++<l:template name="txt_browser_not_supported" text="您的浏览器未启用JavaScript。打开JavaScript以享受本站所有内容。"/>
+ <l:template name="txt_please_wait" text="请稍候。搜索中..."/>
+ <l:template name="txt_results_for" text="结果： "/>
+-<l:template name="TableofContents" text="Contents"/>
+-<l:template name="HighlightButton" text="Toggle search result highlighting"/>
+-<l:template name="Your_search_returned_no_results" text="Your search returned no results."/>
++<l:template name="TableofContents" text="内容"/>
++<l:template name="HighlightButton" text="搜索结果高亮"/>
++<l:template name="Your_search_returned_no_results" text="未能根据您的搜索得到任何结果。"/>
+ </l:context>
+ <l:context name="styles"><l:template name="person-name" text="first-last"/>
+ </l:context>
+@@ -607,7 +607,7 @@
+ <l:template name="Sat" text="周六"/>
+ <l:template name="Sun" text="周日"/>
+ </l:context>
+-<l:context name="htmlhelp"><l:template name="langcode" text="0x0804 Chinese (CHINA)"/>
++<l:context name="htmlhelp"><l:template name="langcode" text="0x0804 Chinese (MAINLAND)"/>
+ </l:context>
+ <l:context name="index"><l:template name="term-separator" text="，"/>
+ <l:template name="number-separator" text="，"/>
+--- a/docbook-xsl/common/zh_tw.xml
++++ b/docbook-xsl/common/zh_tw.xml
+@@ -52,10 +52,10 @@
+ <l:gentext key="copyright" text="版權"/>
+ <l:gentext key="Dedication" text="奉獻"/>
+ <l:gentext key="dedication" text="奉獻"/>
+-<l:gentext key="Dialogue" text="Dialogue" lang="en"/>
+-<l:gentext key="dialogue" text="Dialogue" lang="en"/>
+-<l:gentext key="Drama" text="Drama" lang="en"/>
+-<l:gentext key="drama" text="Drama" lang="en"/>
++<l:gentext key="Dialogue" text="對白"/>
++<l:gentext key="dialogue" text="對白"/>
++<l:gentext key="Drama" text="劇本"/>
++<l:gentext key="drama" text="劇本"/>
+ <l:gentext key="Edition" text="版"/>
+ <l:gentext key="edition" text="版"/>
+ <l:gentext key="Editor" text="编者"/>
+@@ -91,8 +91,8 @@
+ <l:gentext key="note" text="注意"/>
+ <l:gentext key="Part" text="部"/>
+ <l:gentext key="part" text="部"/>
+-<l:gentext key="Poetry" text="Poetry" lang="en"/>
+-<l:gentext key="poetry" text="Poetry" lang="en"/>
++<l:gentext key="Poetry" text="詩歌"/>
++<l:gentext key="poetry" text="詩歌"/>
+ <l:gentext key="Preface" text="序言"/>
+ <l:gentext key="preface" text="序言"/>
+ <l:gentext key="Procedure" text="過程"/>
+@@ -156,7 +156,7 @@
+ <l:gentext key="and" text="且"/>
+ <l:gentext key="or" text="或"/>
+ <l:gentext key="by" text="由"/>
+-<l:gentext key="optional-step" text="(Optional) " lang="en"/>
++<l:gentext key="optional-step" text="（可選） "/>
+ <l:gentext key="Edited" text="編輯"/>
+ <l:gentext key="edited" text="編輯"/>
+ <l:gentext key="Editedby" text="編輯者"/>
+@@ -177,8 +177,8 @@
+ <l:gentext key="unexpectedelementname" text="非預期的名稱"/>
+ <l:gentext key="unsupported" text="未支援"/>
+ <l:gentext key="xrefto" text="參照"/>
+-<l:gentext key="video-unsupported" text="Your browser does not support the video tag" lang="en"/>
+-<l:gentext key="audio-unsupported" text="Your browser does not support the audio tag" lang="en"/>
++<l:gentext key="video-unsupported" text="您的瀏覽器未支援 video 標籤"/>
++<l:gentext key="audio-unsupported" text="您的瀏覽器未支援 audio 標籤"/>
+ <l:gentext key="Authors" text="作者"/>
+ <l:gentext key="copyeditor" text="版權"/>
+ <l:gentext key="graphicdesigner" text="美術編輯"/>
+@@ -218,8 +218,8 @@
+ <l:dingbat key="endquote" text="”"/>
+ <l:dingbat key="nestedstartquote" text="‘"/>
+ <l:dingbat key="nestedendquote" text="’"/>
+-<l:dingbat key="singlestartquote" text="‘" lang="en"/>
+-<l:dingbat key="singleendquote" text="’" lang="en"/>
++<l:dingbat key="singlestartquote" text="‘"/>
++<l:dingbat key="singleendquote" text="’"/>
+ <l:dingbat key="bullet" text="•"/>
+ <l:gentext key="hyphenation-character" text="-" lang="en"/>
+ <l:gentext key="hyphenation-push-character-count" text="2" lang="en"/>
+@@ -246,18 +246,18 @@
+ <l:template name="tab" text="→|" lang="en"/>
+ <l:template name="up" text="↑" lang="en"/>
+ </l:context>
+-<l:context name="webhelp"><l:template name="Search" text="Search" lang="en"/>
+-<l:template name="Enter_a_term_and_click" text="Enter a term and click " lang="en"/>
++<l:context name="webhelp"><l:template name="Search" text="搜索"/>
++<l:template name="Enter_a_term_and_click" text="鍵入字詞後點擊 "/>
+ <l:template name="Go" text="Go" lang="en"/>
+-<l:template name="to_perform_a_search" text=" to perform a search." lang="en"/>
+-<l:template name="txt_filesfound" text="Results" lang="en"/>
+-<l:template name="txt_enter_at_least_1_char" text="You must enter at least one character." lang="en"/>
+-<l:template name="txt_browser_not_supported" text="JavaScript is disabled on your browser. Please enable JavaScript to enjoy all the features of this site." lang="en"/>
+-<l:template name="txt_please_wait" text="Please wait. Search in progress..." lang="en"/>
+-<l:template name="txt_results_for" text="Results for: " lang="en"/>
+-<l:template name="TableofContents" text="Contents" lang="en"/>
+-<l:template name="HighlightButton" text="Toggle search result highlighting" lang="en"/>
+-<l:template name="Your_search_returned_no_results" text="Your search returned no results." lang="en"/>
++<l:template name="to_perform_a_search" text=" 來執行搜索。"/>
++<l:template name="txt_filesfound" text="條結果"/>
++<l:template name="txt_enter_at_least_1_char" text="至少需要鍵入一個字符。"/>
++<l:template name="txt_browser_not_supported" text="您的瀏覽器未啟用JavaScript。開啟JavaScript以享受本站點所有內容。"/>
++<l:template name="txt_please_wait" text="正在搜尋，請稍等⋯"/>
++<l:template name="txt_results_for" text="結果："/>
++<l:template name="TableofContents" text="內容"/>
++<l:template name="HighlightButton" text="搜索結果高亮"/>
++<l:template name="Your_search_returned_no_results" text="未能根據您的搜索找到任何結果。"/>
+ </l:context>
+ <l:context name="styles"><l:template name="person-name" text="first-last"/>
+ </l:context>
+@@ -484,11 +484,11 @@
+ <l:template name="olink.document.citation" text=" in %o" lang="en"/>
+ <l:template name="olink.page.citation" text=" (page %p)" lang="en"/>
+ <l:template name="page.citation" text=" [%p]"/>
+-<l:template name="page" text="(page %p)" lang="en"/>
+-<l:template name="docname" text=" in %o" lang="en"/>
+-<l:template name="docnamelong" text=" in the document titled %o" lang="en"/>
++<l:template name="page" text="（第 %p 頁）"/>
++<l:template name="docname" text=" 在 %o"/>
++<l:template name="docnamelong" text=" 在文檔標題 %o"/>
+ <l:template name="pageabbrev" text="(p. %p)" lang="en"/>
+-<l:template name="Page" text="Page %p" lang="en"/>
++<l:template name="Page" text="第 %p 頁"/>
+ <l:template name="topic" text="%t" lang="en"/>
+ <l:template name="dialogue" text="%t" lang="en"/>
+ <l:template name="drama" text="%t" lang="en"/>
+@@ -564,7 +564,7 @@
+ </l:context>
+ <l:context name="datetime"><l:template name="format" text="m/d/Y"/>
+ </l:context>
+-<l:context name="termdef"><l:template name="prefix" text="[Definition: "/>
++<l:context name="termdef"><l:template name="prefix" text="[定義: "/>
+ <l:template name="suffix" text="]"/>
+ </l:context>
+ <l:context name="datetime-full"><l:template name="January" text="一月"/>
+@@ -646,10 +646,10 @@
+ <l:template name="location.sep" text=". "/>
+ <l:template name="serie.sep" text=". "/>
+ <l:template name="notice.sep" text=". "/>
+-<l:template name="access" text="Available "/>
+-<l:template name="acctoo" text="Also available "/>
+-<l:template name="onwww" text="from World Wide Web"/>
+-<l:template name="oninet" text="from Internet"/>
++<l:template name="access" text="可用 "/>
++<l:template name="acctoo" text="也可用 "/>
++<l:template name="onwww" text="從萬維網"/>
++<l:template name="oninet" text="從互聯網"/>
+ <l:template name="access.end" text=": "/>
+ <l:template name="link1" text="&lt;"/>
+ <l:template name="link2" text="&gt;"/>

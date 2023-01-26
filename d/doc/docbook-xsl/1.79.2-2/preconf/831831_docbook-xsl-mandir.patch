@@ -1,0 +1,30 @@
+From: Michael Biebl <biebl@debian.org>
+Date: Wed, 7 Sep 2016 01:37:47 +0200
+Subject: Fix bad .so links in man pages
+
+Bug-Fedora: https://bugzilla.redhat.com/show_bug.cgi?id=%23727251
+Bug-Debian: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=831831
+---
+ docbook-xsl/manpages/other.xsl | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/docbook-xsl/manpages/other.xsl b/docbook-xsl/manpages/other.xsl
+index 0e10d9c..31c2ffb 100644
+--- a/docbook-xsl/manpages/other.xsl
++++ b/docbook-xsl/manpages/other.xsl
+@@ -558,7 +558,14 @@
+           <xsl:with-param name="message-prolog">Note: </xsl:with-param>
+           <xsl:with-param name="message-epilog"> (soelim stub)</xsl:with-param>
+           <xsl:with-param name="content">
+-            <xsl:value-of select="'.so '"/>
++            <xsl:choose>
++              <xsl:when test="$man.output.in.separate.dir = 0">
++              <xsl:value-of select="concat('.so man', $section, '/')"/>
++              </xsl:when>
++              <xsl:otherwise>
++              <xsl:value-of select="'.so '"/> <!-- added case -->
++              </xsl:otherwise>
++              </xsl:choose>
+             <xsl:variable name="full.filename">
+               <xsl:call-template name="make.adjusted.man.filename">
+                 <xsl:with-param name="name" select="$first.refname"/>

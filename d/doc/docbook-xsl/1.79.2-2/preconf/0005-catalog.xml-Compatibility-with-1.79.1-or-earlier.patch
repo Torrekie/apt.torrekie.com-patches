@@ -1,0 +1,40 @@
+From: Boyuan Yang <byang@debian.org>
+Date: Tue, 2 Jun 2020 22:11:52 -0400
+Subject: catalog.xml: Compatibility with 1.79.1 or earlier
+
+The docbook-xsl project changed the canonical URI since 1.79.2.
+Besides changes made in debian/*.xmlcatalogs files, this patch
+completes the support of the old URI so that existing software
+does not break with changed registered URI.
+
+Forwarded: not-needed
+Last-Update: 2020-06-02
+---
+ docbook-xsl-ns/catalog.xml | 3 +++
+ docbook-xsl/catalog.xml    | 3 +++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/docbook-xsl-ns/catalog.xml b/docbook-xsl-ns/catalog.xml
+index 9a5fb53..f52948a 100644
+--- a/docbook-xsl-ns/catalog.xml
++++ b/docbook-xsl-ns/catalog.xml
+@@ -5,4 +5,7 @@
+   <rewriteSystem systemIdStartString="http://cdn.docbook.org/release/xsl/current/" rewritePrefix="./"/>
+   <rewriteURI uriStartString="http://cdn.docbook.org/release/xsl/1.79.2/" rewritePrefix="./"/>
+   <rewriteSystem systemIdStartString="http://cdn.docbook.org/release/xsl/1.79.2/" rewritePrefix="./"/>
++  <!-- Debian-specific patch: Also support old URI of v1.79.1 or earlier -->
++  <rewriteURI uriStartString="http://docbook.sourceforge.net/release/xsl-ns/current/" rewritePrefix="./"/>
++  <rewriteSystem systemIdStartString="http://docbook.sourceforge.net/release/xsl-ns/current/" rewritePrefix="./"/>
+ </catalog>
+diff --git a/docbook-xsl/catalog.xml b/docbook-xsl/catalog.xml
+index 65053f8..9b81cb4 100644
+--- a/docbook-xsl/catalog.xml
++++ b/docbook-xsl/catalog.xml
+@@ -5,4 +5,7 @@
+   <rewriteSystem systemIdStartString="http://cdn.docbook.org/release/xsl-nons/current/" rewritePrefix="./"/>
+   <rewriteURI uriStartString="http://cdn.docbook.org/release/xsl-nons/1.79.2/" rewritePrefix="./"/>
+   <rewriteSystem systemIdStartString="http://cdn.docbook.org/release/xsl-nons/1.79.2/" rewritePrefix="./"/>
++  <!-- Debian-specific patch: Also support old URI of v1.79.1 or earlier -->
++  <rewriteURI uriStartString="http://docbook.sourceforge.net/release/xsl/current/" rewritePrefix="./"/>
++  <rewriteSystem systemIdStartString="http://docbook.sourceforge.net/release/xsl/current/" rewritePrefix="./"/>
+ </catalog>
