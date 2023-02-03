@@ -1,0 +1,24 @@
+From: James Calligeros <jcalligeros99@gmail.com>
+Date: Sat, 9 Jul 2022 15:08:41 +1000
+Subject: [PATCH 19/24] lscpu: add missing Apple parts
+
+Signed-off-by: James Calligeros <jcalligeros99@gmail.com>
+---
+ sys-utils/lscpu-arm.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/sys-utils/lscpu-arm.c b/sys-utils/lscpu-arm.c
+index a266015..7d60f37 100644
+--- a/sys-utils/lscpu-arm.c
++++ b/sys-utils/lscpu-arm.c
+@@ -163,6 +163,10 @@ static const struct id_part apple_part[] = {
+     { 0x021, "Firestorm (A14)" },
+     { 0x022, "Icestorm (M1)" },
+     { 0x023, "Firestorm (M1)" },
++    { 0x024, "Icestorm (M1 Pro)" },
++    { 0x025, "Firestorm (M1 Pro)" },
++    { 0x028, "Icestorm (M1 Max)" },
++    { 0x029, "Firestorm (M1 Max)" },
+     { 0x030, "Blizzard (A15)" },
+     { 0x031, "Avalanche (A15)" },
+     { 0x032, "Blizzard (M2)" },

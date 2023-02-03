@@ -1,0 +1,21 @@
+From: Chris Hofstaedtler <zeha@debian.org>
+Date: Thu, 14 Apr 2022 11:47:20 +0000
+Subject: Install lsfd into /usr/bin
+
+---
+ misc-utils/Makemodule.am | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/misc-utils/Makemodule.am b/misc-utils/Makemodule.am
+index cc18acb..9a91c88 100644
+--- a/misc-utils/Makemodule.am
++++ b/misc-utils/Makemodule.am
+@@ -247,7 +247,7 @@ hardlink_CFLAGS = $(AM_CFLAGS)
+ endif
+ 
+ if BUILD_LSFD
+-bin_PROGRAMS += lsfd
++usrbin_exec_PROGRAMS += lsfd
+ MANPAGES += misc-utils/lsfd.1
+ dist_noinst_DATA += misc-utils/lsfd.1.adoc
+ lsfd_SOURCES = \

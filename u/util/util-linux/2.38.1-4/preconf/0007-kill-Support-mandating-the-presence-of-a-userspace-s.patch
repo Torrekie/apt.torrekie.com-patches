@@ -1,0 +1,147 @@
+From: Chris Down <chris@chrisdown.name>
+Date: Wed, 26 Oct 2022 15:47:36 +0100
+Subject: [PATCH 07/24] kill: Support mandating the presence of a userspace
+ signal handler
+
+In production we've had several incidents over the years where a process
+has a signal handler registered for SIGHUP or one of the SIGUSR signals
+which can be used to signal a request to reload configs, rotate log
+files, and the like. While this may seem harmless enough, what we've
+seen happen repeatedly is something like the following:
+
+1. A process is using SIGHUP/SIGUSR[12] to request some
+   application-handled state change -- reloading configs, rotating a log
+   file, etc;
+2. This kind of request is deprecated and removed, so the signal handler
+   is removed. However, a site where the signal might be sent from is
+   missed (often logrotate or a service manager);
+3. Because the default disposition of these signals is terminal, sooner
+   or later these applications are going to be sent SIGHUP or similar
+   and end up unexpectedly killed.
+
+I know for a fact that we're not the only organistion experiencing this:
+in general, signal use is pretty tricky to reason about and safely
+remove because of the fairly aggressive SIG_DFL behaviour for some
+common signals, especially for SIGHUP which has a particularly ambiguous
+meaning. Especially in a large, highly interconnected codebase,
+reasoning about signal interactions between system configuration and
+applications can be highly complex, and it's inevitable that on occasion
+a callsite will be missed.
+
+In some cases the right call to avoid this will be to migrate services
+towards other forms of IPC for this purpose, but inevitably there will
+be some services which must continue using signals, so we need a safe
+way to support them.
+
+This patch adds support for the -r/--require-handler flag, which checks
+if a userspace handler is present for the signal being sent. If it is
+not, the process will be skipped.
+
+With this flag we can enforce that all SIGHUP reload cases and SIGUSR
+equivalents use --require-handler. This effectively mitigates the case
+we've seen time and time again where SIGHUP is used to rotate log files
+or reload configs, but the sending site is mistakenly left present after
+the removal of signal handler, resulting in unintended termination of
+the process.
+
+Signed-off-by: Chris Down <chris@chrisdown.name>
+---
+ misc-utils/kill.1.adoc |  2 ++
+ misc-utils/kill.c      | 36 ++++++++++++++++++++++++++++++++++++
+ 2 files changed, 38 insertions(+)
+
+diff --git a/misc-utils/kill.1.adoc b/misc-utils/kill.1.adoc
+index 4a6996a..40ab024 100644
+--- a/misc-utils/kill.1.adoc
++++ b/misc-utils/kill.1.adoc
+@@ -62,6 +62,8 @@ Similar to *-l*, but it will print signal names and their corresponding numbers.
+ Do not restrict the command-name-to-PID conversion to processes with the same UID as the present process.
+ *-p*, *--pid*::
+ Only print the process ID (PID) of the named processes, do not send any signals.
++*-r*, *--require-handler*::
++Do not send the signal if it is not caught in userspace by the signalled process.
+ *--verbose*::
+ Print PID(s) that will be signaled with *kill* along with the signal.
+ *-q*, *--queue* _value_::
+diff --git a/misc-utils/kill.c b/misc-utils/kill.c
+index f557aac..c469074 100644
+--- a/misc-utils/kill.c
++++ b/misc-utils/kill.c
+@@ -95,6 +95,7 @@ struct kill_control {
+ 		check_all:1,
+ 		do_kill:1,
+ 		do_pid:1,
++		require_handler:1,
+ 		use_sigval:1,
+ #ifdef UL_HAVE_PIDFD
+ 		timeout:1,
+@@ -212,6 +213,7 @@ static void __attribute__((__noreturn__)) usage(void)
+ 	fputs(_(" -p, --pid              print pids without signaling them\n"), out);
+ 	fputs(_(" -l, --list[=<signal>]  list signal names, or convert a signal number to a name\n"), out);
+ 	fputs(_(" -L, --table            list signal names and numbers\n"), out);
++	fputs(_(" -r, --require-handler  do not send signal if signal handler is not present\n"), out);
+ 	fputs(_("     --verbose          print pids that will be signaled\n"), out);
+ 
+ 	fputs(USAGE_SEPARATOR, out);
+@@ -302,6 +304,10 @@ static char **parse_arguments(int argc, char **argv, struct kill_control *ctl)
+ 			print_all_signals(stdout, 1);
+ 			exit(EXIT_SUCCESS);
+ 		}
++		if (!strcmp(arg, "-r") || !strcmp(arg, "--require-handler")) {
++			ctl->require_handler = 1;
++			continue;
++		}
+ 		if (!strcmp(arg, "-p") || !strcmp(arg, "--pid")) {
+ 			ctl->do_pid = 1;
+ 			if (ctl->do_kill)
+@@ -448,6 +454,32 @@ static int kill_verbose(const struct kill_control *ctl)
+ 	return rc;
+ }
+ 
++static int check_signal_handler(const struct kill_control *ctl)
++{
++	uintmax_t sigcgt = 0;
++	int rc = 0, has_hnd = 0;
++	struct path_cxt *pc;
++
++	if (!ctl->require_handler)
++		return 1;
++
++	pc = ul_new_procfs_path(ctl->pid, NULL);
++	if (!pc)
++		return -ENOMEM;
++
++	rc = procfs_process_get_stat_nth(pc, 34, &sigcgt);
++	if (rc)
++		return -EINVAL;
++
++	ul_unref_path(pc);
++
++	has_hnd = ((1UL << (ctl->numsig - 1)) & sigcgt) != 0;
++	if (ctl->verbose && !has_hnd)
++		printf(_("not signalling pid %d, it has no userspace handler for signal %d\n"), ctl->pid, ctl->numsig);
++
++	return has_hnd;
++}
++
+ int main(int argc, char **argv)
+ {
+ 	struct kill_control ctl = { .numsig = SIGTERM };
+@@ -470,6 +502,8 @@ int main(int argc, char **argv)
+ 		errno = 0;
+ 		ctl.pid = strtol(ctl.arg, &ep, 10);
+ 		if (errno == 0 && ep && *ep == '\0' && ctl.arg < ep) {
++			if (check_signal_handler(&ctl) <= 0)
++				continue;
+ 			if (kill_verbose(&ctl) != 0)
+ 				nerrs++;
+ 			ct++;
+@@ -491,6 +525,8 @@ int main(int argc, char **argv)
+ 					continue;
+ 				if (procfs_dirent_get_pid(d, &ctl.pid) != 0)
+ 					continue;
++				if (check_signal_handler(&ctl) <= 0)
++					continue;
+ 
+ 				if (kill_verbose(&ctl) != 0)
+ 					nerrs++;

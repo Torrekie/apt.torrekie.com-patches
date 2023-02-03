@@ -1,0 +1,52 @@
+From: =?utf-8?q?Petr_=C5=A0tetiar?= <ynezz@true.cz>
+Date: Thu, 22 Sep 2022 11:49:13 +0200
+Subject: [PATCH 01/24] lib/path: ul_path_cpuparse: fix parsing of empty sysfs
+ files
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 8bit
+
+Kernel 5.15 returns empty content for topology/thread_siblings on
+aarch64 platform, which in conjunction of uninitialized `buf` memory
+buffer results in the garbage:
+
+ (gdb) p buf
+ $14 = " @\377\367\177\000\000\000\275\000\347j\032\236"
+
+This garbage is then being later consumed by underlying helper functions
+like for example cpumask_parse() and this leads to the following crash
+later:
+
+ in __libc_free (p=0x7ff7f67c00) at src/malloc/mallocng/free.c:105
+ in free (p=<optimized out>) at src/malloc/free.c:5
+ in add_cpuset_to_array (setsize=<optimized out>, set=<optimized out>, items=<optimized out>, ary=<optimized out>) at ../sys-utils/lscpu-topology.c:29
+ in cputype_read_topology (cxt=cxt@entry=0x7ff7fffe70, ct=0x4298a0) at ../sys-utils/lscpu-topology.c:153
+ in lscpu_read_topology (cxt=cxt@entry=0x7ff7fffe70) at ../sys-utils/lscpu-topology.c:629
+ in main (argc=1, argv=0x7ffffffdb8) at ../sys-utils/lscpu.c:1341
+
+It looks like the problem is that current logic expects fgets() to set
+errno on failure, but fgets() is not documented to do so and and neither
+glibc nor musl set errno.  So if errno was set to 0 before fgets() call,
+the failure from fgets() is ignored and then invalid buffer is being
+parsed.
+
+Fixes: #1810
+Suggested-by: Thomas Weißschuh <thomas@t-8ch.de>
+Signed-off-by: Petr Štetiar <ynezz@true.cz>
+---
+ lib/path.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/path.c b/lib/path.c
+index 42b4ead..8da6c06 100644
+--- a/lib/path.c
++++ b/lib/path.c
+@@ -1028,7 +1028,7 @@ static int ul_path_cpuparse(struct path_cxt *pc, cpu_set_t **set, int maxcpus, i
+ 	if (!f)
+ 		return -errno;
+ 
+-	rc = fgets(buf, len, f) == NULL ? -errno : 0;
++	rc = fgets(buf, len, f) == NULL ? -EIO : 0;
+ 	fclose(f);
+ 
+ 	if (rc)

@@ -1,0 +1,41 @@
+From: James Calligeros <jcalligeros99@gmail.com>
+Date: Sat, 9 Jul 2022 14:52:35 +1000
+Subject: [PATCH 18/24] lscpu: make Apple part names human-friendly
+
+The internal Apple model numbers for the SoCs are somewhat
+confusing given that they are mostly similar and differ by only
+one or two digits. Instead, use the public nomenclature for these
+chips to avoid ambiguity and beautify the output.
+
+Signed-off-by: James Calligeros <jcalligeros99@gmail.com>
+---
+ sys-utils/lscpu-arm.c | 16 ++++++++--------
+ 1 file changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/sys-utils/lscpu-arm.c b/sys-utils/lscpu-arm.c
+index 7986fa3..a266015 100644
+--- a/sys-utils/lscpu-arm.c
++++ b/sys-utils/lscpu-arm.c
+@@ -159,14 +159,14 @@ static const struct id_part marvell_part[] = {
+ };
+ 
+ static const struct id_part apple_part[] = {
+-    { 0x020, "Icestorm-T8101" },
+-    { 0x021, "Firestorm-T8101" },
+-    { 0x022, "Icestorm-T8103" },
+-    { 0x023, "Firestorm-T8103" },
+-    { 0x030, "Blizzard-T8110" },
+-    { 0x031, "Avalanche-T8110" },
+-    { 0x032, "Blizzard-T8112" },
+-    { 0x033, "Avalanche-T8112" },
++    { 0x020, "Icestorm (A14)" },
++    { 0x021, "Firestorm (A14)" },
++    { 0x022, "Icestorm (M1)" },
++    { 0x023, "Firestorm (M1)" },
++    { 0x030, "Blizzard (A15)" },
++    { 0x031, "Avalanche (A15)" },
++    { 0x032, "Blizzard (M2)" },
++    { 0x033, "Avalanche (M2)" },
+     { -1, "unknown" },
+ };
+ 

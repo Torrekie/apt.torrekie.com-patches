@@ -1,0 +1,41 @@
+From: Karel Zak <kzak@redhat.com>
+Date: Mon, 19 Sep 2022 14:23:25 +0200
+Subject: [PATCH 05/24] lsblk: fix endless loop if device specified more than
+ once
+
+Fixes: https://github.com/util-linux/util-linux/issues/1814
+Signed-off-by: Karel Zak <kzak@redhat.com>
+---
+ misc-utils/lsblk-devtree.c | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/misc-utils/lsblk-devtree.c b/misc-utils/lsblk-devtree.c
+index ce9d3e8..6f9dc54 100644
+--- a/misc-utils/lsblk-devtree.c
++++ b/misc-utils/lsblk-devtree.c
+@@ -282,8 +282,25 @@ void lsblk_unref_devtree(struct lsblk_devtree *tr)
+ 	}
+ }
+ 
++static int has_root(struct lsblk_devtree *tr, struct lsblk_device *dev)
++{
++	struct lsblk_iter itr;
++	struct lsblk_device *x = NULL;
++
++	lsblk_reset_iter(&itr, LSBLK_ITER_FORWARD);
++
++	while (lsblk_devtree_next_root(tr, &itr, &x) == 0) {
++		if (x == dev)
++			return 1;
++	}
++	return 0;
++}
++
+ int lsblk_devtree_add_root(struct lsblk_devtree *tr, struct lsblk_device *dev)
+ {
++	if (has_root(tr, dev))
++		return 0;
++
+ 	if (!lsblk_devtree_has_device(tr, dev))
+ 		lsblk_devtree_add_device(tr, dev);
+ 

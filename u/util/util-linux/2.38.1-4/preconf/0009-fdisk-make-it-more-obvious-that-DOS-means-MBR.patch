@@ -1,0 +1,46 @@
+From: Karel Zak <kzak@redhat.com>
+Date: Thu, 10 Nov 2022 09:24:23 +0100
+Subject: [PATCH 09/24] fdisk: make it more obvious that DOS means MBR
+
+Fixes: https://github.com/util-linux/util-linux/issues/1890
+Signed-off-by: Karel Zak <kzak@redhat.com>
+---
+ disk-utils/fdisk-menu.c | 4 ++--
+ libfdisk/src/dos.c      | 2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/disk-utils/fdisk-menu.c b/disk-utils/fdisk-menu.c
+index 2f22e59..b41754b 100644
+--- a/disk-utils/fdisk-menu.c
++++ b/disk-utils/fdisk-menu.c
+@@ -122,7 +122,7 @@ static const struct menu menu_generic = {
+ 		MENU_BENT ('q', N_("quit without saving changes")),
+ 		MENU_XENT ('r', N_("return to main menu")),
+ 
+-		MENU_ENT_NEST('r', N_("return from BSD to DOS"), FDISK_DISKLABEL_BSD, FDISK_DISKLABEL_DOS),
++		MENU_ENT_NEST('r', N_("return from BSD to DOS (MBR)"), FDISK_DISKLABEL_BSD, FDISK_DISKLABEL_DOS),
+ 
+ 		MENU_ENT_NEST('r', N_("return from protective/hybrid MBR to GPT"), FDISK_DISKLABEL_DOS, FDISK_DISKLABEL_GPT),
+ 
+@@ -138,7 +138,7 @@ static const struct menu menu_createlabel = {
+ 		MENU_SEP(N_("Create a new label")),
+ 		MENU_ENT('g', N_("create a new empty GPT partition table")),
+ 		MENU_ENT('G', N_("create a new empty SGI (IRIX) partition table")),
+-		MENU_ENT('o', N_("create a new empty DOS partition table")),
++		MENU_ENT('o', N_("create a new empty MBR (DOS) partition table")),
+ 		MENU_ENT('s', N_("create a new empty Sun partition table")),
+ 
+ 		/* backward compatibility -- be sensitive to 'g', but don't
+diff --git a/libfdisk/src/dos.c b/libfdisk/src/dos.c
+index 98bc614..7970ae1 100644
+--- a/libfdisk/src/dos.c
++++ b/libfdisk/src/dos.c
+@@ -708,7 +708,7 @@ static int dos_create_disklabel(struct fdisk_context *cxt)
+ 	/* Put MBR signature */
+ 	mbr_set_magic(cxt->firstsector);
+ 
+-	fdisk_info(cxt, _("Created a new DOS disklabel with disk "
++	fdisk_info(cxt, _("Created a new DOS (MBR) disklabel with disk "
+ 			 "identifier 0x%08x."), id);
+ 	return 0;
+ }

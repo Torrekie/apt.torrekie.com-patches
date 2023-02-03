@@ -1,0 +1,23 @@
+From: ThomasKaiser <ThomasKaiser@users.noreply.github.com>
+Date: Fri, 30 Sep 2022 10:53:25 +0200
+Subject: [PATCH 23/24] lscpu: Add Kryo 3XX Gold core
+
+[kzak@redhat.com: - update patch to use '-' between words in CPU name]
+
+Signed-off-by: Karel Zak <kzak@redhat.com>
+---
+ sys-utils/lscpu-arm.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/sys-utils/lscpu-arm.c b/sys-utils/lscpu-arm.c
+index 9222b77..b30e0e7 100644
+--- a/sys-utils/lscpu-arm.c
++++ b/sys-utils/lscpu-arm.c
+@@ -134,6 +134,7 @@ static const struct id_part qcom_part[] = {
+     { 0x211, "Kryo" },
+     { 0x800, "Falkor-V1/Kryo" },
+     { 0x801, "Kryo-V2" },
++    { 0x802, "Kryo-3XX-Gold" },
+     { 0x803, "Kryo-3XX-Silver" },
+     { 0x804, "Kryo-4XX-Gold" },
+     { 0x805, "Kryo-4XX-Silver" },

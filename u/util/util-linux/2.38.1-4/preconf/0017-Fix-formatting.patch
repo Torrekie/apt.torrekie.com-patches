@@ -1,0 +1,21 @@
+From: Thomas Kaiser <ThomasKaiser@users.noreply.github.com>
+Date: Fri, 1 Jul 2022 14:16:49 +0200
+Subject: [PATCH 17/24] Fix formatting.
+
+---
+ sys-utils/lscpu-arm.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/sys-utils/lscpu-arm.c b/sys-utils/lscpu-arm.c
+index 7b9b364..7986fa3 100644
+--- a/sys-utils/lscpu-arm.c
++++ b/sys-utils/lscpu-arm.c
+@@ -167,7 +167,7 @@ static const struct id_part apple_part[] = {
+     { 0x031, "Avalanche-T8110" },
+     { 0x032, "Blizzard-T8112" },
+     { 0x033, "Avalanche-T8112" },
+-   { -1, "unknown" },
++    { -1, "unknown" },
+ };
+ 
+ static const struct id_part faraday_part[] = {

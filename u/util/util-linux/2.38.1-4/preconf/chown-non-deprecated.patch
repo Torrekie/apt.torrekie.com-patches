@@ -1,0 +1,31 @@
+From: Chris Hofstaedtler <zeha@debian.org>
+Date: Tue, 12 Apr 2022 15:41:05 +0000
+Subject: Use non-deprecated chown syntax
+
+Closes: #1007139
+---
+ tests/functions.sh | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tests/functions.sh b/tests/functions.sh
+index 56b55a2..fa2ba5e 100644
+--- a/tests/functions.sh
++++ b/tests/functions.sh
+@@ -440,7 +440,7 @@ function ts_init_suid {
+ 	TS_SUID_USER[$ct]=$(stat --printf="%U" $PROG)
+ 	TS_SUID_GROUP[$ct]=$(stat --printf="%G" $PROG)
+ 
+-	chown root.root $PROG &> /dev/null
++	chown root:wheel $PROG &> /dev/null
+ 	chmod u+s $PROG &> /dev/null
+ }
+ 
+@@ -629,7 +629,7 @@ function ts_cleanup_on_exit {
+ 	for idx in $(seq 0 $((${#TS_SUID_PROGS[*]} - 1))); do
+ 		PROG=${TS_SUID_PROGS[$idx]}
+ 		chmod a-s $PROG &> /dev/null
+-		chown ${TS_SUID_USER[$idx]}.${TS_SUID_GROUP[$idx]} $PROG &> /dev/null
++		chown ${TS_SUID_USER[$idx]}:${TS_SUID_GROUP[$idx]} $PROG &> /dev/null
+ 	done
+ 
+ 	for dev in "${TS_LOOP_DEVS[@]}"; do

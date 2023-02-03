@@ -1,0 +1,24 @@
+From: Karel Zak <kzak@redhat.com>
+Date: Mon, 24 Oct 2022 09:57:07 +0200
+Subject: [PATCH 08/24] fdisk: fix --output option parsing
+
+Fixes: https://github.com/util-linux/util-linux/issues/1859
+Addresses: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1022249
+Signed-off-by: Karel Zak <kzak@redhat.com>
+---
+ disk-utils/fdisk.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/disk-utils/fdisk.c b/disk-utils/fdisk.c
+index 2bd2ef4..79b904f 100644
+--- a/disk-utils/fdisk.c
++++ b/disk-utils/fdisk.c
+@@ -928,7 +928,7 @@ int main(int argc, char **argv)
+ 		{ "type",           required_argument, NULL, 't' },
+ 		{ "units",          optional_argument, NULL, 'u' },
+ 		{ "version",        no_argument,       NULL, 'V' },
+-		{ "output",         no_argument,       NULL, 'o' },
++		{ "output",         required_argument, NULL, 'o' },
+ 		{ "protect-boot",   no_argument,       NULL, 'B' },
+ 		{ "wipe",           required_argument, NULL, 'w' },
+ 		{ "wipe-partitions",required_argument, NULL, 'W' },

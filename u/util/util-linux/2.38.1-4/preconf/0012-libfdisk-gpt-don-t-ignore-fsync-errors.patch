@@ -1,0 +1,23 @@
+From: Karel Zak <kzak@redhat.com>
+Date: Thu, 11 Aug 2022 13:09:05 +0200
+Subject: [PATCH 12/24] libfdisk: (gpt) don't ignore fsync() errors
+
+Signed-off-by: Karel Zak <kzak@redhat.com>
+---
+ libfdisk/src/gpt.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/libfdisk/src/gpt.c b/libfdisk/src/gpt.c
+index 72370a1..8a91d7a 100644
+--- a/libfdisk/src/gpt.c
++++ b/libfdisk/src/gpt.c
+@@ -2032,7 +2032,8 @@ static int gpt_write(struct fdisk_context *cxt, off_t offset, void *buf, size_t
+ 	if (write_all(cxt->dev_fd, buf, count))
+ 		return -errno;
+ 
+-	fsync(cxt->dev_fd);
++	if (fsync(cxt->dev_fd) != 0)
++		return -errno;
+ 
+ 	DBG(GPT, ul_debug("  write OK [offset=%zu, size=%zu]",
+ 				(size_t) offset, count));

@@ -1,0 +1,31 @@
+From: zhanchengbin <zhanchengbin1@huawei.com>
+Date: Mon, 10 Oct 2022 17:23:24 +0800
+Subject: [PATCH 24/24] fsck: Processes may kill other processes.
+
+A error in disk-utils/fsck.c, if run the fsck -N command, processes
+don't execute, just show what would be done. However, the pid whose
+value is -1 is added to the instance_list list in the execute
+function,if the kill_all function is called later, kill(-1, signum)
+is executed, Signals are sent to all processes except the number one
+process and itself. Other processes will be killed if they use the
+default signal processing function.
+
+Signed-off-by: zhanchengbin <zhanchengbin1@huawei.com>
+Reviewed-by: Lukas Czerner <lczerner@redhat.com>
+---
+ disk-utils/fsck.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/disk-utils/fsck.c b/disk-utils/fsck.c
+index 505952c..800d3ce 100644
+--- a/disk-utils/fsck.c
++++ b/disk-utils/fsck.c
+@@ -730,6 +730,8 @@ static int kill_all(int signum)
+ 	for (inst = instance_list; inst; inst = inst->next) {
+ 		if (inst->flags & FLAG_DONE)
+ 			continue;
++		if (inst->pid <= 0)
++			continue;
+ 		kill(inst->pid, signum);
+ 		n++;
+ 	}

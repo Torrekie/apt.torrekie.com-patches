@@ -1,0 +1,332 @@
+From: Michael Trapp <michael.trapp@sap.com>
+Date: Mon, 20 Jun 2022 17:10:36 +0200
+Subject: [PATCH 02/24] libuuid: Implement continuous clock handling for time
+ based UUIDs
+
+In a uuidd setup, the daemon is a singleton and can maintain it's own
+resources for time based UUID generation. This requires a dedicated
+'clock sequence range' but does not need any further lock/update of
+the LIBUUID_CLOCK_FILE from uuidd. The range of available clock values
+is extended by a continuous handling of the clock updates - instead of
+updating the value to the current timestamp, it is incremented by
+the number of requested UUIDs.
+---
+ libuuid/src/gen_uuid.c  | 91 ++++++++++++++++++++++++++++++++++++++++++++++---
+ libuuid/src/libuuid.sym |  1 +
+ libuuid/src/uuidd.h     |  1 +
+ misc-utils/uuidd.8.adoc |  3 ++
+ misc-utils/uuidd.c      | 54 ++++++++++++++++++++++++++---
+ 5 files changed, 140 insertions(+), 10 deletions(-)
+
+diff --git a/libuuid/src/gen_uuid.c b/libuuid/src/gen_uuid.c
+index 805b40d..807dcd1 100644
+--- a/libuuid/src/gen_uuid.c
++++ b/libuuid/src/gen_uuid.c
+@@ -209,6 +209,8 @@ static int get_node_id(unsigned char *node_id)
+ 
+ /* Assume that the gettimeofday() has microsecond granularity */
+ #define MAX_ADJUSTMENT 10
++/* Reserve a clock_seq value for the 'continuous clock' implementation */
++#define CLOCK_SEQ_CONT 0
+ 
+ /*
+  * Get clock from global sequence clock counter.
+@@ -275,8 +277,10 @@ static int get_clock(uint32_t *clock_high, uint32_t *clock_low,
+ 	}
+ 
+ 	if ((last.tv_sec == 0) && (last.tv_usec == 0)) {
+-		ul_random_get_bytes(&clock_seq, sizeof(clock_seq));
+-		clock_seq &= 0x3FFF;
++		do {
++			ul_random_get_bytes(&clock_seq, sizeof(clock_seq));
++			clock_seq &= 0x3FFF;
++		} while (clock_seq == CLOCK_SEQ_CONT);
+ 		gettimeofday(&last, NULL);
+ 		last.tv_sec--;
+ 	}
+@@ -286,7 +290,9 @@ try_again:
+ 	if ((tv.tv_sec < last.tv_sec) ||
+ 	    ((tv.tv_sec == last.tv_sec) &&
+ 	     (tv.tv_usec < last.tv_usec))) {
+-		clock_seq = (clock_seq+1) & 0x3FFF;
++		do {
++			clock_seq = (clock_seq+1) & 0x3FFF;
++		} while (clock_seq == CLOCK_SEQ_CONT);
+ 		adjustment = 0;
+ 		last = tv;
+ 	} else if ((tv.tv_sec == last.tv_sec) &&
+@@ -331,6 +337,64 @@ try_again:
+ 	return ret;
+ }
+ 
++/*
++ * Get current time in 100ns ticks.
++ */
++static uint64_t get_clock_counter(void)
++{
++	struct timeval tv;
++	uint64_t clock_reg;
++
++	gettimeofday(&tv, NULL);
++	clock_reg = tv.tv_usec*10;
++	clock_reg += ((uint64_t) tv.tv_sec) * 10000000ULL;
++
++	return clock_reg;
++}
++
++/*
++ * Get continuous clock value.
++ *
++ * Return -1 if there is no further clock counter available,
++ * otherwise return 0.
++ *
++ * This implementation doesn't deliver clock counters based on
++ * the current time because last_clock_reg is only incremented
++ * by the number of requested UUIDs.
++ * max_clock_offset is used to limit the offset of last_clock_reg.
++ */
++static int get_clock_cont(uint32_t *clock_high,
++			  uint32_t *clock_low,
++			  int num,
++			  uint32_t max_clock_offset)
++{
++	/* 100ns based time offset according to RFC 4122. 4.1.4. */
++	const uint64_t reg_offset = (((uint64_t) 0x01B21DD2) << 32) + 0x13814000;
++	static uint64_t last_clock_reg = 0;
++	uint64_t clock_reg;
++
++	if (last_clock_reg == 0)
++		last_clock_reg = get_clock_counter();
++
++	clock_reg = get_clock_counter();
++	if (max_clock_offset) {
++		uint64_t clock_offset = max_clock_offset * 10000000ULL;
++		if (last_clock_reg < (clock_reg - clock_offset))
++			last_clock_reg = clock_reg - clock_offset;
++	}
++
++	clock_reg += MAX_ADJUSTMENT;
++
++	if ((last_clock_reg + num) >= clock_reg)
++		return -1;
++
++	*clock_high = (last_clock_reg + reg_offset) >> 32;
++	*clock_low = last_clock_reg + reg_offset;
++	last_clock_reg += num;
++
++	return 0;
++}
++
+ #if defined(HAVE_UUIDD) && defined(HAVE_SYS_UN_H)
+ 
+ /*
+@@ -403,7 +467,7 @@ static int get_uuid_via_daemon(int op __attribute__((__unused__)),
+ }
+ #endif
+ 
+-int __uuid_generate_time(uuid_t out, int *num)
++static int __uuid_generate_time_internal(uuid_t out, int *num, uint32_t cont_offset)
+ {
+ 	static unsigned char node_id[6];
+ 	static int has_init = 0;
+@@ -423,7 +487,14 @@ int __uuid_generate_time(uuid_t out, int *num)
+ 		}
+ 		has_init = 1;
+ 	}
+-	ret = get_clock(&clock_mid, &uu.time_low, &uu.clock_seq, num);
++	if (cont_offset) {
++		ret = get_clock_cont(&clock_mid, &uu.time_low, *num, cont_offset);
++		uu.clock_seq = CLOCK_SEQ_CONT;
++		if (ret != 0)	/* fallback to previous implpementation */
++			ret = get_clock(&clock_mid, &uu.time_low, &uu.clock_seq, num);
++	} else {
++		ret = get_clock(&clock_mid, &uu.time_low, &uu.clock_seq, num);
++	}
+ 	uu.clock_seq |= 0x8000;
+ 	uu.time_mid = (uint16_t) clock_mid;
+ 	uu.time_hi_and_version = ((clock_mid >> 16) & 0x0FFF) | 0x1000;
+@@ -432,6 +503,16 @@ int __uuid_generate_time(uuid_t out, int *num)
+ 	return ret;
+ }
+ 
++int __uuid_generate_time(uuid_t out, int *num)
++{
++	return __uuid_generate_time_internal(out, num, 0);
++}
++
++int __uuid_generate_time_cont(uuid_t out, int *num, uint32_t cont_offset)
++{
++	return __uuid_generate_time_internal(out, num, cont_offset);
++}
++
+ /*
+  * Generate time-based UUID and store it to @out
+  *
+diff --git a/libuuid/src/libuuid.sym b/libuuid/src/libuuid.sym
+index 3424533..96372a8 100644
+--- a/libuuid/src/libuuid.sym
++++ b/libuuid/src/libuuid.sym
+@@ -60,6 +60,7 @@ global:
+ UUIDD_PRIVATE {
+ global:
+ 	__uuid_generate_time;
++	__uuid_generate_time_cont;
+ 	__uuid_generate_random;
+ local:
+ 	*;
+diff --git a/libuuid/src/uuidd.h b/libuuid/src/uuidd.h
+index fbe821f..f76acc8 100644
+--- a/libuuid/src/uuidd.h
++++ b/libuuid/src/uuidd.h
+@@ -49,6 +49,7 @@
+ #define UUIDD_MAX_OP			UUIDD_OP_BULK_RANDOM_UUID
+ 
+ extern int __uuid_generate_time(uuid_t out, int *num);
++extern int __uuid_generate_time_cont(uuid_t out, int *num, uint32_t cont);
+ extern int __uuid_generate_random(uuid_t out, int *num);
+ 
+ #endif /* _UUID_UUID_H */
+diff --git a/misc-utils/uuidd.8.adoc b/misc-utils/uuidd.8.adoc
+index 49e7b63..8eee3e9 100644
+--- a/misc-utils/uuidd.8.adoc
++++ b/misc-utils/uuidd.8.adoc
+@@ -24,6 +24,9 @@ The *uuidd* daemon is used by the UUID library to generate universally unique id
+ 
+ == OPTIONS
+ 
++*-C*, *--cont-clock* _opt_arg_::
++Activate continuous clock handling for time based UUIDs. *uuidd* could use all possible clock values, beginning with the daemon's start time. The optional argument can be used to set a value for the max_clock_offset. This gurantees, that a clock value of a UUID will always be within the range of the max_clock_offset. '-C' or '--cont-clock' enables the feature with a default max_clock_offset of 2 hours. '-C<NUM>[hd]' or '--cont-clock=<NUM>[hd]' enables the feature with a max_clock_offset of NUM seconds. In case of an appended h or d, the NUM value is read in hours or days. The minimum value is 60 seconds, the maximum value is 365 days.
++
+ *-d*, *--debug*::
+ Run *uuidd* in debugging mode. This prevents *uuidd* from running as a daemon.
+ 
+diff --git a/misc-utils/uuidd.c b/misc-utils/uuidd.c
+index dfcd148..b25439d 100644
+--- a/misc-utils/uuidd.c
++++ b/misc-utils/uuidd.c
+@@ -72,6 +72,8 @@ struct uuidd_cxt_t {
+ 	const char	*cleanup_pidfile;
+ 	const char	*cleanup_socket;
+ 	uint32_t	timeout;
++	uint32_t	cont_clock_offset;
++
+ 	unsigned int	debug: 1,
+ 			quiet: 1,
+ 			no_fork: 1,
+@@ -106,6 +108,8 @@ static void __attribute__((__noreturn__)) usage(void)
+ 	fputs(_(" -P, --no-pid            do not create pid file\n"), out);
+ 	fputs(_(" -F, --no-fork           do not daemonize using double-fork\n"), out);
+ 	fputs(_(" -S, --socket-activation do not create listening socket\n"), out);
++	fputs(_(" -C, --cont-clock[=<NUM>[hd]]\n"), out);
++	fputs(_("                         activate continuous clock handling\n"), out);
+ 	fputs(_(" -d, --debug             run in debugging mode\n"), out);
+ 	fputs(_(" -q, --quiet             turn on quiet mode\n"), out);
+ 	fputs(USAGE_SEPARATOR, out);
+@@ -438,6 +442,15 @@ static void server_loop(const char *socket_path, const char *pidfile_path,
+ 	pfd[POLLFD_SOCKET].fd = s;
+ 	pfd[POLLFD_SIGNAL].events = pfd[POLLFD_SOCKET].events = POLLIN | POLLERR | POLLHUP;
+ 
++	num = 1;
++	if (uuidd_cxt->cont_clock_offset) {
++		/* trigger initialization */
++		(void) __uuid_generate_time_cont(uu, &num, uuidd_cxt->cont_clock_offset);
++		if (uuidd_cxt->debug)
++			fprintf(stderr, _("max_clock_offset = %u sec\n"),
++				uuidd_cxt->cont_clock_offset);
++	}
++
+ 	while (1) {
+ 		ret = poll(pfd, ARRAY_SIZE(pfd),
+ 				uuidd_cxt->timeout ?
+@@ -494,7 +507,8 @@ static void server_loop(const char *socket_path, const char *pidfile_path,
+ 			break;
+ 		case UUIDD_OP_TIME_UUID:
+ 			num = 1;
+-			if (__uuid_generate_time(uu, &num) < 0 && !uuidd_cxt->quiet)
++			ret = __uuid_generate_time_cont(uu, &num, uuidd_cxt->cont_clock_offset);
++			if (ret < 0 && !uuidd_cxt->quiet)
+ 				warnx(_("failed to open/lock clock counter"));
+ 			if (uuidd_cxt->debug) {
+ 				uuid_unparse(uu, str);
+@@ -505,7 +519,8 @@ static void server_loop(const char *socket_path, const char *pidfile_path,
+ 			break;
+ 		case UUIDD_OP_RANDOM_UUID:
+ 			num = 1;
+-			if (__uuid_generate_time(uu, &num) < 0 && !uuidd_cxt->quiet)
++			ret = __uuid_generate_time_cont(uu, &num, uuidd_cxt->cont_clock_offset);
++			if (ret < 0 && !uuidd_cxt->quiet)
+ 				warnx(_("failed to open/lock clock counter"));
+ 			if (uuidd_cxt->debug) {
+ 				uuid_unparse(uu, str);
+@@ -515,7 +530,8 @@ static void server_loop(const char *socket_path, const char *pidfile_path,
+ 			reply_len = sizeof(uu);
+ 			break;
+ 		case UUIDD_OP_BULK_TIME_UUID:
+-			if (__uuid_generate_time(uu, &num) < 0 && !uuidd_cxt->quiet)
++			ret = __uuid_generate_time_cont(uu, &num, uuidd_cxt->cont_clock_offset);
++			if (ret < 0 && !uuidd_cxt->quiet)
+ 				warnx(_("failed to open/lock clock counter"));
+ 			if (uuidd_cxt->debug) {
+ 				uuid_unparse(uu, str);
+@@ -567,6 +583,27 @@ static void __attribute__ ((__noreturn__)) unexpected_size(int size)
+ 	errx(EXIT_FAILURE, _("Unexpected reply length from server %d"), size);
+ }
+ 
++static uint32_t parse_cont_clock(char *arg)
++{
++	uint32_t min_val = 60,
++		 max_val = (3600 * 24 * 365),
++		 factor = 1;
++	char *p = &arg[strlen(arg)-1];
++
++	if ('h' == *p) {
++		*p = '\0';
++		factor = 3600;
++		min_val = 1;
++	}
++	if ('d' == *p) {
++		*p = '\0';
++		factor = 24 * 3600;
++		min_val = 1;
++	}
++	return factor * str2num_or_err(optarg, 10, _("failed to parse --cont-clock/-C"),
++				       min_val, max_val / factor);
++}
++
+ static void parse_options(int argc, char **argv, struct uuidd_cxt_t *uuidd_cxt,
+ 			  struct uuidd_options_t *uuidd_opts)
+ {
+@@ -581,6 +618,7 @@ static void parse_options(int argc, char **argv, struct uuidd_cxt_t *uuidd_cxt,
+ 		{"no-pid", no_argument, NULL, 'P'},
+ 		{"no-fork", no_argument, NULL, 'F'},
+ 		{"socket-activation", no_argument, NULL, 'S'},
++		{"cont-clock", optional_argument, NULL, 'C'},
+ 		{"debug", no_argument, NULL, 'd'},
+ 		{"quiet", no_argument, NULL, 'q'},
+ 		{"version", no_argument, NULL, 'V'},
+@@ -596,9 +634,15 @@ static void parse_options(int argc, char **argv, struct uuidd_cxt_t *uuidd_cxt,
+ 	int excl_st[ARRAY_SIZE(excl)] = UL_EXCL_STATUS_INIT;
+ 	int c;
+ 
+-	while ((c = getopt_long(argc, argv, "p:s:T:krtn:PFSdqVh", longopts, NULL)) != -1) {
++	while ((c = getopt_long(argc, argv, "p:s:T:krtn:PFSC::dqVh", longopts, NULL)) != -1) {
+ 		err_exclusive_options(c, longopts, excl, excl_st);
+ 		switch (c) {
++		case 'C':
++			if (optarg != NULL)
++				uuidd_cxt->cont_clock_offset = parse_cont_clock(optarg);
++			else
++				uuidd_cxt->cont_clock_offset = 7200; /* default 2h */
++			break;
+ 		case 'd':
+ 			uuidd_cxt->debug = 1;
+ 			break;
+@@ -673,7 +717,7 @@ int main(int argc, char **argv)
+ 	char		*cp;
+ 	int		ret;
+ 
+-	struct uuidd_cxt_t uuidd_cxt = { .timeout = 0 };
++	struct uuidd_cxt_t uuidd_cxt = { .timeout = 0, .cont_clock_offset = 0 };
+ 	struct uuidd_options_t uuidd_opts = { .socket_path = UUIDD_SOCKET_PATH };
+ 
+ 	setlocale(LC_ALL, "");

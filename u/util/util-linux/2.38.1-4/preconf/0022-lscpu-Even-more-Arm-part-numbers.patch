@@ -1,0 +1,42 @@
+From: Jeremy Linton <jeremy.linton@arm.com>
+Date: Thu, 1 Sep 2022 16:52:30 -0500
+Subject: [PATCH 22/24] lscpu: Even more Arm part numbers
+
+Arm has published further MIDR/part numbers on
+https://developer.arm.com/ip-products/processors/cortex-a.
+Some of the new ones have already been merged, so lets
+fill in the gaps with A34, A65AE and X1C.
+
+Signed-off-by: Jeremy Linton <jeremy.linton@arm.com>
+---
+ sys-utils/lscpu-arm.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/sys-utils/lscpu-arm.c b/sys-utils/lscpu-arm.c
+index ac3703e..9222b77 100644
+--- a/sys-utils/lscpu-arm.c
++++ b/sys-utils/lscpu-arm.c
+@@ -64,6 +64,7 @@ static const struct id_part arm_part[] = {
+     { 0xc27, "Cortex-M7" },
+     { 0xc60, "Cortex-M0+" },
+     { 0xd01, "Cortex-A32" },
++    { 0xd02, "Cortex-A34" },
+     { 0xd03, "Cortex-A53" },
+     { 0xd04, "Cortex-A35" },
+     { 0xd05, "Cortex-A55" },
+@@ -82,6 +83,7 @@ static const struct id_part arm_part[] = {
+     { 0xd40, "Neoverse-V1" },
+     { 0xd41, "Cortex-A78" },
+     { 0xd42, "Cortex-A78AE" },
++    { 0xd43, "Cortex-A65AE" },
+     { 0xd44, "Cortex-X1" },
+     { 0xd46, "Cortex-A510" },
+     { 0xd47, "Cortex-A710" },
+@@ -89,6 +91,7 @@ static const struct id_part arm_part[] = {
+     { 0xd49, "Neoverse-N2" },
+     { 0xd4a, "Neoverse-E1" },
+     { 0xd4b, "Cortex-A78C" },
++    { 0xd4c, "Cortex-X1C" },
+     { 0xd4d, "Cortex-A715" },
+     { 0xd4e, "Cortex-X3" },
+     { -1, "unknown" },
