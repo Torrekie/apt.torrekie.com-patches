@@ -1,0 +1,2292 @@
+--- a/CMakeLists.txt	1670593111.000000000
++++ b/CMakeLists.txt	1675498626.122818848
+@@ -1031,8 +1031,8 @@ MACRO(CHECK_ICONV LIB TRY_ICONV_CONST)
+         CMAKE_C_COMPILER_ID MATCHES "^Clang$")
+       #
+       # During checking iconv proto type, we should use -Werror to avoid the
+-      # success of iconv detection with a warning which success is a miss
+-      # detection. So this needs for all build mode(even it's a release mode).
++      # success of iconv detection with a warning, which would be a false
++      # positive.  So this is needed for all build modes, even in release mode.
+       #
+       SET(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -Werror")
+     ENDIF (CMAKE_C_COMPILER_ID MATCHES "^GNU$" OR
+--- a/Makefile.am	1670593111.000000000
++++ b/Makefile.am	1675421840.487514580
+@@ -428,6 +428,7 @@ libarchive_test_SOURCES= \
+ 	libarchive/test/test_filter_count.c \
+ 	libarchive/test/test_fuzz.c \
+ 	libarchive/test/test_gnutar_filename_encoding.c \
++	libarchive/test/test_leaks.c \
+ 	libarchive/test/test_link_resolver.c \
+ 	libarchive/test/test_open_failure.c \
+ 	libarchive/test/test_open_fd.c \
+@@ -535,6 +536,7 @@ libarchive_test_SOURCES= \
+ 	libarchive/test/test_read_format_zip_mac_metadata.c \
+ 	libarchive/test/test_read_format_zip_malformed.c \
+ 	libarchive/test/test_read_format_zip_msdos.c \
++	libarchive/test/test_read_format_zip_multithread.c \
+ 	libarchive/test/test_read_format_zip_nested.c \
+ 	libarchive/test/test_read_format_zip_nofiletype.c \
+ 	libarchive/test/test_read_format_zip_padded.c \
+@@ -1123,7 +1125,8 @@ bsdtar_test_SOURCES= \
+ 	tar/test/test_strip_components.c \
+ 	tar/test/test_symlink_dir.c \
+ 	tar/test/test_version.c \
+-	tar/test/test_windows.c
++	tar/test/test_windows.c \
++	tar/test/test_zip_bomb.c
+ 
+ bsdtar_test_CPPFLAGS=\
+ 	-I$(top_srcdir)/libarchive -I$(top_srcdir)/libarchive_fe \
+@@ -1165,6 +1168,14 @@ bsdtar_test_EXTRA_DIST= \
+ 	tar/test/test_patterns_3.tar.uu \
+ 	tar/test/test_patterns_4.tar.uu \
+ 	tar/test/test_print_longpath.tar.Z.uu \
++	tar/test/zbbz2.zip.uu \
++	tar/test/zblg.extra.zip.uu \
++	tar/test/zblg.zip.uu \
++	tar/test/zbo.zip.uu \
++	tar/test/zbsm.extra.zip.uu \
++	tar/test/zbsm.zip.uu \
++	tar/test/zbxl.extra.zip.uu \
++	tar/test/zbxl.zip.uu \
+ 	tar/test/CMakeLists.txt
+ 
+ 
+--- a/Makefile.in	1670593129.000000000
++++ b/Makefile.in	1675500383.923011940
+@@ -653,7 +653,8 @@ am_bsdtar_test_OBJECTS = $(am__objects_1
+ 	tar/test/bsdtar_test-test_strip_components.$(OBJEXT) \
+ 	tar/test/bsdtar_test-test_symlink_dir.$(OBJEXT) \
+ 	tar/test/bsdtar_test-test_version.$(OBJEXT) \
+-	tar/test/bsdtar_test-test_windows.$(OBJEXT)
++	tar/test/bsdtar_test-test_windows.$(OBJEXT) \
++	tar/test/bsdtar_test-test_zip_bomb.$(OBJEXT)
+ bsdtar_test_OBJECTS = $(am_bsdtar_test_OBJECTS)
+ bsdtar_test_LDADD = $(LDADD)
+ am__libarchive_test_SOURCES_DIST = libarchive/archive_acl.c \
+@@ -874,6 +875,7 @@ am__libarchive_test_SOURCES_DIST = libar
+ 	libarchive/test/test_filter_count.c \
+ 	libarchive/test/test_fuzz.c \
+ 	libarchive/test/test_gnutar_filename_encoding.c \
++	libarchive/test/test_leaks.c \
+ 	libarchive/test/test_link_resolver.c \
+ 	libarchive/test/test_open_failure.c \
+ 	libarchive/test/test_open_fd.c \
+@@ -981,6 +983,7 @@ am__libarchive_test_SOURCES_DIST = libar
+ 	libarchive/test/test_read_format_zip_mac_metadata.c \
+ 	libarchive/test/test_read_format_zip_malformed.c \
+ 	libarchive/test/test_read_format_zip_msdos.c \
++	libarchive/test/test_read_format_zip_multithread.c \
+ 	libarchive/test/test_read_format_zip_nested.c \
+ 	libarchive/test/test_read_format_zip_nofiletype.c \
+ 	libarchive/test/test_read_format_zip_padded.c \
+@@ -1290,6 +1293,7 @@ am_libarchive_test_OBJECTS = $(am__objec
+ 	libarchive/test/test-test_filter_count.$(OBJEXT) \
+ 	libarchive/test/test-test_fuzz.$(OBJEXT) \
+ 	libarchive/test/test-test_gnutar_filename_encoding.$(OBJEXT) \
++	libarchive/test/test-test_leaks.$(OBJEXT) \
+ 	libarchive/test/test-test_link_resolver.$(OBJEXT) \
+ 	libarchive/test/test-test_open_failure.$(OBJEXT) \
+ 	libarchive/test/test-test_open_fd.$(OBJEXT) \
+@@ -1397,6 +1401,7 @@ am_libarchive_test_OBJECTS = $(am__objec
+ 	libarchive/test/test-test_read_format_zip_mac_metadata.$(OBJEXT) \
+ 	libarchive/test/test-test_read_format_zip_malformed.$(OBJEXT) \
+ 	libarchive/test/test-test_read_format_zip_msdos.$(OBJEXT) \
++	libarchive/test/test-test_read_format_zip_multithread.$(OBJEXT) \
+ 	libarchive/test/test-test_read_format_zip_nested.$(OBJEXT) \
+ 	libarchive/test/test-test_read_format_zip_nofiletype.$(OBJEXT) \
+ 	libarchive/test/test-test_read_format_zip_padded.$(OBJEXT) \
+@@ -1921,6 +1926,7 @@ am__depfiles_remade = cat/$(DEPDIR)/bsdc
+ 	libarchive/test/$(DEPDIR)/test-test_filter_count.Po \
+ 	libarchive/test/$(DEPDIR)/test-test_fuzz.Po \
+ 	libarchive/test/$(DEPDIR)/test-test_gnutar_filename_encoding.Po \
++	libarchive/test/$(DEPDIR)/test-test_leaks.Po \
+ 	libarchive/test/$(DEPDIR)/test-test_link_resolver.Po \
+ 	libarchive/test/$(DEPDIR)/test-test_open_failure.Po \
+ 	libarchive/test/$(DEPDIR)/test-test_open_fd.Po \
+@@ -2028,6 +2034,7 @@ am__depfiles_remade = cat/$(DEPDIR)/bsdc
+ 	libarchive/test/$(DEPDIR)/test-test_read_format_zip_mac_metadata.Po \
+ 	libarchive/test/$(DEPDIR)/test-test_read_format_zip_malformed.Po \
+ 	libarchive/test/$(DEPDIR)/test-test_read_format_zip_msdos.Po \
++	libarchive/test/$(DEPDIR)/test-test_read_format_zip_multithread.Po \
+ 	libarchive/test/$(DEPDIR)/test-test_read_format_zip_nested.Po \
+ 	libarchive/test/$(DEPDIR)/test-test_read_format_zip_nofiletype.Po \
+ 	libarchive/test/$(DEPDIR)/test-test_read_format_zip_padded.Po \
+@@ -2207,6 +2214,7 @@ am__depfiles_remade = cat/$(DEPDIR)/bsdc
+ 	tar/test/$(DEPDIR)/bsdtar_test-test_symlink_dir.Po \
+ 	tar/test/$(DEPDIR)/bsdtar_test-test_version.Po \
+ 	tar/test/$(DEPDIR)/bsdtar_test-test_windows.Po \
++	tar/test/$(DEPDIR)/bsdtar_test-test_zip_bomb.Po \
+ 	test_utils/$(DEPDIR)/bsdcat_test-test_main.Po \
+ 	test_utils/$(DEPDIR)/bsdcat_test-test_utils.Po \
+ 	test_utils/$(DEPDIR)/bsdcpio_test-test_main.Po \
+@@ -2970,6 +2978,7 @@ libarchive_test_SOURCES = \
+ 	libarchive/test/test_filter_count.c \
+ 	libarchive/test/test_fuzz.c \
+ 	libarchive/test/test_gnutar_filename_encoding.c \
++	libarchive/test/test_leaks.c \
+ 	libarchive/test/test_link_resolver.c \
+ 	libarchive/test/test_open_failure.c \
+ 	libarchive/test/test_open_fd.c \
+@@ -3077,6 +3086,7 @@ libarchive_test_SOURCES = \
+ 	libarchive/test/test_read_format_zip_mac_metadata.c \
+ 	libarchive/test/test_read_format_zip_malformed.c \
+ 	libarchive/test/test_read_format_zip_msdos.c \
++	libarchive/test/test_read_format_zip_multithread.c \
+ 	libarchive/test/test_read_format_zip_nested.c \
+ 	libarchive/test/test_read_format_zip_nofiletype.c \
+ 	libarchive/test/test_read_format_zip_padded.c \
+@@ -3631,7 +3641,8 @@ bsdtar_test_SOURCES = \
+ 	tar/test/test_strip_components.c \
+ 	tar/test/test_symlink_dir.c \
+ 	tar/test/test_version.c \
+-	tar/test/test_windows.c
++	tar/test/test_windows.c \
++	tar/test/test_zip_bomb.c
+ 
+ bsdtar_test_CPPFLAGS = \
+ 	-I$(top_srcdir)/libarchive -I$(top_srcdir)/libarchive_fe \
+@@ -3665,6 +3676,14 @@ bsdtar_test_EXTRA_DIST = \
+ 	tar/test/test_patterns_3.tar.uu \
+ 	tar/test/test_patterns_4.tar.uu \
+ 	tar/test/test_print_longpath.tar.Z.uu \
++	tar/test/zbbz2.zip.uu \
++	tar/test/zblg.extra.zip.uu \
++	tar/test/zblg.zip.uu \
++	tar/test/zbo.zip.uu \
++	tar/test/zbsm.extra.zip.uu \
++	tar/test/zbsm.zip.uu \
++	tar/test/zbxl.extra.zip.uu \
++	tar/test/zbxl.zip.uu \
+ 	tar/test/CMakeLists.txt
+ 
+ 
+@@ -4757,6 +4776,8 @@ tar/test/bsdtar_test-test_version.$(OBJE
+ 	tar/test/$(DEPDIR)/$(am__dirstamp)
+ tar/test/bsdtar_test-test_windows.$(OBJEXT): tar/test/$(am__dirstamp) \
+ 	tar/test/$(DEPDIR)/$(am__dirstamp)
++tar/test/bsdtar_test-test_zip_bomb.$(OBJEXT):  \
++	tar/test/$(am__dirstamp) tar/test/$(DEPDIR)/$(am__dirstamp)
+ 
+ bsdtar_test$(EXEEXT): $(bsdtar_test_OBJECTS) $(bsdtar_test_DEPENDENCIES) $(EXTRA_bsdtar_test_DEPENDENCIES) 
+ 	@rm -f bsdtar_test$(EXEEXT)
+@@ -5353,6 +5374,9 @@ libarchive/test/test-test_fuzz.$(OBJEXT)
+ libarchive/test/test-test_gnutar_filename_encoding.$(OBJEXT):  \
+ 	libarchive/test/$(am__dirstamp) \
+ 	libarchive/test/$(DEPDIR)/$(am__dirstamp)
++libarchive/test/test-test_leaks.$(OBJEXT):  \
++	libarchive/test/$(am__dirstamp) \
++	libarchive/test/$(DEPDIR)/$(am__dirstamp)
+ libarchive/test/test-test_link_resolver.$(OBJEXT):  \
+ 	libarchive/test/$(am__dirstamp) \
+ 	libarchive/test/$(DEPDIR)/$(am__dirstamp)
+@@ -5674,6 +5698,9 @@ libarchive/test/test-test_read_format_zi
+ libarchive/test/test-test_read_format_zip_msdos.$(OBJEXT):  \
+ 	libarchive/test/$(am__dirstamp) \
+ 	libarchive/test/$(DEPDIR)/$(am__dirstamp)
++libarchive/test/test-test_read_format_zip_multithread.$(OBJEXT):  \
++	libarchive/test/$(am__dirstamp) \
++	libarchive/test/$(DEPDIR)/$(am__dirstamp)
+ libarchive/test/test-test_read_format_zip_nested.$(OBJEXT):  \
+ 	libarchive/test/$(am__dirstamp) \
+ 	libarchive/test/$(DEPDIR)/$(am__dirstamp)
+@@ -6412,6 +6439,7 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_filter_count.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_fuzz.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_gnutar_filename_encoding.Po@am__quote@ # am--include-marker
++@AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_leaks.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_link_resolver.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_open_failure.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_open_fd.Po@am__quote@ # am--include-marker
+@@ -6519,6 +6547,7 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_read_format_zip_mac_metadata.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_read_format_zip_malformed.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_read_format_zip_msdos.Po@am__quote@ # am--include-marker
++@AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_read_format_zip_multithread.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_read_format_zip_nested.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_read_format_zip_nofiletype.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@libarchive/test/$(DEPDIR)/test-test_read_format_zip_padded.Po@am__quote@ # am--include-marker
+@@ -6700,6 +6729,7 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@tar/test/$(DEPDIR)/bsdtar_test-test_symlink_dir.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@tar/test/$(DEPDIR)/bsdtar_test-test_version.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@tar/test/$(DEPDIR)/bsdtar_test-test_windows.Po@am__quote@ # am--include-marker
++@AMDEP_TRUE@@am__include@ @am__quote@tar/test/$(DEPDIR)/bsdtar_test-test_zip_bomb.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@test_utils/$(DEPDIR)/bsdcat_test-test_main.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@test_utils/$(DEPDIR)/bsdcat_test-test_utils.Po@am__quote@ # am--include-marker
+ @AMDEP_TRUE@@am__include@ @am__quote@test_utils/$(DEPDIR)/bsdcpio_test-test_main.Po@am__quote@ # am--include-marker
+@@ -8888,6 +8918,20 @@ tar/test/bsdtar_test-test_windows.obj: t
+ @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+ @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(bsdtar_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tar/test/bsdtar_test-test_windows.obj `if test -f 'tar/test/test_windows.c'; then $(CYGPATH_W) 'tar/test/test_windows.c'; else $(CYGPATH_W) '$(srcdir)/tar/test/test_windows.c'; fi`
+ 
++tar/test/bsdtar_test-test_zip_bomb.o: tar/test/test_zip_bomb.c
++@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(bsdtar_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tar/test/bsdtar_test-test_zip_bomb.o -MD -MP -MF tar/test/$(DEPDIR)/bsdtar_test-test_zip_bomb.Tpo -c -o tar/test/bsdtar_test-test_zip_bomb.o `test -f 'tar/test/test_zip_bomb.c' || echo '$(srcdir)/'`tar/test/test_zip_bomb.c
++@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tar/test/$(DEPDIR)/bsdtar_test-test_zip_bomb.Tpo tar/test/$(DEPDIR)/bsdtar_test-test_zip_bomb.Po
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tar/test/test_zip_bomb.c' object='tar/test/bsdtar_test-test_zip_bomb.o' libtool=no @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(bsdtar_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tar/test/bsdtar_test-test_zip_bomb.o `test -f 'tar/test/test_zip_bomb.c' || echo '$(srcdir)/'`tar/test/test_zip_bomb.c
++
++tar/test/bsdtar_test-test_zip_bomb.obj: tar/test/test_zip_bomb.c
++@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(bsdtar_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT tar/test/bsdtar_test-test_zip_bomb.obj -MD -MP -MF tar/test/$(DEPDIR)/bsdtar_test-test_zip_bomb.Tpo -c -o tar/test/bsdtar_test-test_zip_bomb.obj `if test -f 'tar/test/test_zip_bomb.c'; then $(CYGPATH_W) 'tar/test/test_zip_bomb.c'; else $(CYGPATH_W) '$(srcdir)/tar/test/test_zip_bomb.c'; fi`
++@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) tar/test/$(DEPDIR)/bsdtar_test-test_zip_bomb.Tpo tar/test/$(DEPDIR)/bsdtar_test-test_zip_bomb.Po
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='tar/test/test_zip_bomb.c' object='tar/test/bsdtar_test-test_zip_bomb.obj' libtool=no @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(bsdtar_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o tar/test/bsdtar_test-test_zip_bomb.obj `if test -f 'tar/test/test_zip_bomb.c'; then $(CYGPATH_W) 'tar/test/test_zip_bomb.c'; else $(CYGPATH_W) '$(srcdir)/tar/test/test_zip_bomb.c'; fi`
++
+ libarchive/test-archive_acl.o: libarchive/archive_acl.c
+ @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libarchive/test-archive_acl.o -MD -MP -MF libarchive/$(DEPDIR)/test-archive_acl.Tpo -c -o libarchive/test-archive_acl.o `test -f 'libarchive/archive_acl.c' || echo '$(srcdir)/'`libarchive/archive_acl.c
+ @am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libarchive/$(DEPDIR)/test-archive_acl.Tpo libarchive/$(DEPDIR)/test-archive_acl.Po
+@@ -11716,6 +11760,20 @@ libarchive/test/test-test_gnutar_filenam
+ @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+ @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o libarchive/test/test-test_gnutar_filename_encoding.obj `if test -f 'libarchive/test/test_gnutar_filename_encoding.c'; then $(CYGPATH_W) 'libarchive/test/test_gnutar_filename_encoding.c'; else $(CYGPATH_W) '$(srcdir)/libarchive/test/test_gnutar_filename_encoding.c'; fi`
+ 
++libarchive/test/test-test_leaks.o: libarchive/test/test_leaks.c
++@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libarchive/test/test-test_leaks.o -MD -MP -MF libarchive/test/$(DEPDIR)/test-test_leaks.Tpo -c -o libarchive/test/test-test_leaks.o `test -f 'libarchive/test/test_leaks.c' || echo '$(srcdir)/'`libarchive/test/test_leaks.c
++@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libarchive/test/$(DEPDIR)/test-test_leaks.Tpo libarchive/test/$(DEPDIR)/test-test_leaks.Po
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libarchive/test/test_leaks.c' object='libarchive/test/test-test_leaks.o' libtool=no @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o libarchive/test/test-test_leaks.o `test -f 'libarchive/test/test_leaks.c' || echo '$(srcdir)/'`libarchive/test/test_leaks.c
++
++libarchive/test/test-test_leaks.obj: libarchive/test/test_leaks.c
++@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libarchive/test/test-test_leaks.obj -MD -MP -MF libarchive/test/$(DEPDIR)/test-test_leaks.Tpo -c -o libarchive/test/test-test_leaks.obj `if test -f 'libarchive/test/test_leaks.c'; then $(CYGPATH_W) 'libarchive/test/test_leaks.c'; else $(CYGPATH_W) '$(srcdir)/libarchive/test/test_leaks.c'; fi`
++@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libarchive/test/$(DEPDIR)/test-test_leaks.Tpo libarchive/test/$(DEPDIR)/test-test_leaks.Po
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libarchive/test/test_leaks.c' object='libarchive/test/test-test_leaks.obj' libtool=no @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o libarchive/test/test-test_leaks.obj `if test -f 'libarchive/test/test_leaks.c'; then $(CYGPATH_W) 'libarchive/test/test_leaks.c'; else $(CYGPATH_W) '$(srcdir)/libarchive/test/test_leaks.c'; fi`
++
+ libarchive/test/test-test_link_resolver.o: libarchive/test/test_link_resolver.c
+ @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libarchive/test/test-test_link_resolver.o -MD -MP -MF libarchive/test/$(DEPDIR)/test-test_link_resolver.Tpo -c -o libarchive/test/test-test_link_resolver.o `test -f 'libarchive/test/test_link_resolver.c' || echo '$(srcdir)/'`libarchive/test/test_link_resolver.c
+ @am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libarchive/test/$(DEPDIR)/test-test_link_resolver.Tpo libarchive/test/$(DEPDIR)/test-test_link_resolver.Po
+@@ -13214,6 +13272,20 @@ libarchive/test/test-test_read_format_zi
+ @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+ @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o libarchive/test/test-test_read_format_zip_msdos.obj `if test -f 'libarchive/test/test_read_format_zip_msdos.c'; then $(CYGPATH_W) 'libarchive/test/test_read_format_zip_msdos.c'; else $(CYGPATH_W) '$(srcdir)/libarchive/test/test_read_format_zip_msdos.c'; fi`
+ 
++libarchive/test/test-test_read_format_zip_multithread.o: libarchive/test/test_read_format_zip_multithread.c
++@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libarchive/test/test-test_read_format_zip_multithread.o -MD -MP -MF libarchive/test/$(DEPDIR)/test-test_read_format_zip_multithread.Tpo -c -o libarchive/test/test-test_read_format_zip_multithread.o `test -f 'libarchive/test/test_read_format_zip_multithread.c' || echo '$(srcdir)/'`libarchive/test/test_read_format_zip_multithread.c
++@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libarchive/test/$(DEPDIR)/test-test_read_format_zip_multithread.Tpo libarchive/test/$(DEPDIR)/test-test_read_format_zip_multithread.Po
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libarchive/test/test_read_format_zip_multithread.c' object='libarchive/test/test-test_read_format_zip_multithread.o' libtool=no @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o libarchive/test/test-test_read_format_zip_multithread.o `test -f 'libarchive/test/test_read_format_zip_multithread.c' || echo '$(srcdir)/'`libarchive/test/test_read_format_zip_multithread.c
++
++libarchive/test/test-test_read_format_zip_multithread.obj: libarchive/test/test_read_format_zip_multithread.c
++@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libarchive/test/test-test_read_format_zip_multithread.obj -MD -MP -MF libarchive/test/$(DEPDIR)/test-test_read_format_zip_multithread.Tpo -c -o libarchive/test/test-test_read_format_zip_multithread.obj `if test -f 'libarchive/test/test_read_format_zip_multithread.c'; then $(CYGPATH_W) 'libarchive/test/test_read_format_zip_multithread.c'; else $(CYGPATH_W) '$(srcdir)/libarchive/test/test_read_format_zip_multithread.c'; fi`
++@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libarchive/test/$(DEPDIR)/test-test_read_format_zip_multithread.Tpo libarchive/test/$(DEPDIR)/test-test_read_format_zip_multithread.Po
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='libarchive/test/test_read_format_zip_multithread.c' object='libarchive/test/test-test_read_format_zip_multithread.obj' libtool=no @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o libarchive/test/test-test_read_format_zip_multithread.obj `if test -f 'libarchive/test/test_read_format_zip_multithread.c'; then $(CYGPATH_W) 'libarchive/test/test_read_format_zip_multithread.c'; else $(CYGPATH_W) '$(srcdir)/libarchive/test/test_read_format_zip_multithread.c'; fi`
++
+ libarchive/test/test-test_read_format_zip_nested.o: libarchive/test/test_read_format_zip_nested.c
+ @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libarchive_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libarchive/test/test-test_read_format_zip_nested.o -MD -MP -MF libarchive/test/$(DEPDIR)/test-test_read_format_zip_nested.Tpo -c -o libarchive/test/test-test_read_format_zip_nested.o `test -f 'libarchive/test/test_read_format_zip_nested.c' || echo '$(srcdir)/'`libarchive/test/test_read_format_zip_nested.c
+ @am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) libarchive/test/$(DEPDIR)/test-test_read_format_zip_nested.Tpo libarchive/test/$(DEPDIR)/test-test_read_format_zip_nested.Po
+@@ -15750,6 +15822,7 @@ distclean: distclean-am
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_filter_count.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_fuzz.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_gnutar_filename_encoding.Po
++	-rm -f libarchive/test/$(DEPDIR)/test-test_leaks.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_link_resolver.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_open_failure.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_open_fd.Po
+@@ -15857,6 +15930,7 @@ distclean: distclean-am
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_mac_metadata.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_malformed.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_msdos.Po
++	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_multithread.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_nested.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_nofiletype.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_padded.Po
+@@ -16038,6 +16112,7 @@ distclean: distclean-am
+ 	-rm -f tar/test/$(DEPDIR)/bsdtar_test-test_symlink_dir.Po
+ 	-rm -f tar/test/$(DEPDIR)/bsdtar_test-test_version.Po
+ 	-rm -f tar/test/$(DEPDIR)/bsdtar_test-test_windows.Po
++	-rm -f tar/test/$(DEPDIR)/bsdtar_test-test_zip_bomb.Po
+ 	-rm -f test_utils/$(DEPDIR)/bsdcat_test-test_main.Po
+ 	-rm -f test_utils/$(DEPDIR)/bsdcat_test-test_utils.Po
+ 	-rm -f test_utils/$(DEPDIR)/bsdcpio_test-test_main.Po
+@@ -16497,6 +16572,7 @@ maintainer-clean: maintainer-clean-am
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_filter_count.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_fuzz.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_gnutar_filename_encoding.Po
++	-rm -f libarchive/test/$(DEPDIR)/test-test_leaks.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_link_resolver.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_open_failure.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_open_fd.Po
+@@ -16604,6 +16680,7 @@ maintainer-clean: maintainer-clean-am
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_mac_metadata.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_malformed.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_msdos.Po
++	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_multithread.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_nested.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_nofiletype.Po
+ 	-rm -f libarchive/test/$(DEPDIR)/test-test_read_format_zip_padded.Po
+@@ -16785,6 +16862,7 @@ maintainer-clean: maintainer-clean-am
+ 	-rm -f tar/test/$(DEPDIR)/bsdtar_test-test_symlink_dir.Po
+ 	-rm -f tar/test/$(DEPDIR)/bsdtar_test-test_version.Po
+ 	-rm -f tar/test/$(DEPDIR)/bsdtar_test-test_windows.Po
++	-rm -f tar/test/$(DEPDIR)/bsdtar_test-test_zip_bomb.Po
+ 	-rm -f test_utils/$(DEPDIR)/bsdcat_test-test_main.Po
+ 	-rm -f test_utils/$(DEPDIR)/bsdcat_test-test_utils.Po
+ 	-rm -f test_utils/$(DEPDIR)/bsdcpio_test-test_main.Po
+--- a/README.md	1670593111.000000000
++++ b/README.md	1675498626.119526313
+@@ -186,7 +186,7 @@ questions we are asked about libarchive:
+   libraries.  This also reduces the size of statically-linked
+   binaries in environments where that matters.
+ 
+-* The library is generally _thread safe_ depending on the platform:
++* The library is generally _thread-safe_ depending on the platform:
+   it does not define any global variables of its own.  However, some
+   platforms do not provide fully thread-safe versions of key C library
+   functions.  On those platforms, libarchive will use the non-thread-safe
+@@ -198,7 +198,7 @@ questions we are asked about libarchive:
+   multiple threads.  Of course, those modules are completely
+   optional and you can use the rest of libarchive without them.
+ 
+-* The library is _not_ thread aware, however.  It does no locking
++* The library is _not_ thread-aware, however.  It does no locking
+   or thread management of any kind.  If you create a libarchive
+   object and need to access it from multiple threads, you will
+   need to provide your own locking.
+--- a/cpio/cpio.c	1670593111.000000000
++++ b/cpio/cpio.c	1675418967.547192958
+@@ -1217,7 +1217,10 @@ list_item_verbose(struct cpio *cpio, str
+ #else
+ 	ltime = localtime(&mtime);
+ #endif
+-	strftime(date, sizeof(date), fmt, ltime);
++	if (ltime != NULL)
++		strftime(date, sizeof(date), fmt, ltime);
++	else
++		*date = '\0';
+ 
+ 	fprintf(out, "%s%3d %-8s %-8s %8s %12s %s",
+ 	    archive_entry_strmode(entry),
+--- a/doc/html/archive_read_disk.3.html	1670593162.000000000
++++ b/doc/html/archive_read_disk.3.html	1675498626.126137966
+@@ -381,7 +381,7 @@ archive_read_header(3) calls. If matched
+ archive_match_path_excluded, archive_match_time_excluded, or
+ archive_match_owner_excluded, then the callback function
+ specified by the _excluded_func parameter will execute. This
+-function will recieve data provided to the fourth parameter,
++function will receive data provided to the fourth parameter,
+ void *_client_data.</p>
+ 
+ 
+@@ -390,7 +390,7 @@ void *_client_data.</p>
+ <p style="margin-left:17%;">Allows the caller to set a
+ callback function during calls to archive_read_header(3) to
+ filter out metadata for each entry. The callback function
+-recieves the struct archive object, void* custom filter
++receives the struct archive object, void* custom filter
+ data, and the struct archive_entry. If the callback function
+ returns an error, ARCHIVE_RETRY will be returned and the
+ entry will not be further processed.</p>
+--- a/doc/man/archive_read_disk.3	1670593153.000000000
++++ b/doc/man/archive_read_disk.3	1675498626.127482821
+@@ -299,12 +299,12 @@ Tn archive_match_path_excluded,
+ Tn archive_match_time_excluded,
+ or
+ Tn archive_match_owner_excluded,
+-then the callback function specified by the _excluded_func parameter will execute. This function will recieve data provided to the fourth parameter, void *_client_data.
++then the callback function specified by the _excluded_func parameter will execute. This function will receive data provided to the fourth parameter, void *_client_data.
+ .TP
+ \fB\%archive_read_disk_set_metadata_filter_callback\fP()
+ Allows the caller to set a callback function during calls to
+ \fBarchive_read_header\fP(3)
+-to filter out metadata for each entry. The callback function recieves the
++to filter out metadata for each entry. The callback function receives the
+ Tn struct archive
+ object, void* custom filter data, and the 
+ Tn struct archive_entry.
+--- a/doc/text/archive_read_disk.3.txt	1670593154.000000000
++++ b/doc/text/archive_read_disk.3.txt	1675498626.128287101
+@@ -222,13 +222,13 @@ DESCRIPTION
+ 	     calls to archive_match_path_excluded,
+ 	     archive_match_time_excluded, or archive_match_owner_excluded,
+ 	     then the callback function specified by the _excluded_func param‐
+-	     eter will execute. This function will recieve data provided to
++	     eter will execute. This function will receive data provided to
+ 	     the fourth parameter, void *_client_data.
+ 
+      archive_read_disk_set_metadata_filter_callback()
+ 	     Allows the caller to set a callback function during calls to
+ 	     archive_read_header(3) to filter out metadata for each entry. The
+-	     callback function recieves the struct archive object, void* cus‐
++	     callback function receives the struct archive object, void* cus‐
+ 	     tom filter data, and the struct archive_entry.  If the callback
+ 	     function returns an error, ARCHIVE_RETRY will be returned and the
+ 	     entry will not be further processed.
+--- a/doc/wiki/ManPageArchiveReadDisk3.wiki	1670593165.000000000
++++ b/doc/wiki/ManPageArchiveReadDisk3.wiki	1675498626.128829426
+@@ -278,11 +278,11 @@ calls. If matched based on calls to
+ '''archive_match_time_excluded ,''' 
+ or 
+ '''archive_match_owner_excluded ,''' 
+-then the callback function specified by the _excluded_func parameter will execute. This function will recieve data provided to the fourth parameter, void *_client_data. 
++then the callback function specified by the _excluded_func parameter will execute. This function will receive data provided to the fourth parameter, void *_client_data. 
+ </dd><dt>'''archive_read_disk_set_metadata_filter_callback'''()</dt><dd> 
+ Allows the caller to set a callback function during calls to 
+ [[ManPageArchiveReadHeader3]] 
+-to filter out metadata for each entry. The callback function recieves the 
++to filter out metadata for each entry. The callback function receives the 
+ '''struct archive''' 
+ object, void* custom filter data, and the  
+ '''struct archive_entry .''' 
+--- a/libarchive/archive.h	1670593124.000000000
++++ b/libarchive/archive.h	1675418981.974642223
+@@ -43,6 +43,8 @@
+ #include <stdio.h> /* For FILE * */
+ #include <time.h> /* For time_t */
+ 
++#include <os/availability.h>
++
+ /*
+  * Note: archive.h is for use outside of libarchive; the configuration
+  * headers (config.h, archive_platform.h, etc.) are purely internal.
+@@ -395,31 +397,31 @@ __LA_DECL struct archive	*archive_read_n
+ 
+ #if ARCHIVE_VERSION_NUMBER < 4000000
+ __LA_DECL int archive_read_support_compression_all(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_read_support_compression_bzip2(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_read_support_compression_compress(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_read_support_compression_gzip(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_read_support_compression_lzip(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_read_support_compression_lzma(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_read_support_compression_none(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_read_support_compression_program(struct archive *,
+-		     const char *command) __LA_DEPRECATED;
++		     const char *command) API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_read_support_compression_program_signature
+ 		(struct archive *, const char *,
+-		 const void * /* match */, size_t) __LA_DEPRECATED;
++		 const void * /* match */, size_t) API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ 
+ __LA_DECL int archive_read_support_compression_rpm(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_read_support_compression_uu(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_read_support_compression_xz(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ #endif
+ 
+ __LA_DECL int archive_read_support_filter_all(struct archive *);
+@@ -537,7 +539,7 @@ __LA_DECL int archive_read_open_filename
+ 		     const wchar_t *_filename, size_t _block_size);
+ /* archive_read_open_file() is a deprecated synonym for ..._open_filename(). */
+ __LA_DECL int archive_read_open_file(struct archive *,
+-		     const char *_filename, size_t _block_size) __LA_DEPRECATED;
++		     const char *_filename, size_t _block_size) API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ /* Read an archive that's stored in memory. */
+ __LA_DECL int archive_read_open_memory(struct archive *,
+ 		     const void * buff, size_t size);
+@@ -721,7 +723,7 @@ __LA_DECL int		 archive_read_close(struc
+ __LA_DECL int		 archive_read_free(struct archive *);
+ #if ARCHIVE_VERSION_NUMBER < 4000000
+ /* Synonym for archive_read_free() for backwards compatibility. */
+-__LA_DECL int		 archive_read_finish(struct archive *) __LA_DEPRECATED;
++__LA_DECL int		 archive_read_finish(struct archive *) API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ #endif
+ 
+ /*-
+@@ -755,21 +757,21 @@ __LA_DECL int archive_write_set_skip_fil
+ 
+ #if ARCHIVE_VERSION_NUMBER < 4000000
+ __LA_DECL int archive_write_set_compression_bzip2(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_write_set_compression_compress(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_write_set_compression_gzip(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_write_set_compression_lzip(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_write_set_compression_lzma(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_write_set_compression_none(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_write_set_compression_program(struct archive *,
+-		     const char *cmd) __LA_DEPRECATED;
++		     const char *cmd) API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_write_set_compression_xz(struct archive *)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ #endif
+ 
+ /* A convenience function to set the filter based on the code. */
+@@ -839,7 +841,7 @@ __LA_DECL int archive_write_open_filenam
+ 		     const wchar_t *_file);
+ /* A deprecated synonym for archive_write_open_filename() */
+ __LA_DECL int archive_write_open_file(struct archive *, const char *_file)
+-		__LA_DEPRECATED;
++		API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL int archive_write_open_FILE(struct archive *, FILE *);
+ /* _buffSize is the size of the buffer, _used refers to a variable that
+  * will be updated after each write into the buffer. */
+@@ -870,7 +872,7 @@ __LA_DECL int            archive_write_f
+ __LA_DECL int		 archive_write_free(struct archive *);
+ #if ARCHIVE_VERSION_NUMBER < 4000000
+ /* Synonym for archive_write_free() for backwards compatibility. */
+-__LA_DECL int		 archive_write_finish(struct archive *) __LA_DEPRECATED;
++__LA_DECL int		 archive_write_finish(struct archive *) API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ #endif
+ 
+ /*
+@@ -1069,16 +1071,16 @@ __LA_DECL const char *	 archive_filter_n
+  * will eventually be removed. */
+ /* As of libarchive 3.0, this is an alias for archive_filter_bytes(a, -1); */
+ __LA_DECL la_int64_t	 archive_position_compressed(struct archive *)
+-				__LA_DEPRECATED;
++				API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ /* As of libarchive 3.0, this is an alias for archive_filter_bytes(a, 0); */
+ __LA_DECL la_int64_t	 archive_position_uncompressed(struct archive *)
+-				__LA_DEPRECATED;
++				API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ /* As of libarchive 3.0, this is an alias for archive_filter_name(a, 0); */
+ __LA_DECL const char	*archive_compression_name(struct archive *)
+-				__LA_DEPRECATED;
++				API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ /* As of libarchive 3.0, this is an alias for archive_filter_code(a, 0); */
+ __LA_DECL int		 archive_compression(struct archive *)
+-				__LA_DEPRECATED;
++				API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ #endif
+ 
+ __LA_DECL int		 archive_errno(struct archive *);
+--- a/libarchive/archive_cryptor.c	1670593111.000000000
++++ b/libarchive/archive_cryptor.c	1675418990.573911057
+@@ -194,6 +194,10 @@ aes_ctr_release(archive_crypto_ctx *ctx)
+ {
+ 	memset(ctx->key, 0, ctx->key_len);
+ 	memset(ctx->nonce, 0, sizeof(ctx->nonce));
++	if (ctx->ctx != NULL) {
++		CCCryptorRelease(ctx->ctx);
++		ctx->ctx = NULL;
++	}
+ 	return 0;
+ }
+ 
+--- a/libarchive/archive_entry.h	1670593124.000000000
++++ b/libarchive/archive_entry.h	1675418996.722119081
+@@ -45,6 +45,8 @@
+ #include <stdint.h>
+ #include <time.h>
+ 
++#include <os/availability.h>
++
+ #if defined(_WIN32) && !defined(__CYGWIN__)
+ #include <windows.h>
+ #endif
+@@ -583,9 +585,9 @@ __LA_DECL int archive_entry_acl_from_tex
+ 
+ /* Deprecated functions */
+ __LA_DECL const wchar_t	*archive_entry_acl_text_w(struct archive_entry *,
+-		    int /* flags */) __LA_DEPRECATED;
++		    int /* flags */) API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ __LA_DECL const char *archive_entry_acl_text(struct archive_entry *,
+-		    int /* flags */) __LA_DEPRECATED;
++		    int /* flags */) API_DEPRECATED("Deprecated in libarchive-3", macos(10.6, 10.15), ios(4.0, 13.0), tvos(9.0, 13.0), watchos(2.0, 6.0));
+ 
+ /* Return bitmask of ACL types in an archive entry */
+ __LA_DECL int	 archive_entry_acl_types(struct archive_entry *);
+--- a/libarchive/archive_ppmd7.c	1670593111.000000000
++++ b/libarchive/archive_ppmd7.c	1675419077.205786767
+@@ -862,6 +862,9 @@ static void PpmdRAR_RangeDec_CreateVTabl
+ static int Ppmd7_DecodeSymbol(CPpmd7 *p, IPpmd7_RangeDec *rc)
+ {
+   size_t charMask[256 / sizeof(size_t)];
++  if (p->Base == 0) {
++    return -1;
++  }
+   if (p->MinContext->NumStats != 1)
+   {
+     CPpmd_State *s = Ppmd7_GetStats(p, p->MinContext);
+--- a/libarchive/archive_rb.c	1670593111.000000000
++++ b/libarchive/archive_rb.c	1675419081.822910543
+@@ -690,7 +690,7 @@ __archive_rb_tree_iterate(struct archive
+ 	 * opposite direction until our parent is in direction we want to go.
+ 	 */
+ 	if (RB_SENTINEL_P(self->rb_nodes[direction])) {
+-		while (!RB_ROOT_P(rbt, self)) {
++		while (!RB_ROOT_P(rbt, self) && !RB_SENTINEL_P(self)) {
+ 			if (other == (unsigned int)RB_POSITION(self))
+ 				return RB_FATHER(self);
+ 			self = RB_FATHER(self);
+--- a/libarchive/archive_read_disk.3	1670593111.000000000
++++ b/libarchive/archive_read_disk.3	1675498626.129453834
+@@ -290,11 +290,11 @@ calls. If matched based on calls to
+ .Tn archive_match_time_excluded ,
+ or
+ .Tn archive_match_owner_excluded ,
+-then the callback function specified by the _excluded_func parameter will execute. This function will recieve data provided to the fourth parameter, void *_client_data.
++then the callback function specified by the _excluded_func parameter will execute. This function will receive data provided to the fourth parameter, void *_client_data.
+ .It Fn archive_read_disk_set_metadata_filter_callback
+ Allows the caller to set a callback function during calls to
+ .Xr archive_read_header 3
+-to filter out metadata for each entry. The callback function recieves the
++to filter out metadata for each entry. The callback function receives the
+ .Tn struct archive
+ object, void* custom filter data, and the 
+ .Tn struct archive_entry .
+--- a/libarchive/archive_read_support_filter_gzip.c	1670593111.000000000
++++ b/libarchive/archive_read_support_filter_gzip.c	1675419088.268579567
+@@ -460,6 +460,17 @@ gzip_filter_read(struct archive_read_fil
+ 			    "truncated gzip input");
+ 			return (ARCHIVE_FATAL);
+ 		}
++
++		// <rdar://problem/27377729> FuzzDragon - 16A256a - SIGSEGV @ libz.1.dylib: inflate + 1839
++		// A malicious header is advertising more bytes than available, resulting in a negative value
++		// for avail_in, which is then converted from ssize_t to unsigned int
++		//
++		// It may be a better fix to modify read_filter_ahead to return NULL when avail_in would be
++		// set to a negative value, but this function is called in many places, and the potential impact
++		// of the change is larger.
++		if (avail_in < 0)
++			return (ARCHIVE_FATAL);
++
+ 		if (UINT_MAX >= SSIZE_MAX)
+ 			max_in = SSIZE_MAX;
+ 		else
+--- a/libarchive/archive_read_support_filter_uu.c	1670593111.000000000
++++ b/libarchive/archive_read_support_filter_uu.c	1675498626.123464838
+@@ -225,8 +225,8 @@ bid_get_line(struct archive_read_filter
+ 		size_t nbytes_req = (*ravail+1023) & ~1023U;
+ 		ssize_t tested;
+ 
+-		/* Increase reading bytes if it is not enough to at least
+-		 * new two lines. */
++		/* Increase reading bytes if it is not enough for at least
++		 * two new lines. */
+ 		if (nbytes_req < (size_t)*ravail + 160)
+ 			nbytes_req <<= 1;
+ 
+@@ -401,7 +401,7 @@ ensure_in_buff_size(struct archive_read_
+ 
+ 		/*
+ 		 * Calculate a new buffer size for in_buff.
+-		 * Increase its value until it has enough size we need.
++		 * Increase its value until it is enough for our needs.
+ 		 */
+ 		newsize = uudecode->in_allocated;
+ 		do {
+@@ -462,7 +462,7 @@ read_more:
+ 	if (uudecode->in_cnt) {
+ 		/*
+ 		 * If there is remaining data which is saved by
+-		 * previous calling, use it first.
++		 * a previous call, use it first.
+ 		 */
+ 		if (ensure_in_buff_size(self, uudecode,
+ 		    avail_in + uudecode->in_cnt) != ARCHIVE_OK)
+--- a/libarchive/archive_read_support_format_cpio.c	1670593111.000000000
++++ b/libarchive/archive_read_support_format_cpio.c	1675498626.120898043
+@@ -825,9 +825,9 @@ header_odc(struct archive_read *a, struc
+ }
+ 
+ /*
+- * NOTE: if a filename suffix is ".z", it is the file gziped by afio.
+- * it would be nice that we can show uncompressed file size and we can
+- * uncompressed file contents automatically, unfortunately we have nothing
++ * NOTE: if a filename suffix is ".z", it is a file gzipped by afio.
++ * it would be nice if we could show uncompressed file size and
++ * uncompress file contents automatically, unfortunately we have nothing
+  * to get a uncompressed file size while reading each header. It means
+  * we also cannot uncompress file contents under our framework.
+  */
+--- a/libarchive/archive_read_support_format_iso9660.c	1670593111.000000000
++++ b/libarchive/archive_read_support_format_iso9660.c	1675419455.941204596
+@@ -1007,10 +1007,37 @@ read_children(struct archive_read *a, st
+ 		p = b;
+ 		b += iso9660->logical_block_size;
+ 		step -= iso9660->logical_block_size;
+-		for (; *p != 0 && p + DR_name_offset < b && p + *p <= b;
++
++		/* step is partitioned in blocks, each of size
++		 * iso9660->logical_block_size.
++		 * b points to the beginning of the next block, while
++		 * p is used to iterate records in the current block.
++		 *
++		 * Note that *p (i.e. p[0]), contains the length of the
++		 * current record.
++		 *
++		 * We must ensure that we don't step past (b - 1); the latter
++		 * two conditions in the loop guard check that when incrementing
++		 * p by the record length:
++		 * - We have not stepped into the next block
++		 * - We will not step into the next block accessing any valid
++		 *   offset into the record.
++		 *
++		 * Note that parse_file_info() performs similar checks, but we
++		 * check in the loop guard too, since we access offsets of p
++		 * directly in order to skip certain records.
++		 */
++		for (; *p != 0 && p + DR_name_offset < b && p + *p < b;
+ 			p += *p) {
+ 			struct file_info *child;
+ 
++			/* Make sure this record is big enough for us
++			 * to read the record name and its length.
++			 */
++			if ((p + DR_name_len_offset >= b)
++			    || (p + DR_name_offset >= b))
++				continue;
++
+ 			/* N.B.: these special directory identifiers
+ 			 * are 8 bit "values" even on a
+ 			 * Joliet CD with UCS-2 (16bit) encoding.
+--- a/libarchive/archive_read_support_format_mtree.c	1670593111.000000000
++++ b/libarchive/archive_read_support_format_mtree.c	1675498626.124726986
+@@ -392,8 +392,8 @@ next_line(struct archive_read *a,
+ 		if (len >= MAX_LINE_LEN)
+ 			return (-1);
+ 
+-		/* Increase reading bytes if it is not enough to at least
+-		 * new two lines. */
++		/* Increase reading bytes if it is not enough for at least
++		 * two new lines. */
+ 		if (nbytes_req < (size_t)*ravail + 160)
+ 			nbytes_req <<= 1;
+ 
+@@ -516,7 +516,7 @@ bid_keyword(const char *p,  ssize_t len)
+ 
+ /*
+  * Test whether there is a set of mtree keywords.
+- * Returns the number of keyword.
++ * Returns the number of keywords.
+  * Returns -1 if we got incorrect sequence.
+  * This function expects a set of "<space characters>keyword=value".
+  * When "unset" is specified, expects a set of "<space characters>keyword".
+@@ -568,8 +568,8 @@ bid_keyword_list(const char *p,  ssize_t
+ 				--len;
+ 				value = 1;
+ 			}
+-			/* A keyword should have a its value unless
+-			 * "/unset" operation. */ 
++			/* A keyword should have a value unless this is
++			 * an "/unset" operation. */ 
+ 			if (!unset && value == 0)
+ 				return (-1);
+ 		}
+@@ -752,7 +752,7 @@ detect_form(struct archive_read *a, int
+ 				} else if (form_D == 1) {
+ 					if (!last_is_path && keywords > 0)
+ 						/* This this is not `form D'
+-						 * and We cannot accept mixed
++						 * and we cannot accept mixed
+ 						 * format. */
+ 						break;
+ 				}
+@@ -805,7 +805,7 @@ detect_form(struct archive_read *a, int
+  * to read the entire mtree file into memory up front.
+  *
+  * The parsing is done in two steps.  First, it is decided if a line
+- * changes the global defaults and if it is, processed accordingly.
++ * changes the global defaults and if it does, it is processed accordingly.
+  * Otherwise, the options of the line are merged with the current
+  * global options.
+  */
+--- a/libarchive/archive_read_support_format_rar.c	1670593111.000000000
++++ b/libarchive/archive_read_support_format_rar.c	1675419443.112585148
+@@ -1469,6 +1469,12 @@ read_header(struct archive_read *a, stru
+ 
+   if (rar->file_flags & FHD_LARGE)
+   {
++    if (p + 8 > endp)
++    {
++      archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
++                        "Invalid header size");
++      return (ARCHIVE_FATAL);
++    }
+     memcpy(packed_size, file_header.pack_size, 4);
+     memcpy(packed_size + 4, p, 4); /* High pack size */
+     p += 4;
+--- a/libarchive/archive_read_support_format_tar.c	1670593111.000000000
++++ b/libarchive/archive_read_support_format_tar.c	1675420089.992815410
+@@ -1861,6 +1861,43 @@ pax_attribute_acl(struct archive_read *a
+ 	return (r);
+ }
+ 
++static int
++pax_attribute_size(struct archive_read *a, struct tar *tar,
++    struct archive_entry *entry, const char *value)
++{
++	int64_t bytes_remaining = tar_atol10(value, strlen(value));
++	if (bytes_remaining < 0) {
++		tar->entry_bytes_remaining = 0;
++		archive_set_error(&a->archive, ARCHIVE_ERRNO_MISC,
++		    "Invalid entry size");
++		return (ARCHIVE_FATAL);
++	}
++	if (bytes_remaining == INT64_MAX) {
++		/* Note: tar_atol returns INT64_MAX on overflow */
++		tar->entry_bytes_remaining = 0;
++		archive_set_error(&a->archive, ARCHIVE_ERRNO_MISC,
++		    "Entry size overflow");
++		return (ARCHIVE_FATAL);
++	}
++
++	tar->entry_bytes_remaining = bytes_remaining;
++
++	/*
++	 * The "size" pax header keyword always overrides the
++	 * "size" field in the tar header.
++	 * GNU.sparse.realsize, GNU.sparse.size and
++	 * SCHILY.realsize override this value.
++	 */
++	if (!tar->realsize_override) {
++		archive_entry_set_size(entry,
++		    tar->entry_bytes_remaining);
++		tar->realsize
++		    = tar->entry_bytes_remaining;
++	}
++
++	return ARCHIVE_OK;
++}
++
+ /*
+  * Parse a single key=value attribute.  key/value pointers are
+  * assumed to point into reasonably long-lived storage.
+@@ -1982,7 +2019,7 @@ pax_attribute(struct archive_read *a, st
+ 				    AE_SYMLINK_TYPE_DIRECTORY);
+ 			}
+ 		}
+-		if (memcmp(key, "LIBARCHIVE.xattr.", 17) == 0)
++		if (strlen(key) >= 18 && memcmp(key, "LIBARCHIVE.xattr.", 17) == 0)
+ 			pax_attribute_xattr(entry, key, value);
+ 		break;
+ 	case 'R':
+@@ -2105,35 +2142,9 @@ pax_attribute(struct archive_read *a, st
+ 		/* Someday: if (strcmp(key, "security.acl") == 0) { ... } */
+ 		if (strcmp(key, "size") == 0) {
+ 			/* "size" is the size of the data in the entry. */
+-			tar->entry_bytes_remaining
+-			    = tar_atol10(value, strlen(value));
+-			if (tar->entry_bytes_remaining < 0) {
+-				tar->entry_bytes_remaining = 0;
+-				archive_set_error(&a->archive,
+-				    ARCHIVE_ERRNO_MISC,
+-				    "Tar size attribute is negative");
+-				return (ARCHIVE_FATAL);
+-			}
+-			if (tar->entry_bytes_remaining == INT64_MAX) {
+-				/* Note: tar_atol returns INT64_MAX on overflow */
+-				tar->entry_bytes_remaining = 0;
+-				archive_set_error(&a->archive,
+-				    ARCHIVE_ERRNO_MISC,
+-				    "Tar size attribute overflow");
+-				return (ARCHIVE_FATAL);
+-			}
+-			/*
+-			 * The "size" pax header keyword always overrides the
+-			 * "size" field in the tar header.
+-			 * GNU.sparse.realsize, GNU.sparse.size and
+-			 * SCHILY.realsize override this value.
+-			 */
+-			if (!tar->realsize_override) {
+-				archive_entry_set_size(entry,
+-				    tar->entry_bytes_remaining);
+-				tar->realsize
+-				    = tar->entry_bytes_remaining;
+-			}
++			r = pax_attribute_size(a, tar, entry, value);
++			if (r == ARCHIVE_FATAL)
++				return (r);
+ 		}
+ 		break;
+ 	case 'u':
+--- a/libarchive/archive_read_support_format_zip.c	1670593111.000000000
++++ b/libarchive/archive_read_support_format_zip.c	1675420102.062460627
+@@ -78,6 +78,16 @@ __FBSDID("$FreeBSD: head/lib/libarchive/
+ #include "archive_crc32.h"
+ #endif
+ 
++#define ZIP_LOCAL_HEADER_LENGTH (30U)
++
++struct bomb_entry {
++    struct archive_rb_node    node;
++    struct bomb_entry         *next;
++    struct bomb_entry         *prev;
++    int64_t                   local_entry_offset_begin;
++    int64_t                   local_entry_offset_end;
++};
++
+ struct zip_entry {
+ 	struct archive_rb_node	node;
+ 	struct zip_entry	*next;
+@@ -152,8 +162,10 @@ struct zip {
+ 
+ 	/* List of entries (seekable Zip only) */
+ 	struct zip_entry	*zip_entries;
++    struct bomb_entry   *bomb_entries;
+ 	struct archive_rb_tree	tree;
+ 	struct archive_rb_tree	tree_rsrc;
++    struct archive_rb_tree  tree_bomb;
+ 
+ 	/* Bytes read but not yet consumed via __archive_read_consume() */
+ 	size_t			unconsumed;
+@@ -210,6 +222,7 @@ struct zip {
+ 	struct archive_string_conv *sconv_utf8;
+ 	int			init_default_conversion;
+ 	int			process_mac_extensions;
++    int         check_for_overlapping_files;
+ 
+ 	char			init_decryption;
+ 
+@@ -395,6 +408,31 @@ crypt_derive_key_sha1(const void *p, int
+ }
+ #endif
+ 
++/* GCC 5 and later has __builtin_add_overflow() */
++#if (defined(__GNUC__) && (__GNUC__ >= 5))\
++    || (defined(__clang__) && __has_builtin(__builtin_add_overflow))
++#define add_overflow(x,y,s) __builtin_add_overflow(x,y,s)
++#else
++#define add_overflow(x,y,s) sadd_overflow64(x,y,s)
++static bool
++sadd_overflow64(int64_t a, int64_t b, int64_t *r)
++{
++    if (r != NULL
++        || (b >= 0 && a > INT64_MAX - b)
++        || (b <= 0 && a < INT64_MIN - b)) {
++        return true;
++    } else {
++        *r = a+b;
++        return false;
++    }
++}
++#endif /* (defined(__GNUC__) && (__GNUC__ >= 5))
++          || (defined(__clang__) && __has_builtin(__builtin_add_overflow)) */
++
++static int
++bomb_detect_overlap(struct zip *zip,
++    struct zip_entry *zip_entry, int64_t local_header_length);
++
+ /*
+  * Common code for streaming or seeking modes.
+  *
+@@ -954,7 +992,7 @@ zip_read_local_file_header(struct archiv
+ 		zip->init_default_conversion = 1;
+ 	}
+ 
+-	if ((p = __archive_read_ahead(a, 30, NULL)) == NULL) {
++	if ((p = __archive_read_ahead(a, ZIP_LOCAL_HEADER_LENGTH, NULL)) == NULL) {
+ 		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+ 		    "Truncated ZIP file header");
+ 		return (ARCHIVE_FATAL);
+@@ -990,7 +1028,7 @@ zip_read_local_file_header(struct archiv
+ 	filename_length = archive_le16dec(p + 26);
+ 	extra_length = archive_le16dec(p + 28);
+ 
+-	__archive_read_consume(a, 30);
++	__archive_read_consume(a, ZIP_LOCAL_HEADER_LENGTH);
+ 
+ 	/* Read the filename. */
+ 	if ((h = __archive_read_ahead(a, filename_length, NULL)) == NULL) {
+@@ -1040,6 +1078,17 @@ zip_read_local_file_header(struct archiv
+ 	    zip_entry)) {
+ 		return ARCHIVE_FATAL;
+ 	}
++    
++    if (zip->check_for_overlapping_files
++        && bomb_detect_overlap(zip, zip_entry,
++        ZIP_LOCAL_HEADER_LENGTH+filename_length+extra_length)
++        != ARCHIVE_OK) {
++        archive_set_error(&a->archive,
++            ARCHIVE_ERRNO_FILE_FORMAT,
++            "Invalid header");
++        return ARCHIVE_FATAL;
++    }
++    
+ 	__archive_read_consume(a, extra_length);
+ 
+ 	/* Work around a bug in Info-Zip: When reading from a pipe, it
+@@ -3077,6 +3126,7 @@ archive_read_format_zip_cleanup(struct a
+ {
+ 	struct zip *zip;
+ 	struct zip_entry *zip_entry, *next_zip_entry;
++    struct bomb_entry *bomb_entry, *next_bomb_entry;
+ 
+ 	zip = (struct zip *)(a->format->data);
+ 
+@@ -3117,6 +3167,14 @@ archive_read_format_zip_cleanup(struct a
+ 			zip_entry = next_zip_entry;
+ 		}
+ 	}
++    if (zip->bomb_entries) {
++        bomb_entry = zip->bomb_entries;
++        while (bomb_entry != NULL) {
++            next_bomb_entry = bomb_entry->next;
++            free(bomb_entry);
++            bomb_entry = next_bomb_entry;
++        }
++    }
+ 	free(zip->decrypted_buffer);
+ 	if (zip->cctx_valid)
+ 		archive_decrypto_aes_ctr_release(&zip->cctx);
+@@ -3287,7 +3345,7 @@ archive_read_format_zip_streamable_read_
+ 	}
+ 	zip->entry = zip->zip_entries;
+ 	memset(zip->entry, 0, sizeof(struct zip_entry));
+-
++ 
+ 	if (zip->cctx_valid)
+ 		archive_decrypto_aes_ctr_release(&zip->cctx);
+ 	if (zip->hctx_valid)
+@@ -3459,6 +3517,9 @@ archive_read_support_format_zip_streamab
+ 	/* Streamable reader doesn't support mac extensions. */
+ 	zip->process_mac_extensions = 0;
+ 
++    /* Overlap detection is only provided for seekable archives */
++    zip->check_for_overlapping_files = 0;
++
+ 	/*
+ 	 * Until enough data has been read, we cannot tell about
+ 	 * any encrypted entries yet.
+@@ -3712,7 +3773,220 @@ rsrc_basename(const char *name, size_t n
+ 	return (r);
+ }
+ 
++static int
++bomb_cmp_node(const struct archive_rb_node *n1,
++    const struct archive_rb_node *n2)
++{
++    const struct bomb_entry *e1 = (const struct bomb_entry *)n1;
++    const struct bomb_entry *e2 = (const struct bomb_entry *)n2;
++
++    if (e1->local_entry_offset_begin > e2->local_entry_offset_begin)
++        return -1;
++    if (e1->local_entry_offset_begin < e2->local_entry_offset_begin)
++        return 1;
++    return 0;
++}
++
++static int
++bomb_cmp_key(const struct archive_rb_node *n, const void *key)
++{
++    const struct bomb_entry *e = (const struct bomb_entry *)n;
++    int64_t k = (int64_t)key;
++
++    if (e->local_entry_offset_begin > k)
++        return -1;
++    if (e->local_entry_offset_begin < k)
++        return 1;
++    return 0;
++}
++
++static const struct archive_rb_tree_ops rb_bomb_ops = {
++    &bomb_cmp_node, &bomb_cmp_key
++};
++
++static int
++_bomb_create_and_insert_node(struct zip *zip, int64_t begin, int64_t end)
++{
++    struct archive_rb_tree *tree_bomb = &zip->tree_bomb;
++    struct bomb_entry *bomb_entry = (struct bomb_entry *)
++        calloc(1, sizeof(struct bomb_entry));
++    if (bomb_entry == NULL)
++        return ARCHIVE_FATAL;
++    bomb_entry->next = zip->bomb_entries;
++    if (bomb_entry->next != NULL)
++        bomb_entry->next->prev = bomb_entry;
++    zip->bomb_entries = bomb_entry;
++    bomb_entry->prev = NULL;
++    bomb_entry->local_entry_offset_begin = begin;
++    bomb_entry->local_entry_offset_end = end;
++    if (__archive_rb_tree_insert_node(tree_bomb, &(bomb_entry->node))
++        == 0)
++        return ARCHIVE_FATAL;
++    
++    return ARCHIVE_OK;
++}
++
+ static void
++_bomb_delete_node(struct zip *zip, struct bomb_entry *node)
++{
++    if (zip->bomb_entries == NULL || node == NULL)
++        return;
++    
++    if (zip->bomb_entries == node)
++        zip->bomb_entries = node->next;
++    
++    if (node->next != NULL)
++        node->next->prev = node->prev;
++    
++    if (node->prev != NULL)
++        node->prev->next = node->next;
++    
++    free(node);
++}
++
++static int
++_bomb_get_begin_and_end(struct zip_entry *zip_entry,
++    int64_t local_header_length, int64_t *beginPt, int64_t *endPt)
++{
++    if (zip_entry == NULL)
++        return ARCHIVE_FATAL;
++    
++    int64_t begin = zip_entry->local_header_offset;
++    if (zip_entry->compressed_size < 0
++        || begin < 0
++        || local_header_length < 1)
++        return ARCHIVE_FATAL;
++    
++    int64_t entry_length;
++    if (add_overflow(zip_entry->compressed_size, local_header_length-1,
++        &entry_length)
++        == true)
++        return ARCHIVE_FATAL;
++
++    int64_t end;
++    if (add_overflow(begin, entry_length, &end) == true)
++        return ARCHIVE_FATAL;
++    
++    if (begin > end)
++        return ARCHIVE_FATAL;
++    
++    *beginPt = begin;
++    *endPt = end;
++    
++    return ARCHIVE_OK;
++}
++
++static int
++bomb_detect_overlap(struct zip *zip,
++    struct zip_entry *zip_entry, int64_t local_header_length)
++{
++    struct archive_rb_tree *tree_bomb = &zip->tree_bomb;
++    int64_t begin, end;
++    
++    begin = end = 0;
++    if (_bomb_get_begin_and_end(zip_entry, local_header_length, &begin,
++        &end)
++        != ARCHIVE_OK)
++        return ARCHIVE_FATAL;
++    
++    struct bomb_entry *leq = (struct bomb_entry *)
++        __archive_rb_tree_find_node_leq(tree_bomb, begin);
++    struct bomb_entry *geq = (struct bomb_entry *)
++        __archive_rb_tree_find_node_geq(tree_bomb, begin);
++    
++    if (leq != NULL && leq->local_entry_offset_end >= begin)
++        return ARCHIVE_FATAL;
++    
++    if (geq != NULL && geq->local_entry_offset_begin <= end)
++        return ARCHIVE_FATAL;
++    
++    bool prev = leq
++        && leq->local_entry_offset_end >= 0
++        && begin == leq->local_entry_offset_end+1;
++    bool next = geq
++        && geq->local_entry_offset_begin > 0
++        && end == geq->local_entry_offset_begin-1;
++    
++    if (prev && next) {
++        /*
++         * This bridges the gap between leq and geq.
++         * Merge the two and delete geq.
++         */
++        leq->local_entry_offset_end = geq->local_entry_offset_end;
++        __archive_rb_tree_remove_node(tree_bomb, &geq->node);
++        _bomb_delete_node(zip, geq);
++    } else if (prev) {
++        /* Extend leq forwards */
++        leq->local_entry_offset_end = end;
++    } else if (next) {
++        /* Extend geq backwards and re-sort the node */
++        __archive_rb_tree_remove_node(tree_bomb, &geq->node);
++        geq->local_entry_offset_begin = begin;
++        if (__archive_rb_tree_insert_node(tree_bomb, &geq->node) == 0)
++            return ARCHIVE_FATAL;
++    } else {
++        /* This isn't next to any of the current spans */
++        if (_bomb_create_and_insert_node(zip, begin, end) != ARCHIVE_OK)
++            return ARCHIVE_FATAL;
++    }
++
++    return ARCHIVE_OK;
++}
++
++static int
++bomb_insert_central_node_and_detect_overlap(struct archive_rb_tree *tree,
++    struct zip_entry *zip_entry)
++{
++    if (tree == NULL || zip_entry == NULL)
++        return ARCHIVE_FATAL;
++    
++    /*
++     * We can use the central directory header to check for the minimum size
++     * of a local file entry. The header is 30 bytes, plus we add the stated
++     * compressed size in _bomb_get_begin_and_end.
++     *
++     * Because the variable length fields (name & extra) aren't guaranteed to
++     * match, we don't account for them. Therefore, it's possible to have false
++     * negatives. Those will be caught in the second overlap detection pass.
++     */
++    
++    int64_t begin, end;
++    if (_bomb_get_begin_and_end(zip_entry, ZIP_LOCAL_HEADER_LENGTH, &begin,
++        &end) != ARCHIVE_OK)
++        return ARCHIVE_FATAL;
++    
++    if (__archive_rb_tree_insert_node(tree, &zip_entry->node) == 0)
++        /* Protect against duplicate entries */
++        return ARCHIVE_FATAL;
++    
++    struct zip_entry *prev = (struct zip_entry *)__archive_rb_tree_iterate(
++        tree, &(zip_entry->node), ARCHIVE_RB_DIR_LEFT);
++    if (prev != NULL) {
++        int64_t begin_prev, end_prev;
++        if (_bomb_get_begin_and_end(prev, ZIP_LOCAL_HEADER_LENGTH, &begin_prev,
++            &end_prev) != ARCHIVE_OK)
++            return ARCHIVE_FATAL;
++        
++        if (end_prev >= begin)
++            return ARCHIVE_FATAL;
++    }
++ 
++    struct zip_entry *next = (struct zip_entry *)__archive_rb_tree_iterate(
++        tree, &(zip_entry->node), ARCHIVE_RB_DIR_RIGHT);
++    if (next != NULL) {
++        int64_t begin_next, end_next;
++        if (_bomb_get_begin_and_end(next, ZIP_LOCAL_HEADER_LENGTH, &begin_next,
++            &end_next) != ARCHIVE_OK)
++            return ARCHIVE_FATAL;
++        
++        if (begin_next <= end)
++            return ARCHIVE_FATAL;
++    }
++    
++    return ARCHIVE_OK;
++}
++
++static int
+ expose_parent_dirs(struct zip *zip, const char *name, size_t name_length)
+ {
+ 	struct archive_string str;
+@@ -3734,9 +4008,12 @@ expose_parent_dirs(struct zip *zip, cons
+ 			break;
+ 		__archive_rb_tree_remove_node(&zip->tree_rsrc, &dir->node);
+ 		archive_string_free(&dir->rsrcname);
+-		__archive_rb_tree_insert_node(&zip->tree, &dir->node);
++        if (bomb_insert_central_node_and_detect_overlap(&zip->tree, dir)
++            != ARCHIVE_OK)
++            return ARCHIVE_FATAL;
+ 	}
+ 	archive_string_free(&str);
++    return ARCHIVE_OK;
+ }
+ 
+ static int
+@@ -3800,6 +4077,7 @@ slurp_central_directory(struct archive_r
+ 
+ 	__archive_rb_tree_init(&zip->tree, &rb_ops);
+ 	__archive_rb_tree_init(&zip->tree_rsrc, &rb_rsrc_ops);
++    __archive_rb_tree_init(&zip->tree_bomb, &rb_bomb_ops);
+ 
+ 	zip->central_directory_entries_total = 0;
+ 	while (1) {
+@@ -3903,8 +4181,14 @@ slurp_central_directory(struct archive_r
+ 		 */
+ 		if (!zip->process_mac_extensions) {
+ 			/* Treat every entry as a regular entry. */
+-			__archive_rb_tree_insert_node(&zip->tree,
+-			    &zip_entry->node);
++            if (bomb_insert_central_node_and_detect_overlap(&zip->tree,
++                zip_entry)
++                != ARCHIVE_OK) {
++                archive_set_error(&a->archive,
++                    ARCHIVE_ERRNO_FILE_FORMAT,
++                    "Invalid header");
++                return ARCHIVE_FATAL;
++            }
+ 		} else {
+ 			name = p;
+ 			r = rsrc_basename(name, filename_length);
+@@ -3916,11 +4200,23 @@ slurp_central_directory(struct archive_r
+ 				if (name[filename_length-1] != '/' &&
+ 				    (r - name < 3 || r[0] != '.' ||
+ 				     r[1] != '_')) {
+-					__archive_rb_tree_insert_node(
+-					    &zip->tree, &zip_entry->node);
++					int res;
++					res = bomb_insert_central_node_and_detect_overlap
++						(&zip->tree, zip_entry);
++					if (r != ARCHIVE_OK) {
++						archive_set_error(&a->archive,
++						    ARCHIVE_ERRNO_FILE_FORMAT,
++						    "Invalid header");
++						return ARCHIVE_FATAL;
++					}
+ 					/* Expose its parent directories. */
+-					expose_parent_dirs(zip, name,
+-					    filename_length);
++					res = expose_parent_dirs(zip, name, filename_length);
++					if (res != ARCHIVE_OK) {
++						archive_set_error(&a->archive,
++						    ARCHIVE_ERRNO_FILE_FORMAT,
++						    "Invalid header");
++						return ARCHIVE_FATAL;
++					}
+ 				} else {
+ 					/* This file is a resource fork file or
+ 					 * a directory. */
+@@ -3932,6 +4228,17 @@ slurp_central_directory(struct archive_r
+ 			} else {
+ 				/* Generate resource fork name to find its
+ 				 * resource file at zip->tree_rsrc. */
++
++                /* If this is an entry ending with slash,
++                 * make the resource fork name slash-less
++                 * as the actual resource fork doesn't
++                 * end with '/'.
++                 */
++                size_t tmp_length = filename_length;
++                if (name[tmp_length - 1] == '/') {
++                    tmp_length--;
++                    r = rsrc_basename(name, tmp_length);
++                }
+ 				archive_strcpy(&(zip_entry->rsrcname),
+ 				    "__MACOSX/");
+ 				archive_strncat(&(zip_entry->rsrcname),
+@@ -3939,11 +4246,17 @@ slurp_central_directory(struct archive_r
+ 				archive_strcat(&(zip_entry->rsrcname), "._");
+ 				archive_strncat(&(zip_entry->rsrcname),
+ 				    name + (r - name),
+-				    filename_length - (r - name));
++				    tmp_length - (r - name));
+ 				/* Register an entry to RB tree to sort it by
+ 				 * file offset. */
+-				__archive_rb_tree_insert_node(&zip->tree,
+-				    &zip_entry->node);
++                if (bomb_insert_central_node_and_detect_overlap(&zip->tree,
++                    zip_entry)
++                    != ARCHIVE_OK) {
++                    archive_set_error(&a->archive,
++                        ARCHIVE_ERRNO_FILE_FORMAT,
++                        "Invalid header");
++                    return ARCHIVE_FATAL;
++                }
+ 			}
+ 		}
+ 
+@@ -3961,7 +4274,8 @@ zip_get_local_file_header_size(struct ar
+ 	const char *p;
+ 	ssize_t filename_length, extra_length;
+ 
+-	if ((p = __archive_read_ahead(a, extra + 30, NULL)) == NULL) {
++	if ((p = __archive_read_ahead(a, extra + ZIP_LOCAL_HEADER_LENGTH, NULL))
++        == NULL) {
+ 		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+ 		    "Truncated ZIP file header");
+ 		return (ARCHIVE_WARN);
+@@ -3975,7 +4289,7 @@ zip_get_local_file_header_size(struct ar
+ 	filename_length = archive_le16dec(p + 26);
+ 	extra_length = archive_le16dec(p + 28);
+ 
+-	return (30 + filename_length + extra_length);
++	return (ZIP_LOCAL_HEADER_LENGTH + filename_length + extra_length);
+ }
+ 
+ static int
+@@ -4012,15 +4326,15 @@ zip_read_mac_metadata(struct archive_rea
+ 		return (ARCHIVE_WARN);
+ 	}
+ 
+-	if (rsrc->uncompressed_size > (4 * 1024 * 1024)) {
++	if (rsrc->uncompressed_size > (10 * 1024 * 1024)) {
+ 		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+-		    "Mac metadata is too large: %jd > 4M bytes",
++		    "Mac metadata is too large: %jd > 10M bytes",
+ 		    (intmax_t)rsrc->uncompressed_size);
+ 		return (ARCHIVE_WARN);
+ 	}
+-	if (rsrc->compressed_size > (4 * 1024 * 1024)) {
++	if (rsrc->compressed_size > (10 * 1024 * 1024)) {
+ 		archive_set_error(&a->archive, ARCHIVE_ERRNO_FILE_FORMAT,
+-		    "Mac metadata is too large: %jd > 4M bytes",
++		    "Mac metadata is too large: %jd > 10M bytes",
+ 		    (intmax_t)rsrc->compressed_size);
+ 		return (ARCHIVE_WARN);
+ 	}
+@@ -4039,6 +4353,16 @@ zip_read_mac_metadata(struct archive_rea
+ 	}
+ 
+ 	hsize = zip_get_local_file_header_size(a, 0);
++    if (zip->check_for_overlapping_files
++        && bomb_detect_overlap(zip, rsrc, hsize)
++        != ARCHIVE_OK) {
++        archive_set_error(&a->archive,
++            ARCHIVE_ERRNO_FILE_FORMAT,
++            "Invalid header");
++        ret = ARCHIVE_FATAL;
++        goto exit_mac_metadata;
++    }
++    
+ 	__archive_read_consume(a, hsize);
+ 
+ 	remaining_bytes = (size_t)rsrc->compressed_size;
+@@ -4241,6 +4565,8 @@ archive_read_support_format_zip_seekable
+ 	/* Set this by default on Mac OS. */
+ 	zip->process_mac_extensions = 1;
+ #endif
++    
++    zip->check_for_overlapping_files = 1;
+ 
+ 	/*
+ 	 * Until enough data has been read, we cannot tell about
+--- a/libarchive/archive_string.c	1670593111.000000000
++++ b/libarchive/archive_string.c	1675498626.116632313
+@@ -424,6 +424,10 @@ static const char *
+ default_iconv_charset(const char *charset) {
+ 	if (charset != NULL && charset[0] != '\0')
+ 		return charset;
++
++#if defined(__APPLE__)
++	return "UTF-8";
++#endif
+ #if HAVE_LOCALE_CHARSET && !defined(__APPLE__)
+ 	/* locale_charset() is broken on Mac OS */
+ 	return locale_charset();
+@@ -3014,7 +3018,7 @@ archive_string_normalize_C(struct archiv
+ 		while ((n2 = parse(&uc2, s, len)) > 0) {
+ 			uint32_t ucx[FDC_MAX];
+ 			int ccx[FDC_MAX];
+-			int cl, cx, i, nx, ucx_size;
++			int cl, cx, i, nx = 0, ucx_size;
+ 			int LIndex,SIndex;
+ 			uint32_t nfc;
+ 
+@@ -3521,7 +3525,7 @@ win_strncat_from_utf16(struct archive_st
+ 
+ 	if (sc->to_cp == CP_C_LOCALE) {
+ 		/*
+-		 * "C" locale special process.
++		 * "C" locale special processing.
+ 		 */
+ 		u16 = _p;
+ 		ll = 0;
+@@ -3640,7 +3644,7 @@ win_strncat_to_utf16(struct archive_stri
+ 	avail = as16->buffer_length - 2;
+ 	if (sc->from_cp == CP_C_LOCALE) {
+ 		/*
+-		 * "C" locale special process.
++		 * "C" locale special processing.
+ 		 */
+ 		count = 0;
+ 		while (count < length && *s) {
+--- a/libarchive/archive_write_disk_posix.c	1670593111.000000000
++++ b/libarchive/archive_write_disk_posix.c	1675420224.696691029
+@@ -134,6 +134,12 @@ __FBSDID("$FreeBSD$");
+ #include <zlib.h>
+ #endif
+ 
++#if __APPLE__
++#ifdef HAVE_PTHREAD_H
++#include <pthread/private.h>
++#endif
++#endif
++
+ /* TODO: Support Mac OS 'quarantine' feature.  This is really just a
+  * standard tag to mark files that have been downloaded as "tainted".
+  * On Mac OS, we should mark the extracted files as tainted if the
+@@ -2802,6 +2808,9 @@ check_symlinks_fsobj(char *path, int *a_
+ #if defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
+ 	int fd;
+ #endif
++#if __APPLE__
++	int per_thread_dir = 0;
++#endif
+ 
+ 	/* Nothing to do here if name is empty */
+ 	if(path[0] == '\0')
+@@ -2829,6 +2838,13 @@ check_symlinks_fsobj(char *path, int *a_
+ 		    "Could not open ", path);
+ 		return (ARCHIVE_FATAL);
+ 	}
++
++#if __APPLE__
++	r = pthread_fchdir_np(-1);
++	if (r == 0)
++		per_thread_dir = 1;
++#endif
++
+ 	head = path;
+ 	tail = path;
+ 	last = 0;
+@@ -2857,7 +2873,7 @@ check_symlinks_fsobj(char *path, int *a_
+ 		c = tail[0];
+ 		tail[0] = '\0';
+ 		/* Check that we haven't hit a symlink. */
+-#if defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
++#if !__APPLE__ && defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
+ 		r = fstatat(chdir_fd, head, &st, AT_SYMLINK_NOFOLLOW);
+ #else
+ 		r = lstat(head, &st);
+@@ -2887,7 +2903,9 @@ check_symlinks_fsobj(char *path, int *a_
+ 			}
+ 		} else if (S_ISDIR(st.st_mode)) {
+ 			if (!last) {
+-#if defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
++#if __APPLE__
++				r = pthread_chdir_np(head);
++#elif defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
+ 				fd = la_opendirat(chdir_fd, head);
+ 				if (fd < 0)
+ 					r = -1;
+@@ -2938,7 +2956,7 @@ check_symlinks_fsobj(char *path, int *a_
+ 				 * so we can overwrite it with the
+ 				 * item being extracted.
+ 				 */
+-#if defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
++#if !__APPLE__ && defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
+ 				r = unlinkat(chdir_fd, head, 0);
+ #else
+ 				r = unlink(head);
+@@ -2973,7 +2991,7 @@ check_symlinks_fsobj(char *path, int *a_
+ 				break;
+ 			} else if (flags & ARCHIVE_EXTRACT_UNLINK) {
+ 				/* User asked us to remove problems. */
+-#if defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
++#if !__APPLE__ && defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
+ 				r = unlinkat(chdir_fd, head, 0);
+ #else
+ 				r = unlink(head);
+@@ -2996,7 +3014,7 @@ check_symlinks_fsobj(char *path, int *a_
+ 				 * This is needed to extract hardlinks over
+ 				 * symlinks.
+ 				 */
+-#if defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
++#if !__APPLE__ && defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
+ 				r = fstatat(chdir_fd, head, &st, 0);
+ #else
+ 				r = la_stat(head, &st);
+@@ -3013,7 +3031,9 @@ check_symlinks_fsobj(char *path, int *a_
+ 						break;
+ 					}
+ 				} else if (S_ISDIR(st.st_mode)) {
+-#if defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
++#if __APPLE__
++					r = pthread_chdir_np(head);
++#elif defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
+ 					fd = la_opendirat(chdir_fd, head);
+ 					if (fd < 0)
+ 						r = -1;
+@@ -3061,7 +3081,15 @@ check_symlinks_fsobj(char *path, int *a_
+ 	}
+ 	/* Catches loop exits via break */
+ 	tail[0] = c;
+-#if defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
++#if __APPLE__
++        if (per_thread_dir == 1)
++		pthread_fchdir_np(chdir_fd);
++        else
++		pthread_fchdir_np(-1);
++
++	close(chdir_fd);
++	chdir_fd = -1;
++#elif defined(HAVE_OPENAT) && defined(HAVE_FSTATAT) && defined(HAVE_UNLINKAT)
+ 	/* If we operate with openat(), fstatat() and unlinkat() there was
+ 	 * no chdir(), so just close the fd */
+ 	if (chdir_fd >= 0)
+@@ -4392,7 +4420,8 @@ fixup_appledouble(struct archive_write_d
+ 	archive_strncpy(&datafork, pathname, p - pathname);
+ 	archive_strcat(&datafork, p + 2);
+ 	if (lstat(datafork.s, &st) == -1 ||
+-	    (st.st_mode & AE_IFMT) != AE_IFREG)
++	    ((st.st_mode & AE_IFMT) != AE_IFREG &&
++	     (st.st_mode & AE_IFMT) != AE_IFDIR))
+ 		goto skip_appledouble;
+ 
+ 	/*
+--- a/libarchive/archive_write_set_format_cpio_odc.c	1670593111.000000000
++++ b/libarchive/archive_write_set_format_cpio_odc.c	1675420236.615277142
+@@ -70,6 +70,7 @@ struct cpio {
+ 	struct archive_string_conv *opt_sconv;
+ 	struct archive_string_conv *sconv_default;
+ 	int		  init_default_conversion;
++	int		  omit_trailer;
+ };
+ 
+ #define	c_magic_offset 0
+@@ -150,6 +151,29 @@ archive_write_odc_options(struct archive
+ 				ret = ARCHIVE_FATAL;
+ 		}
+ 		return (ret);
++	} else if (strcmp(key, "starting-inode")  == 0) {
++		if (val == NULL || val[0] == 0) {
++			archive_set_error(&a->archive, ARCHIVE_ERRNO_MISC,
++			    "%s: starting-inode option needs an integer value",
++			    a->format_name);
++		} else {
++			char *endptr;
++			uint64_t starting_ino = strtoll(val, &endptr, 0);
++
++			if ((endptr[0] != '\0' && endptr[0] != '.') || (0 == starting_ino)) {
++				archive_set_error(&a->archive, ARCHIVE_ERRNO_MISC,
++				    "%s: starting-inode value invalid",
++				    a->format_name);
++				ret = ARCHIVE_FATAL;
++			} else {
++				cpio->ino_next = starting_ino;
++				ret = ARCHIVE_OK;
++			}
++		}
++		return (ret);
++	} else if (strcmp(key, "skip-trailer") == 0) {
++		cpio->omit_trailer = (val != NULL && val[0] != 0);
++		return (ARCHIVE_OK);
+ 	}
+ 
+ 	/* Note: The "warn" return is just to inform the options
+@@ -464,16 +488,22 @@ format_octal_recursive(int64_t v, char *
+ static int
+ archive_write_odc_close(struct archive_write *a)
+ {
+-	int er;
+-	struct archive_entry *trailer;
++	int er = ARCHIVE_OK;
++	struct cpio *cpio;
++
++	cpio = (struct cpio *)a->format_data;
+ 
+-	trailer = archive_entry_new2(NULL);
+-	/* nlink = 1 here for GNU cpio compat. */
+-	archive_entry_set_nlink(trailer, 1);
+-	archive_entry_set_size(trailer, 0);
+-	archive_entry_set_pathname(trailer, "TRAILER!!!");
+-	er = write_header(a, trailer);
+-	archive_entry_free(trailer);
++	if (!cpio->omit_trailer) {
++		struct archive_entry *trailer;
++
++		trailer = archive_entry_new2(NULL);
++		/* nlink = 1 here for GNU cpio compat. */
++		archive_entry_set_nlink(trailer, 1);
++		archive_entry_set_size(trailer, 0);
++		archive_entry_set_pathname(trailer, "TRAILER!!!");
++		er = write_header(a, trailer);
++		archive_entry_free(trailer);
++	}
+ 	return (er);
+ }
+ 
+--- a/libarchive/archive_write_set_format_xar.c	1670593111.000000000
++++ b/libarchive/archive_write_set_format_xar.c	1675420240.605407671
+@@ -885,6 +885,7 @@ xmlwrite_string(struct archive_write *a,
+ 	return (ARCHIVE_OK);
+ }
+ 
++__attribute__((format(printf, 4, 5)))
+ static int
+ xmlwrite_fstring(struct archive_write *a, xmlTextWriterPtr writer,
+ 	const char *key, const char *fmt, ...)
+--- a/libarchive/archive_write_set_format_zip.c	1670593111.000000000
++++ b/libarchive/archive_write_set_format_zip.c	1675420244.601674600
+@@ -686,6 +686,10 @@ archive_write_zip_header(struct archive_
+ 		if (zip->entry_compression == COMPRESSION_UNSPECIFIED) {
+ 			zip->entry_compression = COMPRESSION_DEFAULT;
+ 		}
++        /* Is the file zero length in size? */
++        if (size == 0) {
++            zip->entry_compression = COMPRESSION_STORE;
++        }
+ 		if (zip->entry_compression == COMPRESSION_STORE) {
+ 			zip->entry_compressed_size = size;
+ 			zip->entry_uncompressed_size = size;
+--- a/libarchive/libarchive-formats.5	1670593111.000000000
++++ b/libarchive/libarchive-formats.5	1675420256.275547765
+@@ -454,7 +454,6 @@ TODO: Need more information
+ .Sh SEE ALSO
+ .Xr ar 1 ,
+ .Xr cpio 1 ,
+-.Xr mkisofs 1 ,
+ .Xr shar 1 ,
+ .Xr tar 1 ,
+ .Xr zip 1 ,
+--- a/libarchive/test/list.h	1670593151.000000000
++++ b/libarchive/test/list.h	1675500387.613960565
+@@ -159,6 +159,7 @@ DEFINE_TEST(test_gnutar_filename_encodin
+ DEFINE_TEST(test_gnutar_filename_encoding_EUCJP_UTF8)
+ DEFINE_TEST(test_gnutar_filename_encoding_EUCJP_CP932)
+ DEFINE_TEST(test_gnutar_filename_encoding_CP932_UTF8)
++DEFINE_TEST(test_leaks)
+ DEFINE_TEST(test_link_resolver)
+ DEFINE_TEST(test_open_failure)
+ DEFINE_TEST(test_open_fd)
+--- a/libarchive/test/test_archive_string_conversion.c	1670593111.000000000
++++ b/libarchive/test/test_archive_string_conversion.c	1675420311.260623396
+@@ -773,6 +773,7 @@ test_archive_string_canonicalization(voi
+ 	assertEqualString("UTF-16LE",
+ 	    archive_string_conversion_charset_name(sconv));
+ 
++	archive_mstring_clean(&mstr);
+ 	assertEqualInt(ARCHIVE_OK, archive_read_free(a));
+ 
+ }
+--- a/libarchive/test/test_compat_lzip.c	1670593111.000000000
++++ b/libarchive/test/test_compat_lzip.c	1675498626.118266581
+@@ -48,7 +48,7 @@ echo "f3" > $dir/d1/f3
+ rm -r $dir
+ }
+ #
+-# Make a lzip file from splitted tar file.
++# Make a lzip file from the split tar file.
+ #
+ name=test_compat_lzip_1
+ dir="$name`date +%Y%m%d%H%M%S`.$USER"
+@@ -76,7 +76,7 @@ exit 0
+ */
+ 
+ /*
+- * Verify our ability to read sample files compatibly with lzip.
++ * Verify our ability to read the sample files compatibly with lzip.
+  *
+  * In particular:
+  *  * lzip will read multiple lzip streams, concatenating the output
+--- a/libarchive/test/test_fuzz.c	1670593111.000000000
++++ b/libarchive/test/test_fuzz.c	1675420327.851740255
+@@ -154,7 +154,7 @@ test_fuzz(const struct files *filesets)
+ 		srand((unsigned)time(NULL));
+ 
+ 		for (i = 0; i < 1000; ++i) {
+-			FILE *f;
++			FILE *f = NULL;
+ 			int j, numbytes, trycnt;
+ 
+ 			/* Fuzz < 1% of the bytes in the archive. */
+--- a/libarchive/test/test_short_writes.c	1670593111.000000000
++++ b/libarchive/test/test_short_writes.c	1675420343.513250978
+@@ -169,6 +169,8 @@ checker_check(struct checker *checker)
+ static void
+ checker_free(struct checker *checker)
+ {
++        archive_free(checker->short_archive);
++        archive_free(checker->full_archive);
+         free(checker->shortbuf);
+         free(checker->fullbuf);
+         free(checker);
+--- a/libarchive/test/test_write_disk_appledouble.c	1670593111.000000000
++++ b/libarchive/test/test_write_disk_appledouble.c	1675420357.039537510
+@@ -112,6 +112,7 @@ DEFINE_TEST(test_write_disk_appledouble)
+ 	struct archive_entry *ae;
+ 	struct stat st;
+ 	acl_t acl;
++    char *acl_text = NULL;
+ 
+ 	extract_reference_file(refname);
+ 
+@@ -163,12 +164,14 @@ DEFINE_TEST(test_write_disk_appledouble)
+ 	failure("'%s' should have decompfs xattr", "file3");
+ 	assertEqualInt(1, has_xattr("file3", "com.apple.decmpfs"));
+ 	assert(NULL != (acl = acl_get_file("file3", ACL_TYPE_EXTENDED)));
+-	assertEqualString(clean_acl(acl_to_text(acl, NULL)),
++	acl_text = acl_to_text(acl, NULL);
++	assertEqualString(clean_acl(acl_text),
+ 	    "!#acl 1\n"
+ 	    "user:FFFFEEEE-DDDD-CCCC-BBBB-AAAA000000C9:::deny:read\n"
+ 	    "group:ABCDEFAB-CDEF-ABCD-EFAB-CDEF00000050:admin:80:allow:write\n"
+ 	);
+ 	if (acl) acl_free(acl);
++	free(acl_text);
+ 	/* Test ._file3. */
+ 	failure("'file3' should be merged and removed");
+ 	assertFileNotExists("._file3");
+@@ -222,12 +225,14 @@ DEFINE_TEST(test_write_disk_appledouble)
+ 	failure("'%s' should not have decmpfs", "file3");
+ 	assertEqualInt(0, has_xattr("file3", "com.apple.decmpfs"));
+ 	assert(NULL != (acl = acl_get_file("file3", ACL_TYPE_EXTENDED)));
+-	assertEqualString(clean_acl(acl_to_text(acl, NULL)),
++	acl_text = acl_to_text(acl, NULL);
++	assertEqualString(clean_acl(acl_text),
+ 	    "!#acl 1\n"
+ 	    "user:FFFFEEEE-DDDD-CCCC-BBBB-AAAA000000C9:::deny:read\n"
+ 	    "group:ABCDEFAB-CDEF-ABCD-EFAB-CDEF00000050:admin:80:allow:write\n"
+ 	);
+ 	if (acl) acl_free(acl);
++	free(acl_text);
+ 	/* Test ._file3. */
+ 	failure("'file3' should be merged and removed");
+ 	assertFileNotExists("._file3");
+--- a/libarchive/test/test_write_disk_mac_metadata.c	1670593111.000000000
++++ b/libarchive/test/test_write_disk_mac_metadata.c	1675420360.713451927
+@@ -112,6 +112,7 @@ DEFINE_TEST(test_write_disk_mac_metadata
+ 	struct archive_entry *ae;
+ 	struct stat st;
+ 	acl_t acl;
++	char *acl_text = NULL;
+ 
+ 	extract_reference_file(refname);
+ 
+@@ -156,12 +157,14 @@ DEFINE_TEST(test_write_disk_mac_metadata
+ 	failure("'%s' should have decompfs xattr", "file3");
+ 	assertEqualInt(1, has_xattr("file3", "com.apple.decmpfs"));
+ 	assert(NULL != (acl = acl_get_file("file3", ACL_TYPE_EXTENDED)));
+-	assertEqualString(clean_acl(acl_to_text(acl, NULL)),
++	acl_text = acl_to_text(acl, NULL);
++	assertEqualString(clean_acl(acl_text),
+ 	    "!#acl 1\n"
+ 	    "user:FFFFEEEE-DDDD-CCCC-BBBB-AAAA000000C9:::deny:read\n"
+ 	    "group:ABCDEFAB-CDEF-ABCD-EFAB-CDEF00000050:admin:80:allow:write\n"
+ 	);
+ 	if (acl) acl_free(acl);
++	free(acl_text);
+ 
+ 	assertChdir("..");
+ 
+@@ -207,12 +210,14 @@ DEFINE_TEST(test_write_disk_mac_metadata
+ 	failure("'%s' should not have decmpfs", "file3");
+ 	assertEqualInt(0, has_xattr("file3", "com.apple.decmpfs"));
+ 	assert(NULL != (acl = acl_get_file("file3", ACL_TYPE_EXTENDED)));
+-	assertEqualString(clean_acl(acl_to_text(acl, NULL)),
++	acl_text = acl_to_text(acl, NULL);
++	assertEqualString(clean_acl(acl_text),
+ 	    "!#acl 1\n"
+ 	    "user:FFFFEEEE-DDDD-CCCC-BBBB-AAAA000000C9:::deny:read\n"
+ 	    "group:ABCDEFAB-CDEF-ABCD-EFAB-CDEF00000050:admin:80:allow:write\n"
+ 	);
+ 	if (acl) acl_free(acl);
++	free(acl_text);
+ 
+ 	assertChdir("..");
+ 
+--- a/libarchive/test/test_write_format_iso9660_filename.c	1670593111.000000000
++++ b/libarchive/test/test_write_format_iso9660_filename.c	1675420368.093230016
+@@ -60,7 +60,7 @@ struct fns {
+ #define	ALLOW_LDOT	0x00004
+ };
+ 
+-enum vtype {
++enum variant_type {
+ 	ROCKRIDGE,
+ 	JOLIET,
+ 	ISO9660
+@@ -70,7 +70,7 @@ enum vtype {
+  * Verify file
+  */
+ static void
+-verify_file(struct archive *a, enum vtype type, struct fns *fns)
++verify_file(struct archive *a, enum variant_type type, struct fns *fns)
+ {
+ 	struct archive_entry *ae;
+ 	int i;
+@@ -138,7 +138,7 @@ verify_file(struct archive *a, enum vtyp
+ }
+ 
+ static void
+-verify(unsigned char *buff, size_t used, enum vtype type, struct fns *fns)
++verify(unsigned char *buff, size_t used, enum variant_type type, struct fns *fns)
+ {
+ 	struct archive *a;
+ 	struct archive_entry *ae;
+--- a/tar/bsdtar.1	1670593111.000000000
++++ b/tar/bsdtar.1	1675420385.905917935
+@@ -1212,7 +1212,6 @@ components, or symlinks to other directo
+ .Xr compress 1 ,
+ .Xr cpio 1 ,
+ .Xr gzip 1 ,
+-.Xr mt 1 ,
+ .Xr pax 1 ,
+ .Xr shar 1 ,
+ .Xr xz 1 ,
+--- a/tar/bsdtar.c	1670593111.000000000
++++ b/tar/bsdtar.c	1675420480.534563057
+@@ -211,6 +211,7 @@ main(int argc, char **argv)
+ 	/* Look up uid of current user for future reference */
+ 	bsdtar->user_uid = geteuid();
+ 
++#ifndef __APPLE__
+ 	/* Default: open tape drive. */
+ 	bsdtar->filename = getenv("TAPE");
+ #if defined(_PATH_DEFTAPE)
+@@ -225,6 +226,7 @@ main(int argc, char **argv)
+ 		}
+ 	}
+ #endif
++#endif
+ 	if (bsdtar->filename == NULL) {
+ 		bsdtar->filename = _PATH_STDIO;
+ 	}
+@@ -253,6 +255,10 @@ main(int argc, char **argv)
+ 		bsdtar->extract_flags |= ARCHIVE_EXTRACT_FFLAGS;
+ 		bsdtar->extract_flags |= ARCHIVE_EXTRACT_MAC_METADATA;
+ 	}
++#ifdef __APPLE__
++	// 38797702
++	bsdtar->extract_flags |= ARCHIVE_EXTRACT_MAC_METADATA;
++#endif
+ #endif
+ 
+ 	/*
+@@ -928,7 +934,7 @@ main(int argc, char **argv)
+ 					      !(bsdtar->flags & OPTFLAG_NO_SUBDIRS));
+ 
+ 	/* Filename "-" implies stdio. */
+-	if (strcmp(bsdtar->filename, "-") == 0)
++	if (bsdtar->filename && strcmp(bsdtar->filename, "-") == 0)
+ 		bsdtar->filename = NULL;
+ 
+ 	switch(bsdtar->mode) {
+@@ -1013,7 +1019,7 @@ static const char *long_help_msg =
+ 	"  -c Create  -r Add/Replace  -t List  -u Update  -x Extract\n"
+ 	"Common Options:\n"
+ 	"  -b #  Use # 512-byte records per I/O block\n"
+-	"  -f <filename>  Location of archive (default " _PATH_DEFTAPE ")\n"
++	"  -f <filename>  Location of archive\n"
+ 	"  -v    Verbose\n"
+ 	"  -w    Interactive\n"
+ 	"Create: %p -c [options] [<file> | <dir> | @<archive> | -C <dir> ]\n"
+--- a/tar/read.c	1670593111.000000000
++++ b/tar/read.c	1675420489.749094960
+@@ -74,6 +74,19 @@ __FBSDID("$FreeBSD: src/usr.bin/tar/read
+ #ifdef HAVE_UNISTD_H
+ #include <unistd.h>
+ #endif
++#include <sys/queue.h>
++#include <copyfile.h>
++#include <fcntl.h>
++#include <libgen.h>
++
++#include <TargetConditionals.h>
++#if TARGET_OS_MAC && !TARGET_OS_IPHONE
++#define HAVE_QUARANTINE 1
++#endif /* TARGET_OS_MAC */
++
++#ifdef HAVE_QUARANTINE
++#include <quarantine.h>
++#endif /* HAVE_QUARANTINE */
+ 
+ #include "bsdtar.h"
+ #include "err.h"
+@@ -153,6 +166,28 @@ progress_func(void *cookie)
+ 	}
+ }
+ 
++#ifdef HAVE_QUARANTINE
++void
++_qtnapply(struct bsdtar *bsdtar, qtn_file_t qf, char *path)
++{
++	int stat_ok;
++	struct stat sb;
++	int qstatus;
++
++	if (qf == NULL)
++		return;
++
++	stat_ok = (stat(path, &sb) == 0);
++
++	if (stat_ok) chmod(path, sb.st_mode | S_IWUSR);
++	qstatus = qtn_file_apply_to_path(qf, path);
++	if (stat_ok) chmod(path, sb.st_mode);
++
++	if (qstatus)
++		lafe_warnc(0, "qtn_file_apply_to_path(%s): %s", path, qtn_error(qstatus));
++}
++#endif /* HAVE_QUARANTINE */
++
+ /*
+  * Handle 'x' and 't' modes.
+  */
+@@ -165,6 +200,9 @@ read_archive(struct bsdtar *bsdtar, char
+ 	struct archive_entry	 *entry;
+ 	const char		 *reader_options;
+ 	int			  r;
++#ifdef HAVE_QUARANTINE
++	qtn_file_t                qf = NULL;
++#endif /* HAVE_QUARANTINE */
+ 
+ 	while (*bsdtar->argv) {
+ 		if (archive_match_include_pattern(bsdtar->matching,
+@@ -250,6 +288,18 @@ read_archive(struct bsdtar *bsdtar, char
+ 	}
+ #endif
+ 
++#ifdef HAVE_QUARANTINE
++	if (mode == 'x' && bsdtar->filename != NULL && !(bsdtar->flags & OPTFLAG_STDOUT)) {
++		if ((qf = qtn_file_alloc()) != NULL) {
++			int qstatus = qtn_file_init_with_path(qf, bsdtar->filename);
++			if (qstatus != 0) {
++				qtn_file_free(qf);
++				qf = NULL;
++			}
++		}
++	}
++#endif /* HAVE_QUARANTINE */
++
+ 	for (;;) {
+ 		/* Support --fast-read option */
+ 		const char *p;
+@@ -369,6 +419,11 @@ read_archive(struct bsdtar *bsdtar, char
+ 				r = archive_read_data_into_fd(a, 1);
+ 			else
+ 				r = archive_read_extract2(a, entry, writer);
++#ifdef HAVE_QUARANTINE
++			if (r == ARCHIVE_OK) {
++				_qtnapply(bsdtar, qf, (char *)archive_entry_pathname(entry));
++			}
++#endif /* HAVE_QUARANTINE */
+ 			if (r != ARCHIVE_OK) {
+ 				if (!bsdtar->verbose)
+ 					safe_fprintf(stderr, "%s", archive_entry_pathname(entry));
+@@ -397,6 +452,12 @@ read_archive(struct bsdtar *bsdtar, char
+ 		    archive_format_name(a), archive_filter_name(a, 0));
+ 
+ 	archive_read_free(a);
++#ifdef HAVE_QUARANTINE
++	if (qf != NULL) {
++		qtn_file_free(qf);
++		qf = NULL;
++	}
++#endif /* HAVE_QUARANTINE */
+ }
+ 
+ 
+--- a/tar/test/CMakeLists.txt	1670593111.000000000
++++ b/tar/test/CMakeLists.txt	1675421738.469212570
+@@ -74,6 +74,7 @@ IF(ENABLE_TAR AND ENABLE_TEST)
+     test_symlink_dir.c
+     test_version.c
+     test_windows.c
++    test_zip_bomb.c
+   )
+ 
+   #
+--- a/tar/test/test_option_n.c	1670593111.000000000
++++ b/tar/test/test_option_n.c	1675420499.883195687
+@@ -133,7 +133,7 @@ DEFINE_TEST(test_option_n)
+ 	">test7.out 2>test7.err", testprog);
+ 	assert(status);
+ 	assert(status != -1);
+-#if !defined(_WIN32) || defined(__CYGWIN__)
++#if !__APPLE__ && !defined(_WIN32) || defined(__CYGWIN__)
+ 	assert(WIFEXITED(status));
+ 	assertEqualInt(1, WEXITSTATUS(status));
+ #endif
+--- a/tar/util.c	1670593111.000000000
++++ b/tar/util.c	1675420504.184780002
+@@ -758,6 +758,10 @@ list_item_verbose(struct bsdtar *bsdtar,
+ #else
+ 	ltime = localtime(&tim);
+ #endif
++	if (ltime == NULL) {
++		tim = 0;
++		ltime = localtime(&tim);
++	}
+ 	strftime(tmp, sizeof(tmp), fmt, ltime);
+ 	fprintf(out, " %s ", tmp);
+ 	safe_fprintf(out, "%s", archive_entry_pathname(entry));
+--- a/test_utils/test_main.c	1670593111.000000000
++++ b/test_utils/test_main.c	1675420909.300764251
+@@ -84,6 +84,10 @@
+ #if HAVE_MEMBERSHIP_H
+ #include <membership.h>
+ #endif
++#if HAVE_SPAWN_H
++#include <spawn.h>
++#endif
++#include <crt_externs.h>
+ 
+ /*
+  *
+@@ -3067,15 +3071,29 @@ systemf(const char *fmt, ...)
+ {
+ 	char buff[8192];
+ 	va_list ap;
+-	int r;
++	char *argvp[4];
++	char **envp = *_NSGetEnviron();
++	char *bash_path = "/bin/sh";
++	char *bash_arg = "-c";
++	pid_t pid;
++	int idx = 0, status;
+ 
+ 	va_start(ap, fmt);
+ 	vsnprintf(buff, sizeof(buff), fmt, ap);
+ 	if (verbosity > VERBOSITY_FULL)
+ 		logprintf("Cmd: %s\n", buff);
+-	r = system(buff);
++
++	argvp[idx++] = bash_path;
++	argvp[idx++] = bash_arg;
++	argvp[idx++] = buff;
++	argvp[idx] = NULL;
++
++	status = posix_spawn(&pid, bash_path, NULL, NULL, argvp, envp);
++	if (status == 0) {
++		while (waitpid(pid, &status, 0) == -1 && (errno == EINTR));
++	}
+ 	va_end(ap);
+-	return (r);
++	return (WEXITSTATUS(status));
+ }
+ 
+ /*
+@@ -3494,11 +3512,11 @@ test_summarize(int failed, int skips_num
+ 
+ 	switch (verbosity) {
+ 	case VERBOSITY_SUMMARY_ONLY:
+-		printf(failed ? "E" : ".");
++		printf(failed ? "[FAIL] E" : "[PASS] .");
+ 		fflush(stdout);
+ 		break;
+ 	case VERBOSITY_PASSFAIL:
+-		printf(failed ? "FAIL\n" : skips_num ? "ok (S)\n" : "ok\n");
++		printf(failed ? "[FAIL] \n" : skips_num ? "[PASS] ok (S)\n" : "[PASS] ok\n");
+ 		break;
+ 	}
+ 
+@@ -3534,11 +3552,11 @@ test_run(int i, const char *tmpdir)
+ 	case VERBOSITY_SUMMARY_ONLY: /* No per-test reports at all */
+ 		break;
+ 	case VERBOSITY_PASSFAIL: /* rest of line will include ok/FAIL marker */
+-		printf("%3d: %-64s", i, tests[i].name);
++		printf("[BEGIN] %-64s\n", tests[i].name);
+ 		fflush(stdout);
+ 		break;
+ 	default: /* Title of test, details will follow */
+-		printf("%3d: %s\n", i, tests[i].name);
++		printf("[BEGIN] %s\n", tests[i].name);
+ 	}
+ 
+ 	/* Chdir to the top-level work directory. */
+@@ -3635,6 +3653,7 @@ usage(const char *program)
+ 	printf("Otherwise, specify the numbers of the tests you wish to run.\n");
+ 	printf("Options:\n");
+ 	printf("  -d  Dump core after any failure, for debugging.\n");
++    printf("  -i  Run single test cases using test indexes.\n");
+ 	printf("  -k  Keep all temp files.\n");
+ 	printf("      Default: temp files for successful tests deleted.\n");
+ #ifdef PROGRAM
+@@ -3867,6 +3886,7 @@ main(int argc, char **argv)
+ 	int tmp2_len;
+ #endif
+ 	time_t now;
++	int test_index = -1;
+ 	struct tm *tmptr;
+ #if defined(HAVE_LOCALTIME_R) || defined(HAVE__LOCALTIME64_S)
+ 	struct tm tmbuf;
+@@ -4001,7 +4021,7 @@ main(int argc, char **argv)
+ 			option = *p++;
+ 			option_arg = NULL;
+ 			/* If 'opt' takes an argument, parse that. */
+-			if (option == 'p' || option == 'r') {
++			if (option == 'p' || option == 'r' || option == 'i') {
+ 				if (*p != '\0')
+ 					option_arg = p;
+ 				else if (*argv == NULL) {
+@@ -4019,6 +4039,9 @@ main(int argc, char **argv)
+ 			case 'd':
+ 				dump_on_failure = 1;
+ 				break;
++            case 'i':
++                test_index = atoi(option_arg);
++                break;
+ 			case 'k':
+ 				keep_temp_files = 1;
+ 				break;
+@@ -4159,9 +4182,9 @@ main(int argc, char **argv)
+ 	if (verbosity > VERBOSITY_SUMMARY_ONLY) {
+ 		printf("Reference files will be read from: %s\n", refdir);
+ #ifdef PROGRAM
+-		printf("Running tests on: %s\n", testprog);
++		printf("[TEST]: %s\n", testprog);
+ #endif
+-		printf("Exercising: ");
++		printf("[TEST]: ");
+ 		fflush(stdout);
+ 		printf("%s\n", EXTRA_VERSION);
+ 	} else {
+@@ -4172,32 +4195,40 @@ main(int argc, char **argv)
+ 	/*
+ 	 * Run some or all of the individual tests.
+ 	 */
+-	saved_argv = argv;
+-	do {
+-		argv = saved_argv;
+-		do {
+-			int test_num;
++	int test_num;
+ 
+-			test_num = get_test_set(test_set, limit, *argv);
+-			if (test_num < 0) {
+-				printf("*** INVALID Test %s\n", *argv);
+-				free(refdir_alloc);
+-				free(testprogdir);
+-				usage(progname);
+-				return (1);
+-			}
+-			for (i = 0; i < test_num; i++) {
+-				tests_run++;
+-				if (test_run(test_set[i], tmpdir)) {
+-					tests_failed++;
+-					if (until_failure)
+-						goto finish;
++	test_num = get_test_set(test_set, limit, *argv, tests);
++	if (test_num < 0) {
++		printf("*** INVALID Test %s\n", *argv);
++		free(refdir_alloc);
++		free(testprogdir);
++		usage(progname);
++		return (1);
++	}
++	if (test_index >= 0 && test_index < test_num){
++		if(test_run(test_set[test_index], tmpdir)){
++			tests_failed++;
++		};
++		goto finish;
++	}else{
++		saved_argv = argv;
++		do {
++			argv = saved_argv;
++			do {
++				for (i = 0; i < test_num; i++) {
++					tests_run++;
++					if (test_run(test_set[i], tmpdir)) {
++						tests_failed++;
++						if (until_failure)
++							goto finish;
++						}
++					}
+ 				}
+-			}
+-			if (*argv != NULL)
+-				argv++;
+-		} while (*argv != NULL);
+-	} while (until_failure);
++				if (*argv != NULL)
++					argv++;
++			} while (*argv != NULL);
++		} while (until_failure);
++	}
+ 
+ finish:
+ 	/* Must be freed after all tests run */
+@@ -4208,6 +4239,7 @@ finish:
+ 	/*
+ 	 * Report summary statistics.
+ 	 */
++    printf("[SUMMARY]");
+ 	if (verbosity > VERBOSITY_SUMMARY_ONLY) {
+ 		printf("\n");
+ 		printf("Totals:\n");
