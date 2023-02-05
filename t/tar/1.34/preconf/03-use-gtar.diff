@@ -1,0 +1,11 @@
+--- a/scripts/backup.sh.in	1675594668.924922994
++++ b/scripts/backup.sh.in	1675594695.219373216
+@@ -156,7 +156,7 @@ init_common() {
+ 	bailout "ADMINISTRATOR not defined"
+     fi
+ 
+-    [ x"$TAR" = x ] && TAR=tar
++    [ x"$TAR" = x ] && TAR=gtar
+     [ x"$SLEEP_TIME" = x ] && SLEEP_TIME=60
+ 
+     if [ x$VOLNO_FILE = x ]; then

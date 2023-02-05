@@ -1,0 +1,435 @@
+--- a/gnu/argp-fmtstream.h	1610029782.000000000
++++ b/gnu/argp-fmtstream.h	1675506110.110240830
+@@ -195,7 +195,7 @@ _GL_INLINE_HEADER_BEGIN
+ #endif
+ 
+ #ifndef ARGP_FS_EI
+-#define ARGP_FS_EI extern inline
++#define ARGP_FS_EI extern inline __attribute__ ((__gnu_inline__))
+ #endif
+ 
+ ARGP_FS_EI size_t
+--- a/gnu/version-etc.c	1610029785.000000000
++++ b/gnu/version-etc.c	1675506415.508840257
+@@ -94,6 +94,8 @@ There is NO WARRANTY, to the extent perm
+ 
+   fputs ("\n", stream);
+ 
++  fputs (_("Modified to support extended attributes.\n"), stream);
++
+   switch (n_authors)
+     {
+     case 0:
+--- a/src/buffer.c	1612447233.000000000
++++ b/src/buffer.c	1675506533.323254836
+@@ -702,6 +702,41 @@ check_tty (enum access_mode mode)
+     }
+ }
+ 
++#if HAVE_QUARANTINE
++void
++init_qtn(const char *file_name)
++{
++	int fd;
++
++	if (strcmp(file_name, "-") == 0)
++		return;
++
++	if ((fd = open(file_name, O_RDONLY)) < 0)
++		return;
++
++	if ((archive_qtn_file = qtn_file_alloc()) != NULL) {
++		if (qtn_file_init_with_fd(archive_qtn_file, fd) != 0) {
++			qtn_file_free(archive_qtn_file);
++			archive_qtn_file = NULL;
++		}
++	}
++
++	close(fd);
++}
++
++void
++finish_qtn(void)
++{
++	if (archive_qtn_file != NULL) {
++		qtn_file_free(archive_qtn_file);
++		archive_qtn_file = NULL;
++	}
++}
++#else
++void init_qtn(const char *file_name) {}
++void finish_qtn(void) {}
++#endif
++
+ /* Open an archive file.  The argument specifies whether we are
+    reading or writing, or both.  */
+ static void
+@@ -846,6 +881,7 @@ _open_archive (enum access_mode wanted_a
+   sys_detect_dev_null_output ();
+   sys_save_archive_dev_ino ();
+   SET_BINARY_MODE (archive);
++  init_qtn(archive_name_array[0]);
+ 
+   switch (wanted_access)
+     {
+@@ -1144,6 +1180,7 @@ close_archive (void)
+   tar_stat_destroy (&current_stat_info);
+   free (record_buffer[0]);
+   free (record_buffer[1]);
++  finish_qtn();
+   bufmap_free (NULL);
+ }
+ 
+--- a/src/common.h	1612447233.000000000
++++ b/src/common.h	1675506516.055019300
+@@ -20,6 +20,17 @@
+ /* Declare the GNU tar archive format.  */
+ #include "tar.h"
+ 
++#include <TargetConditionals.h>
++#if defined(__has_include) && __has_include(<quarantine.h>)
++#define HAVE_QUARANTINE 1
++#else
++#define HAVE_QUARANTINE 0
++#endif
++
++#if HAVE_QUARANTINE
++#include <quarantine.h>
++#endif
++
+ /* The checksum field is filled with this while the checksum is computed.  */
+ #define CHKBLANKS	"        "	/* 8 blanks, no null */
+ 
+@@ -345,6 +356,9 @@ GLOBAL bool posixly_correct;
+ 
+ /* File descriptor for archive file.  */
+ GLOBAL int archive;
++#if HAVE_QUARANTINE
++GLOBAL qtn_file_t archive_qtn_file;
++#endif
+ 
+ /* Nonzero when outputting to /dev/null.  */
+ GLOBAL bool dev_null_output;
+--- a/src/create.c	1612447233.000000000
++++ b/src/create.c	1675506520.355346453
+@@ -31,6 +31,15 @@
+    Pretend the impostor isn't there.  */
+ enum { IMPOSTOR_ERRNO = ENOENT };
+ 
++#ifdef __APPLE__
++#include <copyfile.h>
++#include <libgen.h>
++#include <paths.h>
++
++int copyfile_on = 0;
++char *copyfile_fname = NULL;
++#endif
++
+ struct link
+   {
+     dev_t dev;
+@@ -1663,9 +1672,18 @@ dump_file0 (struct tar_stat_info *st, ch
+   if (interactive_option && !confirm ("add", p))
+     return;
+ 
++  if (copyfile_on)
++  {
++    assign_string (&st->orig_file_name, copyfile_fname);
++    assign_string (&st->file_name,
++                   safer_name_suffix (copyfile_fname, false, absolute_names_option));
++  }
++  else
++  {
+   assign_string (&st->orig_file_name, p);
+   assign_string (&st->file_name,
+                  safer_name_suffix (p, false, absolute_names_option));
++  }
+ 
+   transform_name (&st->file_name, XFORM_REGFILE);
+ 
+@@ -1961,6 +1979,40 @@ dump_file (struct tar_stat_info *parent,
+ 	   char const *fullname)
+ {
+   struct tar_stat_info st;
++// Torrekie: Oh, Tar did huge modifications, i have no idea with this now
++#ifdef __APPLE__
++	if (!getenv(COPYFILE_DISABLE_VAR) && !strncmp(basename(fullname), "._", 2)) {
++		return;
++	}
++
++  if (!getenv(COPYFILE_DISABLE_VAR) && strncmp(basename(fullname), "._", 2))
++  {
++	char *tmpdir = getenv("TMPDIR"), *md_p;
++	asprintf(&md_p, "%s/tar.md.XXXXXXXX", tmpdir ? tmpdir : _PATH_TMP);
++	asprintf(&copyfile_fname, "%s/._%s", dirname(fullname), name);
++
++	if (copyfile(fullname, NULL, 0, COPYFILE_CHECK | COPYFILE_NOFOLLOW | COPYFILE_ACL | COPYFILE_XATTR))
++	{
++	    copyfile_on = 1;
++	    tar_stat_init (&st);
++
++	    if(mktemp(md_p))
++	    {
++		if (copyfile(fullname, md_p, 0, COPYFILE_PACK | COPYFILE_NOFOLLOW | COPYFILE_ACL | COPYFILE_XATTR) == 0)
++			dump_file0 (&st, md_p, fullname);
++		else
++			WARN((0, 0, "copyfile pack (%s) failed: %s", fullname, strerror(errno)));
++	    }
++
++	    tar_stat_destroy (&st);
++	    unlink(md_p);
++	    free(copyfile_fname);
++	    copyfile_on = 0;
++	}
++	free(md_p);
++  }
++#endif
++
+   tar_stat_init (&st);
+   st.parent = parent;
+   dump_file0 (&st, name, fullname);
+--- a/src/extract.c	1612785991.000000000
++++ b/src/extract.c	1675507504.285292471
+@@ -28,6 +28,23 @@
+ 
+ #include "common.h"
+ 
++#ifdef __APPLE__
++#include <libgen.h>
++#include <sys/queue.h>
++#include <copyfile.h>
++struct copyfile_list_entry_t {
++    char *src;
++    char *dst;
++    char *tmp;
++    LIST_ENTRY(copyfile_list_entry_t) link;
++} *cle;
++extern LIST_HEAD(copyfile_list_t, copyfile_list_entry_t) copyfile_list;
++#endif
++
++#ifdef __APPLE__
++#include <sys/mount.h>
++#endif /* __APPLE__ */
++
+ static bool we_are_root;	/* true if our effective uid == 0 */
+ static mode_t newdir_umask;	/* umask when creating new directories */
+ static mode_t current_umask;	/* current umask (which is set to 0 if -p) */
+@@ -641,6 +658,51 @@ fixup_delayed_set_stat (char const *src,
+     }
+ }
+ 
++#if HAVE_QUARANTINE
++void
++apply_qtn(int fd)
++{
++	int stat_ok;
++	struct stat sb;
++	int qstatus;
++
++	if (archive_qtn_file != NULL) {
++		stat_ok = (fstat(fd, &sb) == 0);
++
++		if (stat_ok) fchmod(fd, sb.st_mode | S_IWUSR);
++		qstatus = qtn_file_apply_to_fd(archive_qtn_file, fd);
++		if (stat_ok) fchmod(fd, sb.st_mode);
++
++		if (qstatus) {
++			warnx("qtn_file_apply_to_fd: %s", qtn_error(qstatus));
++		}
++	}
++}
++
++void
++apply_qtn_to_path(char *path)
++{
++	int stat_ok;
++	struct stat sb;
++	int qstatus;
++
++	if (archive_qtn_file != NULL) {
++		stat_ok = (stat(path, &sb) == 0);
++
++		if (stat_ok) chmod(path, sb.st_mode | S_IWUSR);
++		qstatus = qtn_file_apply_to_path(archive_qtn_file, path);
++		if (stat_ok) chmod(path, sb.st_mode);
++
++		if (qstatus) {
++			warnx("qtn_file_apply_to_path: %s", qtn_error(qstatus));
++		}
++	}
++}
++#else
++void apply_qtn(int fd) {}
++void apply_qtn_to_path(char *path) {}
++#endif
++
+ /* After a file/link/directory creation has failed, see if
+    it's because some required directory was not present, and if so,
+    create all required directories.  Return zero if all the required
+@@ -681,6 +743,8 @@ make_directories (char *file_name, bool
+ 
+       if (status == 0)
+ 	{
++	  apply_qtn_to_path(file_name);
++
+ 	  /* Create a struct delayed_set_stat even if
+ 	     mode == desired_mode, because
+ 	     repair_delayed_set_stat may need to update the struct.  */
+@@ -1123,9 +1187,12 @@ extract_dir (char *file_name, int typefl
+   if (status == 0
+       || old_files_option == DEFAULT_OLD_FILES
+       || old_files_option == OVERWRITE_OLD_FILES)
+-    delay_set_stat (file_name, &current_stat_info,
++    {
++      apply_qtn_to_path(file_name);
++      delay_set_stat (file_name, &current_stat_info,
+ 		    current_mode, current_mode_mask,
+ 		    current_stat_info.stat.st_mode, atflag);
++    }
+   return status;
+ }
+ 
+@@ -1152,6 +1219,10 @@ open_output_file (char const *file_name,
+     {
+       static int conttype_diagnosed;
+ 
++#ifdef __APPLE__
++      /* XXX Would be nice to suppress this warning if we pre-allocate. */
++#endif /* __APPLE__ */
++
+       if (!conttype_diagnosed)
+ 	{
+ 	  conttype_diagnosed = 1;
+@@ -1259,6 +1330,21 @@ extract_file (char *file_name, int typef
+ 	}
+     }
+ 
++#ifdef __APPLE__
++  /* Attempts to pre-allocate blocks for the destination file. */
++  if (!current_stat_info.is_sparse) {
++    fstore_t fst;
++
++    fst.fst_flags = 0;
++    fst.fst_posmode = F_PEOFPOSMODE;
++    fst.fst_offset = 0;
++    fst.fst_length = current_stat_info.stat.st_size;
++
++    (void)fcntl(fd, F_PREALLOCATE, &fst);
++  }
++#endif /* __APPLE__ */
++
++  apply_qtn(fd);
+   mv_begin_read (&current_stat_info);
+   if (current_stat_info.is_sparse)
+     sparse_extract_file (fd, &current_stat_info, &size);
+@@ -1764,6 +1850,10 @@ extract_archive (void)
+   char typeflag;
+   tar_extractor_t fun;
+   bool skip_dotdot_name;
+ 
++#ifdef __APPLE__
++  struct copyfile_list_entry_t *cle = NULL;
++#endif
++
+   fatal_exit_hook = extract_finish;
+ 
+@@ -1817,7 +1907,31 @@ extract_archive (void)
+ 
+   if (prepare_to_extract (current_stat_info.file_name, typeflag, &fun))
+     {
+-      if (fun (current_stat_info.file_name, typeflag) == 0)
++#ifdef __APPLE__
++      if (strncmp(basename(current_stat_info.file_name), "._", 2) == 0) {
++        if ((cle = calloc(1, sizeof(struct copyfile_list_entry_t))) == NULL)
++          goto err;
++        if ((cle->src = strdup(current_stat_info.file_name)) == NULL)
++          goto err;
++        if (asprintf(&cle->tmp, "%s.XXX", current_stat_info.file_name) == -1)
++          goto err;
++        if (mktemp(cle->tmp) == NULL)
++          goto err;
++        if (asprintf(&cle->dst, "%s/%s", dirname(current_stat_info.file_name), basename(current_stat_info.file_name) + 2) != -1)
++          LIST_INSERT_HEAD(&copyfile_list, cle, link);
++        else {
++err:
++          if (cle->src) free(cle->src);
++          if (cle->dst) free(cle->dst);
++          if (cle->tmp) free(cle->tmp);
++          if (cle) {
++            free(cle);
++            cle = NULL;
++          }
++        }
++      }
++#endif
++      if (fun (cle ? cle->tmp : current_stat_info.file_name, typeflag) == 0)
+ 	return;
+     }
+   else
+--- a/src/list.c	1612447233.000000000
++++ b/src/list.c	1675507498.490779658
+@@ -170,6 +170,12 @@ read_and (void (*do_something) (void))
+   enum read_header prev_status;
+   struct timespec mtime;
+ 
++#ifdef __APPLE__
++  int disable_copyfile = (getenv(COPYFILE_DISABLE_VAR) != NULL);
++  struct copyfile_list_entry_t *cle;
++  LIST_INIT(&copyfile_list);
++#endif
++
+   base64_init ();
+   name_gather ();
+ 
+@@ -301,6 +307,33 @@ read_and (void (*do_something) (void))
+     }
+   while (!all_names_found (&current_stat_info));
+ 
++#ifdef __APPLE__
++      LIST_FOREACH(cle, &copyfile_list, link)
++	{
++	  if(!disable_copyfile && copyfile(cle->tmp, cle->dst, 0, COPYFILE_UNPACK | COPYFILE_NOFOLLOW | COPYFILE_ACL | COPYFILE_XATTR) == 0)
++	    {
++	      unlink(cle->tmp);
++	    }
++	  else
++	    {
++	      if (!disable_copyfile)
++		{
++		  WARN((0, 0, "copyfile unpack (%s) failed: %s", cle->dst, strerror(errno)));
++		}
++	      rename(cle->tmp, cle->src);
++	    }
++
++	  /* 5781559: Make sure EAs don't destroy overriding quarantine information. */
++#if HAVE_QUARANTINE
++	  apply_qtn_to_path(cle->dst);
++#endif
++
++	  free(cle->tmp);
++	  free(cle->dst);
++	  free(cle->src);
++	}
++#endif
++
+   close_archive ();
+   names_notfound ();		/* print names not found */
+ }
+--- a/m4/rmt.m4	1440401887.000000000
++++ b/m4/rmt.m4	1675508133.984959965
+@@ -14,7 +14,6 @@ AC_DEFUN([PU_RMT],[
+   LIBS=$pu_save_LIBS
+ 
+   enable_rmt() {
+-    if test $ac_cv_header_sys_mtio_h = yes; then
+       AC_CACHE_CHECK(for remote tape header files, pu_cv_header_rmt,
+         [AC_TRY_CPP([
+ #if HAVE_SGTTY_H
+@@ -25,7 +24,6 @@ AC_DEFUN([PU_RMT],[
+       pu_cv_header_rmt=no)])
+       test $pu_cv_header_rmt = yes && PU_RMT_PROG='rmt$(EXEEXT)'
+       AC_SUBST(PU_RMT_PROG)
+-    fi
+   }
+ 
+   AC_CHECK_HEADERS([sys/mtio.h])

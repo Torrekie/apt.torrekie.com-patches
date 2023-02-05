@@ -1,0 +1,152 @@
+--- tar.git.orig/src/create.c	2020-11-20 14:29:25.259596846 +0000
++++ tar.git/src/create.c	2020-11-20 14:29:25.259596846 +0000
+@@ -383,7 +383,7 @@
+ mode_to_chars (mode_t v, char *p, size_t s)
+ {
+   /* In the common case where the internal and external mode bits are the same,
+-     and we are not using POSIX or GNU format,
++     and we are not using POSIX or GNU formats,
+      propagate all unknown bits to the external mode.
+      This matches historical practice.
+      Otherwise, just copy the bits we know about.  */
+@@ -395,6 +395,7 @@
+       && S_IROTH == TOREAD && S_IWOTH == TOWRITE && S_IXOTH == TOEXEC
+       && archive_format != POSIX_FORMAT
+       && archive_format != USTAR_FORMAT
++      && archive_format != OLDGNU_FORMAT
+       && archive_format != GNU_FORMAT)
+     {
+       negative = v < 0;
+--- tar.git.orig/src/common.h	2021-02-17 10:04:27.498157590 +0000
++++ tar.git/src/common.h	2021-02-17 10:04:27.498157590 +0000
+@@ -1024,4 +1024,8 @@
+ int group_map_translate (gid_t gid, gid_t *new_gid, char const **new_name);
+ 
+ 
++GLOBAL int debian_longlink_hack;
++GLOBAL int debian_broken_numeric_owner;
++GLOBAL int pristine_tar_compat;
++
+ _GL_INLINE_HEADER_END
+--- tar.git.orig/src/create.c	2021-02-17 10:04:27.498157590 +0000
++++ tar.git/src/create.c	2021-02-17 10:04:27.498157590 +0000
+@@ -27,6 +27,10 @@
+ #include "common.h"
+ #include <hash.h>
+ 
++extern int debian_longlink_hack;
++extern int debian_broken_numeric_owner;
++extern int pristine_tar_compat;
++
+ /* Error number to use when an impostor is discovered.
+    Pretend the impostor isn't there.  */
+ enum { IMPOSTOR_ERRNO = ENOENT };
+@@ -534,6 +538,11 @@
+   return header;
+ }
+ 
++#define FILL(field,byte) do {            \
++  memset(field, byte, sizeof(field)-1);  \
++  (field)[sizeof(field)-1] = 0;          \
++} while (0)
++
+ /* Write a GNUTYPE_LONGLINK or GNUTYPE_LONGNAME block.  */
+ static void
+ write_gnu_long_link (struct tar_stat_info *st, const char *p, char type)
+@@ -543,7 +552,11 @@
+   union block *header;
+ 
+   header = start_private_header ("././@LongLink", size, 0);
+-  if (! numeric_owner_option)
++  if (pristine_tar_compat) {
++         FILL (header->header.mtime, '0');
++         FILL (header->header.mode, '0');
++  }
++  if ((pristine_tar_compat && debian_broken_numeric_owner) || ! numeric_owner_option)
+     {
+       static char *uname, *gname;
+       if (!uname)
+@@ -728,7 +741,7 @@
+       return write_short_name (st);
+     }
+   else if (NAME_FIELD_SIZE - (archive_format == OLDGNU_FORMAT)
+-	   < strlen (st->file_name))
++	   < strlen (st->file_name) + debian_longlink_hack)
+     return write_long_name (st);
+   else
+     return write_short_name (st);
+@@ -1493,7 +1506,7 @@
+ 	  block_ordinal = current_block_ordinal ();
+ 	  assign_string (&st->link_name, link_name);
+ 	  if (NAME_FIELD_SIZE - (archive_format == OLDGNU_FORMAT)
+-	      < strlen (link_name))
++	      < strlen (link_name) + debian_longlink_hack)
+ 	    write_long_link (st);
+ 
+ 	  st->stat.st_size = 0;
+--- tar.git.orig/src/tar.c	2021-02-17 10:04:27.498157590 +0000
++++ tar.git/src/tar.c	2021-02-17 10:08:27.334916370 +0000
+@@ -1236,6 +1236,41 @@
+   return res;
+ }
+ 
++/* Debian specific function prototypes (-Werror=missing-prototypes) */
++void debian_longlink_hack_init (void);
++void debian_broken_numeric_owner_init (void);
++void pristine_tar_compat_init (void);
++
++/* Debian specific environment variable used by pristine-tar to enable use of
++ * longlinks for filenames exactly 100 bytes long. */
++void debian_longlink_hack_init (void) {
++ char *s=getenv ("TAR_LONGLINK_100");
++ if (s && strcmp(s, "1") == 0)
++	 debian_longlink_hack=1;
++ else
++	 debian_longlink_hack=0;
++}
++
++/* Debian specific environment variable used by pristine-tar to enable use of
++ * user and group names even when --numeric-owner is passed. */
++void debian_broken_numeric_owner_init (void) {
++ char *s=getenv ("TAR_BROKEN_NUMERIC_OWNER");
++ if (s && strcmp(s, "1") == 0)
++	 debian_broken_numeric_owner=1;
++ else
++	 debian_broken_numeric_owner=0;
++}
++
++/* pristine-tar sets this environment variable to force fields in longlinks
++ * to be zeroed as was the case in tar 1.26. */
++void pristine_tar_compat_init (void) {
++ char *s=getenv ("PRISTINE_TAR_COMPAT");
++ if (s && strcmp(s, "1") == 0)
++	 pristine_tar_compat=1;
++ else
++	 pristine_tar_compat=0;
++}
++
+ 
+ static uintmax_t
+ parse_owner_group (char *arg, uintmax_t field_max, char const **name_option)
+@@ -2751,6 +2786,10 @@
+ 
+   set_quoting_style (0, DEFAULT_QUOTING_STYLE);
+ 
++  debian_longlink_hack_init ();
++  debian_broken_numeric_owner_init ();
++  pristine_tar_compat_init ();
++
+   close_stdout_set_file_name (_("stdout"));
+   /* Make sure we have first three descriptors available */
+   if (stdopen ())
+--- tar.git.orig/po/it.po	2021-02-12 16:04:45.936222815 +0000
++++ tar.git/po/it.po	2021-02-12 16:04:45.932222783 +0000
+@@ -2599,7 +2599,7 @@
+ 
+ #: src/tar.c:2648
+ msgid "Cowardly refusing to create an empty archive"
+-msgstr "Rifiuto totale di creare un archivio vuoto"
++msgstr "Rifiuto vigliaccamente di creare un archivio vuoto"
+ 
+ #: src/tar.c:2674
+ msgid "Options '-Aru' are incompatible with '-f -'"
