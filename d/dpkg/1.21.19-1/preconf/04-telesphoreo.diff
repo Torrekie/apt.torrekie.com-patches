@@ -1,0 +1,25 @@
+diff -ur dpkg-1.18.25/data/cputable dpkg-1.18.25+iPhone/data/cputable
+--- dpkg-1.18.25/data/cputable	2018-06-26 00:28:08.000000000 -1000
++++ dpkg-1.18.25+iPhone/data/cputable	2019-08-15 16:04:31.000000000 -1000
+@@ -21,6 +21,7 @@
+ alpha		alpha		alpha.*			64	little
+ amd64		x86_64		(amd64|x86_64)		64	little
+ armeb		armeb		arm.*b			32	big
++armk		armk		arm.*k			32	little
+ arm		arm		arm.*			32	little
+ arm64		aarch64		aarch64			64	little
+ avr32		avr32		avr32			32	big
+diff -ur dpkg-1.18.25/data/tupletable dpkg-1.18.25+iPhone/data/tupletable
+--- dpkg-1.18.25/data/tupletable	2018-06-17 05:49:22.000000000 -1000
++++ dpkg-1.18.25+iPhone/data/tupletable	2019-08-15 16:05:06.000000000 -1000
+@@ -33,6 +33,9 @@
+ base-bsd-openbsd-<cpu>		openbsd-<cpu>
+ base-bsd-netbsd-<cpu>		netbsd-<cpu>
+ base-bsd-darwin-<cpu>		darwin-<cpu>
++base-bsd-darwin-arm64		iphoneos-arm64
++base-bsd-darwin-arm		iphoneos-arm
++base-bsd-darwin-armk		watchos-arm
+ base-sysv-aix-<cpu>		aix-<cpu>
+ base-sysv-solaris-<cpu>		solaris-<cpu>
+ eabi-uclibc-uclinux-arm		uclinux-armel
+

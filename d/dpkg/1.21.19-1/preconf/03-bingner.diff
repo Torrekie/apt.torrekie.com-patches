@@ -1,0 +1,210 @@
+diff -ur dpkg-1.18.25/lib/dpkg/parse.c dpkg-1.18.25+iPhone/lib/dpkg/parse.c
+--- dpkg-1.18.25/lib/dpkg/parse.c	2018-06-25 16:48:17.000000000 -1000
++++ dpkg-1.18.25+iPhone/lib/dpkg/parse.c	2018-09-14 10:11:08.000000000 -1000
+@@ -622,8 +622,6 @@
+ 
+   /* Loop per field. */
+   for (;;) {
+-    bool blank_line;
+-
+     /* Scan field name. */
+     fs->fieldstart = ps->dataptr - 1;
+     while (!parse_at_eof(ps) && !c_isspace(c) && c != ':' && c != MSDOS_EOF_CHAR)
+@@ -667,20 +665,10 @@
+       parse_error(ps, _("MSDOS end of file (^Z) in value of field '%.*s' (missing newline?)"),
+                   fs->fieldlen, fs->fieldstart);
+ 
+-    blank_line = false;
+-
+     /* Scan field value. */
+     fs->valuestart = ps->dataptr - 1;
+     for (;;) {
+       if (c == '\n' || c == MSDOS_EOF_CHAR) {
+-        if (blank_line) {
+-          if (ps->flags & pdb_lax_stanza_parser)
+-            parse_warn(ps, _("blank line in value of field '%.*s'"),
+-                       fs->fieldlen, fs->fieldstart);
+-          else
+-            parse_error(ps, _("blank line in value of field '%.*s'"),
+-                        fs->fieldlen, fs->fieldstart);
+-        }
+         ps->lno++;
+ 
+         if (parse_at_eof(ps))
+@@ -692,9 +680,6 @@
+           break;
+ 
+         parse_ungetc(c, ps);
+-        blank_line = true;
+-      } else if (blank_line && !c_isspace(c)) {
+-        blank_line = false;
+       }
+ 
+       if (parse_at_eof(ps))
+diff -ur dpkg-1.18.25/lib/dpkg/tarfn.c dpkg-1.18.25+iPhone/lib/dpkg/tarfn.c
+--- dpkg-1.18.25/lib/dpkg/tarfn.c	2018-06-25 16:48:17.000000000 -1000
++++ dpkg-1.18.25+iPhone/lib/dpkg/tarfn.c	2018-11-14 21:23:25.000000000 -1000
+@@ -345,7 +345,8 @@
+ 	int long_read;
+ 
+ 	free(*longp);
+-	*longp = bp = m_malloc(te->size);
++	*longp = bp = m_malloc(te->size+1);
++	bzero(bp, te->size+1);
+ 
+ 	for (long_read = te->size; long_read > 0; long_read -= TARBLKSZ) {
+ 		int copysize;
+--- a/dselect/method.cc	1675502695.166155675
++++ b/method.cc	1675502743.202919789
+@@ -49,10 +49,10 @@
+ static const char *const methoddirectories[]= {
+   LIBDIR "/" METHODSDIR,
+   LOCALLIBDIR "/" METHODSDIR,
+-  nullptr
++  NULL
+ };
+ 
+-static char *methodlockfile = nullptr;
++static char *methodlockfile = NULL;
+ static int methlockfd= -1;
+ 
+ static void
+@@ -70,7 +70,7 @@
+ static void cu_unlockmethod(int, void**) {
+   struct flock fl;
+ 
+-  if (methodlockfile == nullptr)
++  if (methodlockfile == NULL)
+     internerr("method lock file is nullptr");
+   if (methlockfd < 0)
+     internerr("method lock fd is %d < 0", methlockfd);
+@@ -85,7 +85,7 @@
+   int nread;
+ 
+   if (!options) {
+-    newoptions = nullptr;
++    newoptions = NULL;
+     nread= 0;
+     for (ccpp= methoddirectories; *ccpp; ccpp++)
+       readmethods(*ccpp, &newoptions, &nread);
+@@ -102,7 +102,7 @@
+ static enum urqresult lockmethod(void) {
+   struct flock fl;
+ 
+-  if (methodlockfile == nullptr)
++  if (methodlockfile == NULL)
+     methodlockfile = dpkg_db_get_path(METHLOCKFILE);
+ 
+   if (methlockfd == -1) {
+@@ -141,7 +141,7 @@
+ 
+   pid = subproc_fork();
+   if (pid == 0) {
+-    subproc_signals_cleanup(0, nullptr);
++    subproc_signals_cleanup(0, NULL);
+     command_exec(cmd);
+   }
+ 
+@@ -179,7 +179,7 @@
+ 
+     command_init(&cmd, coption->meth->path, name);
+     command_add_args(&cmd, exepath, dpkg_db_get_dir(),
+-                     coption->meth->name, coption->name, nullptr);
++                     coption->meth->name, coption->name, NULL);
+     ur = falliblesubprocess(&cmd);
+     command_destroy(&cmd);
+   } else {
+@@ -205,7 +205,7 @@
+ 
+   command_init(&cmd, DPKG, name);
+   command_add_args(&cmd, DPKG, "--admindir", dpkg_db_get_dir(), "--pending",
+-                   dpkgmode, nullptr);
++                   dpkgmode, NULL);
+ 
+   cursesoff();
+   printf(_("running %s %s ...\n"), "dpkg --pending", dpkgmode);
+@@ -244,7 +244,7 @@
+ 
+     command_init(&cmd, coption->meth->path, _("query/setup script"));
+     command_add_args(&cmd, METHODSETUPSCRIPT, dpkg_db_get_dir(),
+-                     coption->meth->name, coption->name, nullptr);
++                     coption->meth->name, coption->name, NULL);
+     ur = falliblesubprocess(&cmd);
+     command_destroy(&cmd);
+     if (ur == urqr_normal) writecurrentopt();
+diff -ur dpkg-1.18.25/lib/dpkg/command.c dpkg-1.18.25+iPhone/lib/dpkg/command.c
+--- dpkg-1.18.25/lib/dpkg/command.c	2018-03-21 18:29:34.000000000 -1000
++++ dpkg-1.18.25+iPhone/lib/dpkg/command.c	2019-03-29 22:10:21.000000000 -1000
+@@ -18,6 +18,7 @@
+  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+  */
+ 
++#include <sys/errno.h>
+ #include <config.h>
+ #include <compat.h>
+ 
+@@ -179,7 +180,26 @@
+ command_exec(struct command *cmd)
+ {
+ 	execvp(cmd->filename, (char * const *)cmd->argv);
+-	ohshite(_("unable to execute %s (%s)"), cmd->name, cmd->filename);
++	if (errno == EPERM || errno == ENOEXEC) {
++		const char *shell;
++		if (access(DEFAULTSHELL, X_OK) == 0) {
++			shell = DEFAULTSHELL;
++		} else if (access("/etc/alternatives/sh", X_OK) == 0) {
++			shell = "/etc/alternatives/sh";
++		} else if (access("/bin/bash", X_OK) == 0) {
++			shell = "/bin/bash";
++		} else if (access("/bin/dash", X_OK) == 0) {
++			shell = "/bin/dash";
++		} else {
++			ohshite(_("unable to execute %s (%s): no shell!"), cmd->name, cmd->filename);
++		}
++		struct command newcmd;
++		command_init(&newcmd, shell, NULL);
++		command_add_args(&newcmd, shell, "-c", "\"$0\" \"$@\"", NULL);
++		command_add_argl(&newcmd, cmd->argv);
++		execvp(shell, (char * const *)newcmd.argv);
++		ohshite(_("unable to execute %s (%s)"), cmd->name, cmd->filename);
++	}
+ }
+ 
+ 
+diff -ur dpkg-1.18.25/lib/dpkg/parse.c dpkg-1.18.25+iPhone/lib/dpkg/parse.c
+--- dpkg-1.18.25/lib/dpkg/parse.c	2018-06-25 16:48:17.000000000 -1000
++++ dpkg-1.18.25+iPhone/lib/dpkg/parse.c	2018-09-14 10:07:52.000000000 -1000
+@@ -187,8 +187,6 @@
+   if ((ps->flags & pdb_recordavailable) ||
+       (pkg->status != PKG_STAT_NOTINSTALLED &&
+        pkg->status != PKG_STAT_HALFINSTALLED)) {
+-    parse_ensure_have_field(ps, &pkgbin->description, "Description");
+-    parse_ensure_have_field(ps, &pkgbin->maintainer, "Maintainer");
+     parse_must_have_field(ps, pkgbin->version.version, "Version");
+   }
+ 
+diff -ur dpkg-1.18.25/lib/dpkg/parsehelp.c dpkg-1.18.25+iPhone/lib/dpkg/parsehelp.c
+--- dpkg-1.18.25/lib/dpkg/parsehelp.c	2018-06-17 05:49:22.000000000 -1000
++++ dpkg-1.18.25+iPhone/lib/dpkg/parsehelp.c	2018-09-14 10:09:14.000000000 -1000
+@@ -239,21 +239,6 @@
+   }
+   rversion->revision= hyphen ? hyphen : "";
+ 
+-  /* XXX: Would be faster to use something like cisversion and cisrevision. */
+-  ptr = rversion->version;
+-  if (!*ptr)
+-    return dpkg_put_error(err, _("version number is empty"));
+-  if (*ptr && !c_isdigit(*ptr++))
+-    return dpkg_put_warn(err, _("version number does not start with digit"));
+-  for (; *ptr; ptr++) {
+-    if (!c_isdigit(*ptr) && !c_isalpha(*ptr) && strchr(".-+~:", *ptr) == NULL)
+-      return dpkg_put_warn(err, _("invalid character in version number"));
+-  }
+-  for (ptr = rversion->revision; *ptr; ptr++) {
+-    if (!c_isdigit(*ptr) && !c_isalpha(*ptr) && strchr(".+~", *ptr) == NULL)
+-      return dpkg_put_warn(err, _("invalid character in revision number"));
+-  }
+-
+   return 0;
+ }
+ 
