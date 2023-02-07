@@ -1,0 +1,103 @@
+From: Tomas Mraz <tomas@openssl.org>
+Date: Tue, 11 Oct 2022 17:26:23 +0200
+Subject: Release the drbg in the global default context before engines
+
+Fixes #17995
+Fixes #18578
+
+Reviewed-by: Paul Dale <pauli@openssl.org>
+Reviewed-by: Bernd Edlinger <bernd.edlinger@hotmail.de>
+(Merged from https://github.com/openssl/openssl/pull/19390)
+---
+ crypto/context.c            | 15 +++++++++++++++
+ crypto/rand/rand_lib.c      |  5 +++--
+ include/crypto/rand.h       |  1 +
+ include/internal/cryptlib.h |  2 ++
+ 4 files changed, 21 insertions(+), 2 deletions(-)
+
+diff --git a/crypto/context.c b/crypto/context.c
+index bdfc4d02a3f0..548665fba265 100644
+--- a/crypto/context.c
++++ b/crypto/context.c
+@@ -15,6 +15,7 @@
+ #include "internal/bio.h"
+ #include "internal/provider.h"
+ #include "crypto/ctype.h"
++#include "crypto/rand.h"
+ 
+ struct ossl_lib_ctx_onfree_list_st {
+     ossl_lib_ctx_onfree_fn *fn;
+@@ -271,6 +272,20 @@ OSSL_LIB_CTX *OSSL_LIB_CTX_set0_default(OSSL_LIB_CTX *libctx)
+ 
+     return NULL;
+ }
++
++void ossl_release_default_drbg_ctx(void)
++{
++    int dynidx = default_context_int.dyn_indexes[OSSL_LIB_CTX_DRBG_INDEX];
++
++    /* early release of the DRBG in global default libctx, no locking */
++    if (dynidx != -1) {
++        void *data;
++
++        data = CRYPTO_get_ex_data(&default_context_int.data, dynidx);
++        ossl_rand_ctx_free(data);
++        CRYPTO_set_ex_data(&default_context_int.data, dynidx, NULL);
++    }
++}
+ #endif
+ 
+ OSSL_LIB_CTX *ossl_lib_ctx_get_concrete(OSSL_LIB_CTX *ctx)
+diff --git a/crypto/rand/rand_lib.c b/crypto/rand/rand_lib.c
+index c453d3226133..f341d915db76 100644
+--- a/crypto/rand/rand_lib.c
++++ b/crypto/rand/rand_lib.c
+@@ -96,6 +96,7 @@ void ossl_rand_cleanup_int(void)
+     CRYPTO_THREAD_lock_free(rand_meth_lock);
+     rand_meth_lock = NULL;
+ # endif
++    ossl_release_default_drbg_ctx();
+     rand_inited = 0;
+ }
+ 
+@@ -469,7 +470,7 @@ static void *rand_ossl_ctx_new(OSSL_LIB_CTX *libctx)
+     return NULL;
+ }
+ 
+-static void rand_ossl_ctx_free(void *vdgbl)
++void ossl_rand_ctx_free(void *vdgbl)
+ {
+     RAND_GLOBAL *dgbl = vdgbl;
+ 
+@@ -494,7 +495,7 @@ static void rand_ossl_ctx_free(void *vdgbl)
+ static const OSSL_LIB_CTX_METHOD rand_drbg_ossl_ctx_method = {
+     OSSL_LIB_CTX_METHOD_PRIORITY_2,
+     rand_ossl_ctx_new,
+-    rand_ossl_ctx_free,
++    ossl_rand_ctx_free,
+ };
+ 
+ static RAND_GLOBAL *rand_get_global(OSSL_LIB_CTX *libctx)
+diff --git a/include/crypto/rand.h b/include/crypto/rand.h
+index 6a71a339c812..165deaf95c5e 100644
+--- a/include/crypto/rand.h
++++ b/include/crypto/rand.h
+@@ -125,4 +125,5 @@ void ossl_rand_cleanup_nonce(ossl_unused const OSSL_CORE_HANDLE *handle,
+ size_t ossl_pool_acquire_entropy(RAND_POOL *pool);
+ int ossl_pool_add_nonce_data(RAND_POOL *pool);
+ 
++void ossl_rand_ctx_free(void *vdgbl);
+ #endif
+diff --git a/include/internal/cryptlib.h b/include/internal/cryptlib.h
+index 1291299b6e50..934d4b089c20 100644
+--- a/include/internal/cryptlib.h
++++ b/include/internal/cryptlib.h
+@@ -199,6 +199,8 @@ int ossl_lib_ctx_run_once(OSSL_LIB_CTX *ctx, unsigned int idx,
+ int ossl_lib_ctx_onfree(OSSL_LIB_CTX *ctx, ossl_lib_ctx_onfree_fn onfreefn);
+ const char *ossl_lib_ctx_get_descriptor(OSSL_LIB_CTX *libctx);
+ 
++void ossl_release_default_drbg_ctx(void);
++
+ OSSL_LIB_CTX *ossl_crypto_ex_data_get_ossl_lib_ctx(const CRYPTO_EX_DATA *ad);
+ int ossl_crypto_new_ex_data_ex(OSSL_LIB_CTX *ctx, int class_index, void *obj,
+                                CRYPTO_EX_DATA *ad);

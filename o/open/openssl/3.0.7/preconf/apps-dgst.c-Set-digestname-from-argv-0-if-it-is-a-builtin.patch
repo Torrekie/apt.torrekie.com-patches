@@ -1,0 +1,29 @@
+From: Tomas Mraz <tomas@openssl.org>
+Date: Fri, 4 Nov 2022 12:20:08 +0100
+Subject: apps/dgst.c: Set digestname from argv[0] if it is a builtin hash
+ name
+
+Fixes #19589
+
+Reviewed-by: Dmitry Belyavskiy <beldmit@gmail.com>
+Reviewed-by: Todd Short <todd.short@me.com>
+(Merged from https://github.com/openssl/openssl/pull/19606)
+
+(cherry picked from commit 1e5780dbc79dab14c1ec1584313755fc2fd2cf55)
+---
+ apps/dgst.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/apps/dgst.c b/apps/dgst.c
+index 5f36cbcb7791..1042d940f49c 100644
+--- a/apps/dgst.c
++++ b/apps/dgst.c
+@@ -114,6 +114,8 @@ int dgst_main(int argc, char **argv)
+ 
+     buf = app_malloc(BUFSIZE, "I/O buffer");
+     md = (EVP_MD *)EVP_get_digestbyname(argv[0]);
++    if (md != NULL)
++        digestname = argv[0];
+ 
+     prog = opt_init(argc, argv, dgst_options);
+     while ((o = opt_next()) != OPT_EOF) {
