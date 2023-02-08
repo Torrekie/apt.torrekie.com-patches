@@ -1,0 +1,180 @@
+--- a/doc/gperf.1	1483380928.000000000
++++ b/doc/gperf.1	1675854375.798828101
+@@ -132,6 +132,10 @@ binary search.
+ Prevents the transfer of the type declaration to the
+ output file. Use this option if the type is already
+ defined elsewhere.
++.TP
++\fB\-\-size\-type\fR=\fITYPE\fR
++Specify the type for length parameters. Default type is
++\&'unsigned int'.
+ .SS "Algorithm employed by gperf:"
+ .TP
+ \fB\-k\fR, \fB\-\-key\-positions\fR=\fIKEYS\fR
+--- a/src/options.cc	1483357498.000000000
++++ b/src/options.cc	1675855030.961362528
+@@ -68,6 +68,8 @@ static const char *const DEFAULT_CONSTAN
+ /* Default delimiters that separate keywords from their attributes.  */
+ static const char *const DEFAULT_DELIMITERS = ",";
+ 
++static const char *const DEFAULT_SIZE_TYPE = "unsigned int";
++
+ /* Prints program usage to given stream.  */
+ 
+ void
+@@ -206,6 +208,9 @@ Options::long_usage (FILE * stream)
+            "                         Prevents the transfer of the type declaration to the\n"
+            "                         output file. Use this option if the type is already\n"
+            "                         defined elsewhere.\n");
++  fprintf (stream,
++           "      --size-type=TYPE   Specify the type for length parameters. Default type is\n"
++	   "                         'unsigned int'.\n");
+   fprintf (stream, "\n");
+   fprintf (stream,
+            "Algorithm employed by gperf:\n");
+@@ -473,6 +478,7 @@ Options::Options ()
+     _stringpool_name (DEFAULT_STRINGPOOL_NAME),
+     _constants_prefix (DEFAULT_CONSTANTS_PREFIX),
+     _delimiters (DEFAULT_DELIMITERS),
++    _size_type (DEFAULT_SIZE_TYPE),
+     _key_positions ()
+ {
+ }
+@@ -517,6 +523,7 @@ Options::~Options ()
+                "\nhash table size multiplier = %g"
+                "\ninitial associated value = %d"
+                "\ndelimiters = %s"
++	       "\nsize type = %s"
+                "\nnumber of switch statements = %d\n",
+                _option_word & TYPE ? "enabled" : "disabled",
+                _option_word & UPPERLOWER ? "enabled" : "disabled",
+@@ -542,7 +549,7 @@ Options::~Options ()
+                _function_name, _hash_name, _wordlist_name, _lengthtable_name,
+                _stringpool_name, _slot_name, _initializer_suffix,
+                _asso_iterations, _jump, _size_multiple, _initial_asso_value,
+-               _delimiters, _total_switches);
++               _delimiters, _size_type, _total_switches);
+       if (_key_positions.is_useall())
+         fprintf (stderr, "all characters are used in the hash function\n");
+       else
+@@ -680,6 +687,12 @@ Options::set_delimiters (const char *del
+     _delimiters = delimiters;
+ }
+ 
++void
++Options::set_size_type (const char *size_type)
++{
++  if (_size_type == DEFAULT_SIZE_TYPE) 
++    _size_type = size_type;
++}
+ 
+ /* Parses the command line Options and sets appropriate flags in option_word.  */
+ 
+@@ -706,6 +719,7 @@ static const struct option long_options[
+   { "constants-prefix", required_argument, NULL, CHAR_MAX + 5 },
+   { "word-array-name", required_argument, NULL, 'W' },
+   { "length-table-name", required_argument, NULL, CHAR_MAX + 4 },
++  { "size-type", required_argument, NULL, CHAR_MAX + 6 },
+   { "switch", required_argument, NULL, 'S' },
+   { "omit-struct-type", no_argument, NULL, 'T' },
+   { "key-positions", required_argument, NULL, 'k' },
+@@ -1065,6 +1079,11 @@ There is NO WARRANTY, to the extent perm
+             _constants_prefix = /*getopt*/optarg;
+             break;
+           }
++        case CHAR_MAX + 6:      /* Sets the name for the length table array.  */
++          {
++            _size_type = /*getopt*/optarg;
++            break;
++          }
+         default:
+           short_usage (stderr);
+           exit (1);
+--- a/src/options.h	1408049401.000000000
++++ b/src/options.h	1675854375.800931377
+@@ -212,6 +212,9 @@ public:
+   /* Sets the delimiters string, if not already set.  */
+   void                  set_delimiters (const char *delimiters);
+ 
++  const char *		get_size_type() const;
++  void			set_size_type(const char*);
++
+   /* Returns key positions.  */
+   const Positions&      get_key_positions () const;
+ 
+@@ -285,6 +288,8 @@ private:
+   /* Separates keywords from other attributes.  */
+   const char *          _delimiters;
+ 
++  const char *		_size_type;
++
+   /* Contains user-specified key choices.  */
+   Positions             _key_positions;
+ };
+--- a/src/options.icc	1408049401.000000000
++++ b/src/options.icc	1675854375.801491872
+@@ -160,3 +160,9 @@ Options::get_key_positions () const
+ {
+   return _key_positions;
+ }
++
++INLINE const char *
++Options::get_size_type() const
++{
++	return _size_type;
++}
+--- a/src/output.cc	1483356939.000000000
++++ b/src/output.cc	1675854625.453120041
+@@ -1182,9 +1182,13 @@ output_keyword_entry (KeywordExt *temp,
+        - The types 'long' and 'unsigned long' do work as well, but on 64-bit
+          native Windows platforms, they don't have the same size as pointers
+          and therefore generate warnings.  */
++#if __APPLE__
++    printf("offsetof(struct %s_t, %s_str%d)", option.get_stringpool_name (), option.get_stringpool_name (), stringpool_index);
++#else
+     printf ("(int)(size_t)&((struct %s_t *)0)->%s_str%d",
+             option.get_stringpool_name (), option.get_stringpool_name (),
+             stringpool_index);
++#endif
+   else
+     output_string (temp->_allchars, temp->_allchars_length);
+   if (option[TYPE])
+@@ -2129,8 +2133,11 @@ Output::output ()
+       printf ("%s\n", _struct_decl);
+     }
+ 
+-  if (option[INCLUDE])
++  if (option[INCLUDE]) {
+     printf ("#include <string.h>\n"); /* Declare strlen(), strcmp(), strncmp(). */
++    if (option[SHAREDLIB])
++      printf("#include <stddef.h>\n"); /* Declare offsetof() */
++  }
+ 
+   if (!option[ENUM])
+     {
+@@ -2172,8 +2179,14 @@ Output::output ()
+             "  static %s%s%s (const char *str, size_t len);\n"
+             "};\n"
+             "\n",
++#if __APPLE__
++            option.get_class_name (), option.get_hash_name (), option.get_size_type(),
++            const_for_struct, _return_type, option.get_function_name (),
++            option.get_size_type());
++#else
+             option.get_class_name (), option.get_hash_name (),
+             const_for_struct, _return_type, option.get_function_name ());
++#endif
+ 
+   output_hash_function ();
+ 
+--- a/tests/test-6.exp	1483356939.000000000
++++ b/tests/test-6.exp	1675854375.811510046
+@@ -90,6 +90,8 @@ Details in the output code:
+                          Prevents the transfer of the type declaration to the
+                          output file. Use this option if the type is already
+                          defined elsewhere.
++      --size-type=TYPE   Specify the type for length parameters. Default type is
++                         'unsigned int'.
+ 
+ Algorithm employed by gperf:
+   -k, --key-positions=KEYS

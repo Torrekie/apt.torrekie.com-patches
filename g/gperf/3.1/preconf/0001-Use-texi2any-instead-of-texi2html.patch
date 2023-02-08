@@ -1,0 +1,28 @@
+From: Hilko Bengen <bengen@debian.org>
+Date: Sat, 8 Aug 2015 20:20:07 +0200
+Subject: Use texi2any instead of texi2html
+
+---
+ doc/Makefile.in | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/doc/Makefile.in b/doc/Makefile.in
+index 37b488d..835f173 100644
+--- a/doc/Makefile.in
++++ b/doc/Makefile.in
+@@ -95,13 +95,12 @@ $(srcdir)/gperf.pdf : $(srcdir)/gperf.texi $(srcdir)/gpl-3.0.texi
+ 	cd $(srcdir) && $(RM) gperf.aux gperf.toc gperf.cp gperf.fn gperf.ky gperf.pg gperf.tp gperf.vr gperf.log gperf.cps
+ 
+ 
+-html : gperf.html gperf_toc.html
++html : gperf.html
+ 
+ # We still prefer texi2html over texi2any because it includes the titlepage.
+ 
+ gperf.html : $(srcdir)/gperf.texi $(srcdir)/gpl-3.0.texi
+-	cd $(srcdir) && $(TEXI2HTML) -number -monolithic gperf.texi
+-#	cd $(srcdir) && $(TEXI2ANY) --html --no-headers --no-split gperf.texi
++	cd $(srcdir) && $(TEXI2ANY) --html --no-headers --no-split gperf.texi
+ 
+ gperf_toc.html : $(srcdir)/gperf.texi $(srcdir)/gpl-3.0.texi
+ 	cd $(srcdir) && $(RM) gperf_*.html

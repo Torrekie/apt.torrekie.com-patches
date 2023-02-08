@@ -1,0 +1,28 @@
+Description: Clear correct document ownership flags to prevent a wild free.
+ This issue was discovered with an SVG-based font with some documents
+ compressed and other uncompressed. After loading the first compressed
+ document, the ownership flag on the glyph slot was set to true but never
+ set to false. As a result, after loading a compressed document, a glyph
+ from an uncompressed document would load fine, but when this glyph slot
+ was cleared it would try to free its document resulting in a wild free.
+Author: Ben Wagner <bungeman@chromium.org>
+Origin: https://gitlab.freedesktop.org/freetype/freetype/-/commit/c26872ed59cba3af2f407b5eefc92fcec92aa52b
+Bug: https://gitlab.freedesktop.org/freetype/freetype/-/issues/1162
+Bug-Debian: https://bugs.debian.org/1013094
+Last-Update: 2022-05-26
+
+---
+ src/base/ftobjs.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/src/base/ftobjs.c
++++ b/src/base/ftobjs.c
+@@ -605,7 +605,7 @@
+ 
+ 
+         FT_FREE( doc->svg_document );
+-        slot->internal->load_flags &= ~FT_GLYPH_OWN_GZIP_SVG;
++        slot->internal->flags &= ~FT_GLYPH_OWN_GZIP_SVG;
+       }
+     }
+ #endif
