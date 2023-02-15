@@ -132,3 +132,14 @@
  #    endif // LIBIOSEXEC_INTERNAL
  #  endif // TARGET_OS_IPHONE
  #endif // __APPLE__
+--- a/Makefile	1659213818.000000000
++++ bMakefile	1674070945.782081434
+@@ -13,7 +13,7 @@
+ 
+ SOVER    := 1
+ 
+-SRC      := execl.c execv.c get_new_argv.c posix_spawn.c utils.c
++SRC      := execl.c execv.c get_new_argv.c posix_spawn.c uname.c utils.c
+ PWD_SRC  := getgrent.c getpwent.c pwcache.c
+ WRAP_SRC := fake_getgrent.c fake_getpwent.c
+ 
