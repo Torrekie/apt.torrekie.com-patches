@@ -1,0 +1,134 @@
+--- /dev/null	1676461219.607719000
++++ b/uname.c	1672042202.352770600
+@@ -0,0 +1,61 @@
++#include <string.h>
++#include <sys/param.h>
++#include <sys/sysctl.h>
++#include <sys/utsname.h>
++#include "libiosexec.h"
++
++int
++ie_uname(name)
++	struct utsname *name;
++{
++	int mib[2], rval;
++	size_t len;
++	char *p;
++
++	rval = 0;
++
++	mib[0] = CTL_KERN;
++	mib[1] = KERN_OSTYPE;
++	len = sizeof(name->sysname);
++	if (sysctl(mib, 2, &name->sysname, &len, NULL, 0) == -1)
++		rval = -1;
++
++	mib[0] = CTL_KERN;
++	mib[1] = KERN_HOSTNAME;
++	len = sizeof(name->nodename);
++	if (sysctl(mib, 2, &name->nodename, &len, NULL, 0) == -1)
++		rval = -1;
++
++	mib[0] = CTL_KERN;
++	mib[1] = KERN_OSRELEASE;
++	len = sizeof(name->release);
++	if (sysctl(mib, 2, &name->release, &len, NULL, 0) == -1)
++		rval = -1;
++
++	/* The version may have newlines in it, turn them into spaces. */
++	mib[0] = CTL_KERN;
++	mib[1] = KERN_VERSION;
++	len = sizeof(name->version);
++	if (sysctl(mib, 2, &name->version, &len, NULL, 0) == -1)
++		rval = -1;
++	else
++		for (p = name->version; len--; ++p)
++			if (*p == '\n' || *p == '\t') {
++				if (len > 1) {
++					*p = ' ';
++				} else {
++					*p = '\0';
++				}
++			}
++	mib[0] = CTL_HW;
++#if defined(__arm64__) && defined(__APPLE__)
++	char *ie_machine = "arm64";
++	strlcpy((char *)&name->machine, ie_machine, _SYS_NAMELEN);
++#else
++	mib[1] = HW_MACHINE;
++	len = sizeof(name->machine);
++	if (sysctl(mib, 2, &name->machine, &len, NULL, 0) == -1)
++		rval = -1;
++#endif
++	return (rval);
++}
+--- a/libiosexec.h	1659213818.000000000
++++ b/libiosexec.h	1672045035.926420730
+@@ -58,6 +58,18 @@
+ IOSEXEC_PUBLIC char *ie_group_from_gid(gid_t, int);
+ #endif
+ 
++/* Additions from Torrekie's repo
++ * `ie_uname` for HW_MACHINE compat, as it returns model name instead of arch name that how macOS does,
++ * for a common fix of arch detecting
++ * `sysctl` not affected
++ */
++#if defined(_SYS_UTSNAME_H) || defined(LIBIOSEXEC_INTERNAL)
++# if defined(LIBIOSEXEC_INTERNAL) && !defined(_SYS_UTSNAME_H)
++#  include <sys/utsname.h>
++# endif
++IOSEXEC_PUBLIC int ie_uname(struct utsname *);
++#endif
++
+ #if defined(__APPLE__)
+ #  include <TargetConditionals.h>
+ #  if TARGET_OS_IPHONE
+@@ -71,25 +83,30 @@
+ #      define execve ie_execve
+ #      define posix_spawn ie_posix_spawn
+ #      define posix_spawnp ie_posix_spawnp
++#      ifndef DISABLE_UNAME_WRAP
++#        define uname ie_uname
++#      endif // DISABLE_UNAME_WRAP
++       /* Disabled in Torrekie's repo by default since not provided for rootless */
++#      ifdef PROCURSUS_ROOTLESS
++#        define getpwent ie_getpwent
++#        define getpwuid ie_getpwuid
++#        define getpwuid_r ie_getpwuid_r
++#        define getpwnam ie_getpwnam
++#        define getpwnam_r ie_getpwnam_r
++#        define setpassent ie_setpassent
++#        define setpwent ie_setpwent
++#        define endpwent ie_endpwent
++#        define user_from_uid ie_user_from_uid
+ 
+-#      define getpwent ie_getpwent
+-#      define getpwuid ie_getpwuid
+-#      define getpwuid_r ie_getpwuid_r
+-#      define getpwnam ie_getpwnam
+-#      define getpwnam_r ie_getpwnam_r
+-#      define setpassent ie_setpassent
+-#      define setpwent ie_setpwent
+-#      define endpwent ie_endpwent
+-#      define user_from_uid ie_user_from_uid
+-
+-#      define getgrent ie_getgrent
+-#      define getgrgid ie_getgrgid
+-#      define getgrgid_r ie_getgrgid_r
+-#      define getgrnam ie_getgrnam
+-#      define getgrnam_r ie_getgrnam_r
+-#      define setgrent ie_setgrent
+-#      define endgrent ie_endgrent
+-#      define group_from_gid ie_group_from_gid
++#        define getgrent ie_getgrent
++#        define getgrgid ie_getgrgid
++#        define getgrgid_r ie_getgrgid_r
++#        define getgrnam ie_getgrnam
++#        define getgrnam_r ie_getgrnam_r
++#        define setgrent ie_setgrent
++#        define endgrent ie_endgrent
++#        define group_from_gid ie_group_from_gid
++#      endif // PROCURSUS_ROOTLESS
+ #    endif // LIBIOSEXEC_INTERNAL
+ #  endif // TARGET_OS_IPHONE
+ #endif // __APPLE__
