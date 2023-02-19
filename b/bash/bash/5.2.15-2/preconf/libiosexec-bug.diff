@@ -4,10 +4,10 @@
    int sample_len;
  
    SETOSTYPE (0);		/* Some systems use for USG/POSIX semantics */
-+#ifdef execve
-+  /* Torrekie: Temp disable libiosexec-1.2.2's execve for now, bash's hacky workaround did work actrually
++#ifndef LIBIOSEXEC_INTERNAL
++  /* Torrekie: Temp disable libiosexec-1.2.2's execve for now, bash's hacky workaround did work actually
 +   * Remove this patch after next libiosexec release */
-+#undef execve
++#define LIBIOSEXEC_INTERNAL 1
 +#endif
    execve (command, args, env);
    i = errno;			/* error from execve() */
