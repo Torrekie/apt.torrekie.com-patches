@@ -1,0 +1,228 @@
+--- giflib-5.2.1/Makefile	1561392537.000000000
++++ ./Makefile	1676886505.940336339
+@@ -29,11 +29,11 @@ LIBPOINT=0
+ LIBVER=$(LIBMAJOR).$(LIBMINOR).$(LIBPOINT)
+ 
+ SOURCES = dgif_lib.c egif_lib.c gifalloc.c gif_err.c gif_font.c \
+-	gif_hash.c openbsd-reallocarray.c
++	gif_hash.c openbsd-reallocarray.c quantize.c
+ HEADERS = gif_hash.h  gif_lib.h  gif_lib_private.h
+ OBJECTS = $(SOURCES:.c=.o)
+ 
+-USOURCES = qprintf.c quantize.c getarg.c 
++USOURCES = qprintf.c getarg.c
+ UHEADERS = getarg.h
+ UOBJECTS = $(USOURCES:.c=.o)
+ 
+--- giflib-5.2.1/doc/Makefile	1553792725.000000000
++++ ./doc/Makefile	1676886304.127233675
+@@ -22,9 +22,11 @@ XMLMAN = \
+ 	gifbuild.xml \
+ 	gifclrmp.xml \
+ 	gifecho.xml \
++	giffilter.xml \
+ 	giffix.xml \
+ 	gifinto.xml \
+ 	giflib.xml \
++	gifsponge.xml \
+ 	giftext.xml \
+ 	giftool.xml
+ XMLINTERNAL = \
+--- giflib-5.2.1/doc/gif_lib.xml	1553792725.000000000
++++ ./doc/gif_lib.xml	1676886205.510706511
+@@ -280,7 +280,7 @@ ColorMapObject *GifUnionColorMap(
+ <para>Create the union of two given color maps and return it.  If the result
+ won't fit into 256 colors, NULL is returned, the allocated union
+ otherwise.  ColorIn1 is copied as it to ColorUnion, while colors from
+-ColorIn2 are copied iff they didn't exist before.  ColorTransIn2 maps
++ColorIn2 are copied if they didn't exist before.  ColorTransIn2 maps
+ the old ColorIn2 into ColorUnion color map table.</para>
+ 
+ <programlisting id="GifAttachImage">
+--- giflib-5.2.1/doc/gifinto.xml	1400237213.000000000
++++ ./doc/gifinto.xml	1676886205.511538421
+@@ -28,7 +28,7 @@
+ 
+ <refsect1><title>Description</title>
+ 
+-<para>A program to save stdin into a file with given name, iff the
++<para>A program to save stdin into a file with given name, if the
+ result file has size bigger than specified (see below).  This can be
+ used to save a result under the same filename we started with in a
+ chain of pipes.</para>
+--- giflib-5.2.1/getarg.c	1561361031.000000000
++++ ./getarg.c	1676886201.529346477
+@@ -307,6 +307,12 @@ GAGetParmeters(void *Parameters[],
+     int i = 0, ScanRes;
+ 
+     while (!(ISSPACE(CtrlStrCopy[i]))) {
++
++        if ((*argv) == argv_end) {
++            GAErrorToken = Option;
++            return CMD_ERR_NumRead;
++        }
++
+         switch (CtrlStrCopy[i + 1]) {
+           case 'd':    /* Get signed integers. */
+               ScanRes = sscanf(*((*argv)++), "%d",
+--- giflib-5.2.1/getarg.h	1561361576.000000000
++++ ./getarg.h	1676886348.987013555
+@@ -34,15 +34,6 @@ extern bool GifNoisyPrint;
+ extern void GifQprintf(char *Format, ...);
+ extern void PrintGifError(int ErrorCode);
+ 
+-/******************************************************************************
+- Color table quantization
+-******************************************************************************/
+-int GifQuantizeBuffer(unsigned int Width, unsigned int Height,
+-                   int *ColorMapSize, GifByteType * RedInput,
+-                   GifByteType * GreenInput, GifByteType * BlueInput,
+-                   GifByteType * OutputBuffer,
+-                   GifColorType * OutputColorMap);
+-
+ /* These used to live in the library header */
+ #define GIF_MESSAGE(Msg) fprintf(stderr, "\n%s: %s\n", PROGRAM_NAME, Msg)
+ #define GIF_EXIT(Msg)    { GIF_MESSAGE(Msg); exit(-3); }
+--- giflib-5.2.1/gif_lib.h	1561392973.000000000
++++ ./gif_lib.h	1676886348.986272061
+@@ -215,6 +215,14 @@ int DGifGetCodeNext(GifFileType *GifFile
+ int DGifGetLZCodes(GifFileType *GifFile, int *GifCode);
+ const char *DGifGetGifVersion(GifFileType *GifFile);
+ 
++/******************************************************************************
++ Color table quantization (deprecated)
++******************************************************************************/
++int GifQuantizeBuffer(unsigned int Width, unsigned int Height,
++                   int *ColorMapSize, GifByteType * RedInput,
++                   GifByteType * GreenInput, GifByteType * BlueInput,
++                   GifByteType * OutputBuffer,
++                   GifColorType * OutputColorMap);
+ 
+ /******************************************************************************
+  Error handling and reporting.
+--- giflib-5.2.1/tests/makefile	1553792725.000000000
++++ ./tests/makefile	1676886368.950832917
+@@ -72,7 +72,7 @@ gifclrmp-regress:
+ 	do \
+ 	    stem=`basename $${test} | sed -e "s/.gif$$//"`; \
+ 	    if echo "gifclrmap: Checking colormap of $${test}" >&2; \
+-	    $(UTILS)/gifclrmp <$${test} > $@.$${stem}.regress 2>&1; \
++	    $(UTILS)/gifclrmp <$${test} > $@.$${stem}.regress; \
+ 	    then diff -u $${stem}.map $@.$${stem}.regress; \
+ 	    else echo "*** Nonzero return status on $${test}!"; exit 1; fi; \
+ 	done
+@@ -96,7 +96,7 @@ giffilter-regress:
+ 	do \
+ 	    stem=`basename $${test} | sed -e "s/.gif$$//"`; \
+ 	    if echo "giffiltr: Testing copy of $${test}" >&2; \
+-	    $(UTILS)/giffilter <$${test} | $(UTILS)/gif2rgb > $@.$${stem}.regress 2>&1; \
++	    $(UTILS)/giffilter <$${test} | $(UTILS)/gif2rgb > $@.$${stem}.regress; \
+ 	    then cmp $${stem}.rgb $@.$${stem}.regress; \
+ 	    else echo "*** Nonzero return status on $${test}!"; exit 1; fi; \
+ 	done
+@@ -124,7 +124,7 @@ gifsponge-regress:
+ 	do \
+ 	    stem=`basename $${test} | sed -e "s/.gif$$//"`; \
+ 	    if echo "gifsponge: Testing copy of $${test}" >&2; \
+-	    $(UTILS)/gifsponge <$${test} | $(UTILS)/gif2rgb > $@.$${stem}.regress 2>&1; \
++	    $(UTILS)/gifsponge <$${test} | $(UTILS)/gif2rgb > $@.$${stem}.regress; \
+ 	    then cmp $${stem}.rgb  $@.$${stem}.regress; \
+ 	    else echo "*** Nonzero return status on $${test}!"; exit 1; fi; \
+ 	done
+@@ -135,7 +135,7 @@ giftext-regress:
+ 	do \
+ 	    stem=`basename $${test} | sed -e "s/.gif$$//"`; \
+ 	    if echo "giftext: Checking text dump of $${test}" >&2; \
+-	    $(UTILS)/giftext <$${test} > $@.$${stem}.regress 2>&1; \
++	    $(UTILS)/giftext <$${test} > $@.$${stem}.regress; \
+ 	    then diff -u $${stem}.dmp  $@.$${stem}.regress; \
+ 	    else echo "*** Nonzero return status on $${test}!"; exit 1; fi; \
+ 	done
+--- /dev/null
++++ b/doc/gifsponge.xml
+@@ -0,0 +1,40 @@
++<?xml version="1.0" encoding="ISO-8859-1"?>
++<!DOCTYPE refentry PUBLIC
++   "-//OASIS//DTD DocBook XML V4.1.2//EN"
++   "http://www.oasis-open.org/docbook/xml/4.1.2/docbookx.dtd" [
++<!ENTITY email         "david.sephirot@gmail.com">
++]>
++<refentry id='gifsponge.1'>
++<refentryinfo><date>20 Dec 2020</date></refentryinfo>
++<refmeta>
++<refentrytitle>gifsponge</refentrytitle>
++<manvolnum>1</manvolnum>
++<refmiscinfo class="source">GIFLIB</refmiscinfo>
++<refmiscinfo class="manual">GIFLIB Documentation</refmiscinfo>
++</refmeta>
++<refnamediv id='name'>
++<refname>gifsponge</refname>
++<refpurpose>expensive GIF copy, a model for slurp utilities</refpurpose>
++</refnamediv>
++
++<refsynopsisdiv id='synopsis'>
++
++<cmdsynopsis>
++  <command>gifsponge</command>
++</cmdsynopsis>
++</refsynopsisdiv>
++
++<refsect1><title>Description</title>
++
++<para>Slurp a GIF into core, operate on it, spew it out again.
++This is an expensive way to copy a GIF.  The source is included
++as a skeleton for more sophisticated slurp utilities.  See the source in the
++util directory for details.</para>
++
++</refsect1>
++<refsect1><title>Author</title>
++
++<para>David Suárez <email>&email;</email></para>
++
++</refsect1>
++</refentry>
+--- /dev/null
++++ b/doc/giffilter.xml
+@@ -0,0 +1,42 @@
++<?xml version="1.0" encoding="ISO-8859-1"?>
++<!DOCTYPE refentry PUBLIC
++   "-//OASIS//DTD DocBook XML V4.1.2//EN"
++   "http://www.oasis-open.org/docbook/xml/4.1.2/docbookx.dtd" [
++<!ENTITY email         "esr@thyrsus.com">
++]>
++<refentry id='giffilter.1'>
++<refentryinfo><date>2 May 2012</date></refentryinfo>
++<refmeta>
++<refentrytitle>giffilter</refentrytitle>
++<manvolnum>1</manvolnum>
++<refmiscinfo class="source">GIFLIB</refmiscinfo>
++<refmiscinfo class="manual">GIFLIB Documentation</refmiscinfo>
++</refmeta>
++<refnamediv id='name'>
++<refname>giffilter</refname>
++<refpurpose>expensive GIF copy, a model for filter utilities</refpurpose>
++</refnamediv>
++
++<refsynopsisdiv id='synopsis'>
++
++<cmdsynopsis>
++  <command>giffilter</command>
++</cmdsynopsis>
++</refsynopsisdiv>
++
++<refsect1><title>Description</title>
++
++<para>This is an expensive way to copy a GIF.  The source is included
++as a skeleton for more sophisticated filters.  See the source in the
++util directory for details.</para>
++
++<para>Also has some utility as a test of the sequential GIF record I/O
++routines.  The output should be bytewise identical to the input.</para>
++
++</refsect1>
++<refsect1><title>Author</title>
++
++<para>Eric S. Raymond <email>&email;</email></para>
++
++</refsect1>
++</refentry>
