@@ -1,0 +1,18 @@
+--- openpam-20190224/lib/libpam/openpam_constants.c	1551039319.000000000
++++ lib/libpam/openpam_constants.c	1676974486.709182108
+@@ -175,11 +193,11 @@ const char *openpam_policy_path[] = {
+ };
+ 
+ const char *openpam_module_path[] = {
+-#ifdef OPENPAM_MODULES_DIRECTORY
+-	OPENPAM_MODULES_DIRECTORY,
++#ifdef OPENPAM_MODULES_DIR
++	OPENPAM_MODULES_DIR,
+ #else
+-	"/usr/lib",
+-	"/usr/local/lib",
++	"/usr/lib/pam",
++	"/usr/local/lib/pam",
+ #endif
+ 	NULL
+ };
