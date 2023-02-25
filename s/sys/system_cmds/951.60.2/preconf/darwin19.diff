@@ -1,0 +1,465 @@
+--- a/arch.tproj/arch.c	1670959796.000000000
++++ b/arch.tproj/arch.c	1677232403.572026378
+@@ -224,8 +224,15 @@ spawnIt(CPU *cpu, int pflag, const char
+     /* do the equivalent of exec, rather than creating a separate process */
+     if((ret = posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETEXEC)) != 0)
+         errc(1, ret, "posix_spawnattr_setflags");
++#if (defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 110000) || \
++	(defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__ >= 140000)
+     if((ret = posix_spawnattr_setarchpref_np(&attr, count, prefs, subprefs, &copied)) != 0)
++#else
++    if((ret = posix_spawnattr_setbinpref_np(&attr, count, prefs, &copied)) != 0)
++#endif
++    {
+             errc(1, ret, "posix_spawnattr_setbinpref_np");
++    }
+ 
+ #if TARGET_OS_OSX
+     for (size_t i = 0; i < copied; i++) {
+--- a/chkpasswd.tproj/chkpasswd.pam	1670959796.000000000
++++ b/chkpasswd.tproj/chkpasswd.pam	1677238305.233631029
+@@ -1,5 +1,5 @@
+ # chkpasswd: auth account
+-auth       required       pam_opendirectory.so
+-account    required       pam_opendirectory.so
++auth       required       pam_unix.so
++account    required       pam_unix.so
+ password   required       pam_permit.so
+ session    required       pam_permit.so
+--- a/chkpasswd.tproj/passwd.c	1670959796.000000000
++++ b/chkpasswd.tproj/passwd.c	1677235349.866171814
+@@ -23,7 +23,9 @@
+  */
+ #define INFO_FILE 1
+ #define INFO_NIS 2
++#ifndef __ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__
+ #define INFO_OPEN_DIRECTORY 3
++#endif
+ #define INFO_PAM 4
+ 
+ #ifndef __SLICK__
+@@ -84,11 +86,15 @@ usage(void)
+ 	fprintf(stderr, "  infosystem:\n");
+ 	fprintf(stderr, "    file\n");
+ 	fprintf(stderr, "    NIS\n");
++#ifdef INFO_OPEN_DIRECTORY
+ 	fprintf(stderr, "    OpenDirectory\n");
++#endif
+ 	fprintf(stderr, "  location (for infosystem):\n");
+ 	fprintf(stderr, "    file           location is path to file (default is %s)\n", _PASSWD_FILE);
+ 	fprintf(stderr, "    NIS            location is NIS domain name\n");
++#ifdef INFO_OPEN_DIRECTORY
+ 	fprintf(stderr, "    OpenDirectory  location is directory node name\n");
++#endif
+ 	fprintf(stderr, "  -c: supplied password is compared verbatim without first\n");
+ 	fprintf(stderr, "      being crypted\n");
+ 	exit(1);
+@@ -112,8 +118,10 @@ main(int argc, char *argv[])
+ 				infosystem = INFO_NIS;
+ 			} else if (!strcasecmp(optarg, "YP")) {
+ 				infosystem = INFO_NIS;
++#ifdef INFO_OPEN_DIRECTORY
+ 			} else if (!strcasecmp(optarg, "opendirectory")) {
+ 				infosystem = INFO_OPEN_DIRECTORY;
++#endif
+ 			} else if (!strcasecmp(optarg, "PAM")) {
+ 				infosystem = INFO_PAM;
+ 			} else {
+@@ -162,9 +170,11 @@ main(int argc, char *argv[])
+ 		case INFO_NIS:
+ 			nis_check_passwd(user, locn);
+ 			break;
++#ifdef INFO_OPEN_DIRECTORY
+ 		case INFO_OPEN_DIRECTORY:
+ 			od_check_passwd(user, locn);
+ 			break;
++#endif
+ 		case INFO_PAM:
+ 			pam_check_passwd(user);
+ 			break;
+--- a/chpass.tproj/chpass.c	1670959796.000000000
++++ b/chpass.tproj/chpass.c	1677151120.689136378
+@@ -386,6 +386,7 @@ main(int argc, char *argv[])
+ 	return 0;
+ #else /* OPEN_DIRECTORY */
+ 	exit(0);
++#ifdef __FreeBSD__
+ 	if (old_pw != NULL)
+ 		pw->pw_fields |= (old_pw->pw_fields & _PWF_SOURCE);
+ 	switch (pw->pw_fields & _PWF_SOURCE) {
+@@ -428,6 +429,7 @@ main(int argc, char *argv[])
+ 	default:
+ 		errx(1, "unsupported passwd source");
+ 	}
++#endif
+ #endif /* OPEN_DIRECTORY */
+ }
+ 
+--- a/chpass.tproj/pw_copy.c	1670959796.000000000
++++ b/chpass.tproj/pw_copy.c	1677151602.472825709
+@@ -62,12 +62,19 @@
+ #include <pwd.h>
+ #include <stdio.h>
+ #include <string.h>
+-
+-#include "pw_util.h"
++#include <stdlib.h>
+ #include "pw_copy.h"
+ 
+ extern char *tempname;
+ 
++static void
++pw_error(char *name, int err, int eval)
++{
++	if (err)
++		warn("%s", name);
++	exit(eval);
++}
++
+ void
+ pw_copy(int ffd, int tfd, struct passwd *pw)
+ {
+--- a/dynamic_pager.tproj/com.apple.dynamic_pager.plist	1670959796.000000000
++++ b/dynamic_pager.tproj/com.apple.dynamic_pager.plist	1677238428.751122433
+@@ -4,13 +4,15 @@
+ <dict>
+ 	<key>EnableTransactions</key>
+ 	<true/>
+-	<key>Label</key>
+-	<string>com.apple.dynamic_pager</string>
+ 	<key>KeepAlive</key>
+ 	<dict>
+ 		<key>SuccessfulExit</key>
+ 		<false/>
+ 	</dict>
++	<key>Label</key>
++	<string>com.apple.dynamic_pager</string>
++	<key>LaunchOnlyOnce</key>
++	<true/>
+ 	<key>POSIXSpawnType</key>
+ 	<string>Interactive</string>
+ 	<key>ProgramArguments</key>
+--- a/iosim.tproj/iosim.c	1670959796.000000000
++++ b/iosim.tproj/iosim.c	1677229368.175448797
+@@ -42,6 +42,10 @@
+ #define kIONVMeANS2EmbeddedControllerString "AppleANS2NVMeController"
+ #define kIONVMeControllerString             "AppleNVMeController"
+ 
++#ifndef kIOMainPortDefault
++#define kIOMainPortDefault kIOMasterPortDefault
++#endif
++
+ typedef enum {
+ 	kDefaultDevice    = 0,
+ 	kNVMeDevice       = 1,
+--- a/login.tproj/login_audit.c	1670959796.000000000
++++ b/login.tproj/login_audit.c	1677230719.848926794
+@@ -43,7 +43,9 @@ __FBSDID("$FreeBSD$");
+ #include <bsm/audit_uevents.h>
+ #include <bsm/audit_session.h>
+ 
+-#ifdef __APPLE__
++#if defined(__APPLE__) && ((defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 130000) || \
++	(defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__ >= 160000))
++#define _DARWIN22
+ #if __has_include(<EndpointSecuritySystem/ESSubmitSPI.h>)
+ #include <EndpointSecuritySystem/ESSubmitSPI.h>
+ #endif /* __has_include */
+@@ -126,7 +128,7 @@ au_login_success(int fflag)
+ 	setenv("SECURITYSESSIONID", session, 1);
+ 	free(session);
+ 
+-#ifdef __APPLE__
++#ifdef _DARWIN22
+ 	/*
+ 	 * Emit ES event after setting up the audit session, so the audit
+ 	 * session ID and audit user ID in the event represent the newly
+@@ -134,7 +136,7 @@ au_login_success(int fflag)
+ 	 */
+ 	if (ess_notify_login_login != NULL)
+ 		ess_notify_login_login(true, NULL, pwd->pw_name, &uid);
+-#endif /* __APPLE__ */
++#endif /* _DARWIN22 */
+ 
+ 	/* If we are not auditing, don't cut an audit record; just return. */
+ 	if (au_cond == AUC_NOAUDIT)
+@@ -170,7 +172,7 @@ au_login_fail(const char *errmsg, int na
+ 	gid_t gid;
+ 	pid_t pid = getpid();
+ 
+-#ifdef __APPLE__
++#ifdef _DARWIN22
+ 	if (!fflag &&
+ 	    ess_notify_login_login != NULL) {
+ 		if (!na)
+@@ -178,7 +180,7 @@ au_login_fail(const char *errmsg, int na
+ 		else if (username != NULL)
+ 			ess_notify_login_login(false, errmsg, username, NULL);
+ 	}
+-#endif /* __APPLE__ */
++#endif /* _DARWIN22 */
+ 
+ 	/* If we are not auditing, don't cut an audit record; just return. */
+  	if (auditon(A_GETCOND, &au_cond, sizeof(au_cond)) < 0) {
+@@ -237,11 +239,11 @@ audit_logout(int fflag)
+ 	pid_t pid = getpid();
+ 	int au_cond;
+ 
+-#ifdef __APPLE__
++#ifdef _DARWIN22
+ 	if (!fflag &&
+ 	    ess_notify_login_logout != NULL)
+ 		ess_notify_login_logout(pwd->pw_name, uid);
+-#endif /* __APPLE__ */
++#endif /* _DARWIN22 */
+ 
+ 	/* If we are not auditing, don't cut an audit record; just return. */
+ 	if (auditon(A_GETCOND, &au_cond, sizeof(au_cond)) < 0) {
+--- a/login.tproj/pam.d/login	1670959796.000000000
++++ b/login.tproj/pam.d/login	1677238650.662034298
+@@ -1,11 +1,9 @@
+ # login: auth account password session
+ auth       optional       pam_krb5.so use_kcminit
+-auth       optional       pam_ntlm.so try_first_pass
+-auth       optional       pam_mount.so try_first_pass
+-auth       required       pam_opendirectory.so try_first_pass
++auth       required       pam_unix.so try_first_pass
+ account    required       pam_nologin.so
+-account    required       pam_opendirectory.so
+-password   required       pam_opendirectory.so
++account    required       pam_unix.so
++password   required       pam_unix.so
+ session    required       pam_launchd.so
+ session    required       pam_uwtmp.so
+ session    optional       pam_mount.so
+--- a/login.tproj/pam.d/login.term	1670959796.000000000
++++ b/login.tproj/pam.d/login.term	1677238583.368347181
+@@ -1,4 +1,4 @@
+ # login: account session
+ account    required       pam_nologin.so
+-account    required       pam_opendirectory.so
++account    required       pam_unix.so
+ session    required       pam_uwtmp.so
+--- a/lsmp.tproj/lsmp.c	1670959796.000000000
++++ b/lsmp.tproj/lsmp.c	1677231619.782409143
+@@ -38,6 +38,14 @@
+ #define TASK_FOR_PID_USAGE_MESG ""
+ #endif
+ 
++#if !(defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 110300) || \
++	!(defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__ >= 140500)
++#pragma clang diagnostic ignored "-Wunguarded-availability-new"
++boolean_t mach_task_is_self(task_name_t task) {
++    return (mach_task_self() == task);
++}
++#endif
++
+ struct prog_configs lsmp_config = {
+     .show_all_tasks         = FALSE,
+     .show_voucher_details   = FALSE,
+--- a/memory_pressure.tproj/memory_pressure.c	1670959796.000000000
++++ b/memory_pressure.tproj/memory_pressure.c	1677314525.149260675
+@@ -26,7 +26,7 @@
+ #include <errno.h>
+ #include <getopt.h>
+ #include <string.h>
+-#include <mach/i386/vm_param.h>
++#include <mach/vm_param.h>
+ #include <sys/kern_memorystatus.h>
+ #include <sys/sysctl.h>
+ #include <mach/mach.h>
+--- a/nvram.tproj/entitlements.plist	1670959796.000000000
++++ b/nvram.tproj/entitlements.plist	1677237819.288242573
+@@ -4,5 +4,11 @@
+ <dict>
+ 	<key>com.apple.private.iokit.system-nvram-internal-allow</key>
+ 	<true/>
++	<key>platform-application</key>
++	<true/>
++	<key>com.apple.private.security.no-container</key>
++	<true/>
++	<key>com.apple.private.skip-library-validation</key>
++	<true/>
+ </dict>
+ </plist>
+--- a/passwd.tproj/passwd.c	1670959796.000000000
++++ b/passwd.tproj/passwd.c	1677233103.774509349
+@@ -151,14 +151,26 @@ usage(void)
+ 	fprintf(stderr, "usage: %s [-i infosystem] -l location]] [-u authname] [name]\n", progname);
+ 	fprintf(stderr, "  infosystem:\n");
+ 	fprintf(stderr, "    file\n");
++#ifdef INFO_NIS
+ 	fprintf(stderr, "    NIS\n");
++#endif
++#ifdef INFO_OPEN_DIRECTORY
+ 	fprintf(stderr, "    OpenDirectory\n");
++#endif
++#ifdef INFO_PAM
+ 	fprintf(stderr, "    PAM\n");
++#endif
+ 	fprintf(stderr, "  location (for infosystem):\n");
+ 	fprintf(stderr, "    file           location is path to file (default is %s)\n", _PASSWD_FILE);
++#ifdef INFO_NIS
+ 	fprintf(stderr, "    NIS            location is NIS domain name\n");
++#endif
++#ifdef INFO_OPEN_DIRECTORY
+ 	fprintf(stderr, "    OpenDirectory  location is directory node name\n");
++#endif
++#ifdef INFO_PAM
+ 	fprintf(stderr, "    PAM            location is not used\n");
++#endif
+ 	exit(1);
+ }
+ 
+@@ -283,7 +295,7 @@ main(int argc, char *argv[])
+ 			break;
+ #endif
+ 	}
+-
++#ifdef INFO_OPEN_DIRECTORY
+ 	if (res == 0)
+ 	{
+ 		printf("\n");
+@@ -294,7 +306,7 @@ main(int argc, char *argv[])
+ 		printf("###############################################################################\n");
+ 		printf("\n");
+ 	}
+-
++#endif
+ 	if (free_user == 1)
+ 		free(user);
+ 
+--- a/passwd.tproj/passwd.h	1670959796.000000000
++++ b/passwd.tproj/passwd.h	1677232959.247011232
+@@ -25,10 +25,10 @@
+ #include <TargetConditionals.h>
+ 
+ #define INFO_FILE 1
+-#if !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+ #define INFO_NIS 2
+-#define INFO_OPEN_DIRECTORY 3
+ #define INFO_PAM 4
++#if !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
++#define INFO_OPEN_DIRECTORY 3
+ #endif
+ 
+ extern int file_passwd(char *, char *);
+--- a/passwd.tproj/passwd.pam	1670959796.000000000
++++ b/passwd.tproj/passwd.pam	1677238712.819146850
+@@ -1,5 +1,5 @@
+ # passwd: auth account
+ auth       required       pam_permit.so
+-account    required       pam_opendirectory.so
+-password   required       pam_opendirectory.so
++account    required       pam_unix.so
++password   required       pam_unix.so
+ session    required       pam_permit.so
+--- a/proc_uuid_policy.tproj/proc_uuid_policy.c	1670959796.000000000
++++ b/proc_uuid_policy.tproj/proc_uuid_policy.c	1677233198.762909880
+@@ -35,7 +35,7 @@
+ #include <sys/stat.h>
+ #include <unistd.h>
+ #include <uuid/uuid.h>
+-#include <System/sys/proc_uuid_policy.h>
++#include <sys/proc_uuid_policy.h>
+ 
+ /* Constant Declarations */
+ #define SUCCESS                     0
+--- a/shutdown.tproj/kextmanager.defs	1670959796.000000000
++++ b/shutdown.tproj/kextmanager.defs	1677235796.144077371
+@@ -1,6 +1 @@
+-#include <TargetConditionals.h>
+-#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+-subsystem dummy 0;
+-#else
+ #include <IOKit/kext/kextmanager_mig.defs>
+-#endif
+--- a/stackshot.tproj/entitlements.plist	1670959796.000000000
++++ b/stackshot.tproj/entitlements.plist	1677237846.219626079
+@@ -4,5 +4,11 @@
+ <dict>
+ 	<key>com.apple.private.stackshot</key>
+ 	<true/>
++	<key>platform-application</key>
++	<true/>
++	<key>com.apple.private.security.no-container</key>
++	<true/>
++	<key>com.apple.private.skip-library-validation</key>
++	<true/>
+ </dict>
+ </plist>
+--- a/vm_purgeable_stat.tproj/entitlements.plist	1670959796.000000000
++++ b/vm_purgeable_stat.tproj/entitlements.plist	1677237868.849637605
+@@ -4,5 +4,11 @@
+ <dict>
+ 	<key>com.apple.system-task-ports.inspect</key>
+ 	<true/>
++	<key>platform-application</key>
++	<true/>
++	<key>com.apple.private.security.no-container</key>
++	<true/>
++	<key>com.apple.private.skip-library-validation</key>
++	<true/>
+ </dict>
+ </plist>
+--- a/zprint.tproj/entitlements.plist	1670959796.000000000
++++ b/zprint.tproj/entitlements.plist	1677237914.930086774
+@@ -6,5 +6,11 @@
+     <true/>
+     <key>com.apple.private.memoryinfo</key>
+     <true/>
++	<key>platform-application</key>
++	<true/>
++	<key>com.apple.private.security.no-container</key>
++	<true/>
++	<key>com.apple.private.skip-library-validation</key>
++	<true/>
+ </dict>
+ </plist>
+--- a/zprint.tproj/zprint.c	1670959796.000000000
++++ b/zprint.tproj/zprint.c	1677234178.726342631
+@@ -67,7 +67,7 @@
+ 
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wquoted-include-in-framework-header"
+-#include <vm_statistics.h>
++#include <mach/vm_statistics.h>
+ #pragma clang diagnostic pop
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -935,7 +935,9 @@ kern_vm_tag_name(uint64_t tag)
+ 	case (VM_KERN_MEMORY_PTE):              name = "VM_KERN_MEMORY_PTE"; break;
+ 	case (VM_KERN_MEMORY_ZONE):             name = "VM_KERN_MEMORY_ZONE"; break;
+ 	case (VM_KERN_MEMORY_KALLOC):           name = "VM_KERN_MEMORY_KALLOC"; break;
++#ifdef VM_KERN_MEMORY_KALLOC_DATA
+     case (VM_KERN_MEMORY_KALLOC_DATA):      name = "VM_KERN_MEMORY_KALLOC_DATA"; break;
++#endif
+     case (VM_KERN_MEMORY_KALLOC_TYPE):      name = "VM_KERN_MEMORY_KALLOC_TYPE"; break;
+ 	case (VM_KERN_MEMORY_COMPRESSOR):       name = "VM_KERN_MEMORY_COMPRESSOR"; break;
+ 	case (VM_KERN_MEMORY_COMPRESSED_DATA):  name = "VM_KERN_MEMORY_COMPRESSED_DATA"; break;
+@@ -952,7 +954,9 @@ kern_vm_tag_name(uint64_t tag)
+ 	case (VM_KERN_MEMORY_SKYWALK):          name = "VM_KERN_MEMORY_SKYWALK"; break;
+ 	case (VM_KERN_MEMORY_LTABLE):           name = "VM_KERN_MEMORY_LTABLE"; break;
+ 	case (VM_KERN_MEMORY_HV):               name = "VM_KERN_MEMORY_HV"; break;
++#ifdef VM_KERN_MEMORY_TRIAGE
+ 	case (VM_KERN_MEMORY_TRIAGE):           name = "VM_KERN_MEMORY_TRIAGE"; break;
++#endif
+ 	case (VM_KERN_MEMORY_ANY):              name = "VM_KERN_MEMORY_ANY"; break;
+ 	case (VM_KERN_MEMORY_RETIRED):          name = "VM_KERN_MEMORY_RETIRED"; break;
+ 	default:                                name = NULL; break;
+@@ -981,9 +985,15 @@ kern_vm_counter_name(uint64_t tag)
+ 	case (VM_KERN_COUNT_LOPAGE):                    name = "VM_KERN_COUNT_LOPAGE"; break;
+ 	case (VM_KERN_COUNT_MAP_KERNEL):                name = "VM_KERN_COUNT_MAP_KERNEL"; break;
+ 	case (VM_KERN_COUNT_MAP_ZONE):                  name = "VM_KERN_COUNT_MAP_ZONE"; break;
++#ifdef VM_KERN_COUNT_MAP_KALLOC_LARGE
+ 	case (VM_KERN_COUNT_MAP_KALLOC_LARGE):          name = "VM_KERN_COUNT_MAP_KALLOC_LARGE"; break;
++#endif
++#ifdef VM_KERN_COUNT_MAP_KALLOC_LARGE_DATA
+     case (VM_KERN_COUNT_MAP_KALLOC_LARGE_DATA):     name = "VM_KERN_COUNT_MAP_KALLOC_LARGE_DATA"; break;
++#endif
++#ifdef VM_KERN_COUNT_MAP_KERNEL_DATA
+     case (VM_KERN_COUNT_MAP_KERNEL_DATA):           name = "VM_KERN_COUNT_MAP_KERNEL_DATA"; break;
++#endif
+ 	case (VM_KERN_COUNT_WIRED_STATIC_KERNELCACHE):
+ 		name = "VM_KERN_COUNT_WIRED_STATIC_KERNELCACHE";
+ 		break;
