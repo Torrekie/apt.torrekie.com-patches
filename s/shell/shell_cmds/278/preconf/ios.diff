@@ -1,0 +1,98 @@
+--- a/locate/locate/locate.1	1667520687.000000000
++++ b/locate/locate/locate.1	1677667702.648018601
+@@ -188,12 +188,12 @@ path to the locate database if set and n
+ option was specified.
+ .El
+ .Sh FILES
+-.Bl -tag -width /System/Library/LaunchDaemons/com.apple.locate.plist -compact
++.Bl -tag -width /Library/LaunchDaemons/com.apple.locate.plist -compact
+ .It Pa /var/db/locate.database
+ locate database
+ .It Pa /usr/libexec/locate.updatedb
+ Script to update the locate database
+-.It Pa /System/Library/LaunchDaemons/com.apple.locate.plist
++.It Pa /Library/LaunchDaemons/com.apple.locate.plist
+ Job that starts the database rebuild
+ .El
+ .Sh SEE ALSO
+@@ -226,7 +226,7 @@ list files that have been removed from t
+ This is because
+ locate only reports files that are present in the database, which is
+ typically only regenerated once a week by the
+-.Pa /System/Library/LaunchDaemons/com.apple.locate.plist
++.Pa /Library/LaunchDaemons/com.apple.locate.plist
+ job.
+ Use
+ .Xr find 1
+--- a/locate/locate/locate.c	1667520687.000000000
++++ b/locate/locate/locate.c	1677667713.092212250
+@@ -218,8 +218,10 @@ main(int argc, char **argv)
+ #endif
+                 if (!f_mmap || f_stdin || f_statistic) 
+ 			search_fopen(path_fcodes, argv);
++#ifdef MMAP
+                 else 
+ 			search_mmap(path_fcodes, argv);
++#endif
+         }
+ 
+         if (f_silent)
+@@ -256,7 +258,7 @@ search_fopen(char *db, char **s)
+ 			    "WARNING: The locate database (%s) does not exist.\n"
+ 			    "To create the database, run the following command:\n"
+ 			    "\n"
+-			    "  sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.locate.plist\n"
++			    "  sudo launchctl load -w /Library/LaunchDaemons/com.apple.locate.plist\n"
+ 				"\n"
+ 				"Please be aware that the database can take some time to generate; once\n"
+ 				"the database has been created, this message will no longer appear.\n"
+--- a/locate/locate/locate.updatedb.8	1667520687.000000000
++++ b/locate/locate/locate.updatedb.8	1677667722.000958726
+@@ -44,7 +44,7 @@ The
+ utility updates the database used by
+ .Xr locate 1 .
+ It is typically run once a week by the
+-.Pa /System/Library/LaunchDaemons/com.apple.locate.plist
++.Pa /Library/LaunchDaemons/com.apple.locate.plist
+ job.
+ .Pp
+ The contents of the newly built database can be controlled by the
+--- a/su/su.pam	1667520687.000000000
++++ b/su/su.pam	1677667946.670426844
+@@ -1,7 +1,7 @@
+ # su: auth account session
+ auth       sufficient     pam_rootok.so 
+-auth       required       pam_opendirectory.so
++auth       required       pam_unix.so
+ account    required       pam_group.so no_warn group=admin,wheel ruser root_only fail_safe
+-account    required       pam_opendirectory.so no_check_shell
+-password   required       pam_opendirectory.so
++account    required       pam_unix.so no_check_shell
++password   required       pam_unix.so
+ session    required       pam_launchd.so
+--- a/uname/uname.c	1667520687.000000000
++++ b/uname/uname.c	1677665364.090565071
+@@ -359,8 +359,23 @@ NATIVE_SYSCTL2_GET(version, CTL_KERN, KE
+ 			*p = ' ';
+ } NATIVE_SET;
+ 
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++
++#if defined(__arm64__) && TARGET_OS_EMBEDDED
++// Torrekie: Currently we only see weird behavior on arm64
++static void
++native_platform(void)
++{
++	static char buf[1024] = "arm64";
++	char **varp = &(platform);
++{
++} NATIVE_SET;
++#else
+ NATIVE_SYSCTL2_GET(platform, CTL_HW, HW_MACHINE) {
+ } NATIVE_SET;
++#endif
++#endif
+ 
+ #ifdef __APPLE__
+ 
