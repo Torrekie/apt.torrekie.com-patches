@@ -1,0 +1,87 @@
+--- a/vis/vis.1	1667520696.000000000
++++ b/vis/vis.1	1678269547.367209248
+@@ -103,8 +103,8 @@ followed by the newline.
+ Encode all shell meta characters (implies
+ .Fl S ,
+ .Fl w ,
+-.Fl g )
+-.Pq Dv VIS_META
++.Fl g)
++.Pq Dv VIS_META, iOS 15+
+ .It Fl m
+ Encode using the MIME Quoted-Printable encoding from RFC 2045.
+ .Pq Dv VIS_MIMESTYLE
+@@ -114,7 +114,7 @@ Turn on the
+ flag which encodes using the
+ .Dq C
+ locale, removing any encoding dependencies caused by the current
+-locale settings specified in the environment.
++locale settings specified in the environment (iOS 15+).
+ .It Fl n
+ Turns off any encoding, except for the fact that backslashes are
+ still doubled and hidden newline sequences inserted if
+@@ -138,7 +138,7 @@ an octal number, \eddd.
+ .Pq Dv VIS_OCTAL
+ .It Fl S
+ Encode shell meta-characters that are non-white space or glob.
+-.Pq Dv VIS_SHELL
++.Pq Dv VIS_SHELL, iOS 15+
+ .It Fl s
+ Only characters considered unsafe to send to a terminal are encoded.
+ This flag allows backspace, bell, and carriage return in addition
+--- a/vis/vis.c	1667520696.000000000
++++ b/vis/vis.c	1677404974.613409444
+@@ -105,26 +105,32 @@ main(int argc, char *argv[])
+ 		case 'l':
+ 			markeol++;	/* mark end of line with \$ */
+ 			break;
++#ifdef VIS_META
+ 		case 'M':
+ 			eflags |= VIS_META;
+ 			break;
++#endif
+ 		case 'm':
+ 			eflags |= VIS_MIMESTYLE;
+ 			if (foldwidth == 80)
+ 				foldwidth = 76;
+ 			break;
++#ifdef VIS_NOLOCALE
+ 		case 'N':
+ 			eflags |= VIS_NOLOCALE;
+ 			break;
++#endif
+ 		case 'n':
+ 			none++;
+ 			break;
+ 		case 'o':
+ 			eflags |= VIS_OCTAL;
+ 			break;
++#ifdef VIS_SHELL
+ 		case 'S':
+ 			eflags |= VIS_SHELL;
+ 			break;
++#endif
+ 		case 's':
+ 			eflags |= VIS_SAFE;
+ 			break;
+@@ -137,7 +143,19 @@ main(int argc, char *argv[])
+ 		case '?':
+ 		default:
+ 			(void)fprintf(stderr, 
+-			    "Usage: %s [-bcfhlMmNnoSstw] [-e extra]" 
++			    "Usage: %s [-bcfhl"
++#ifdef VIS_META
++			    "M"
++#endif
++			    "m"
++#ifdef VIS_NOLOCALE
++			    "N"
++#endif
++			    "no"
++#ifdef VIS_SHELL
++			    "S"
++#endif
++			    "stw] [-e extra]" 
+ 			    " [-F foldwidth] [file ...]\n", getprogname());
+ 			return 1;
+ 		}
