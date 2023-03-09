@@ -1,0 +1,16 @@
+Author: 
+Description: 
+Index: coreutils-8.24/src/dd.c
+===================================================================
+--- coreutils-8.24.orig/src/dd.c
++++ coreutils-8.24/src/dd.c
+@@ -1525,6 +1525,9 @@ scanargs (int argc, char *const *argv)
+   if (multiple_bits_set (input_flags & (O_DIRECT | O_NOCACHE))
+       || multiple_bits_set (output_flags & (O_DIRECT | O_NOCACHE)))
+     die (EXIT_FAILURE, 0, _("cannot combine direct and nocache"));
++  if ((output_flags & O_APPEND) &&
++      ((conversions_mask & C_NOTRUNC) != C_NOTRUNC))
++    error (0, 0, _("you probably want conv=notrunc with oflag=append"));
+ 
+   if (input_flags & O_NOCACHE)
+     {

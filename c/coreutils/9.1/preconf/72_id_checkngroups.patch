@@ -1,0 +1,17 @@
+Author: 
+Description: 
+Index: coreutils-8.24/src/id.c
+===================================================================
+--- coreutils-8.24.orig/src/id.c
++++ coreutils-8.24/src/id.c
+@@ -416,6 +416,10 @@ print_full_info (const char *username)
+         ok &= false;
+         return;
+       }
++    else if (sysconf(_SC_NGROUPS_MAX) > 0 && n_groups > sysconf(_SC_NGROUPS_MAX))
++      {
++        fprintf (stderr, _("Warning: user %s is in more groups than system's configured maximum.\n"), (username != NULL)?username:"");
++      }
+ 
+     if (n_groups > 0)
+       fputs (_(" groups="), stdout);
