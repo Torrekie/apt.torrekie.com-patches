@@ -1,0 +1,1835 @@
+--- a/man/zh_CN/deviceinfo.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/deviceinfo.1	2023-03-09 16:29:04.000000000 +0800
+@@ -1,53 +1,75 @@
+ .\"-
+-.\"Copyright (c) 2020-2021 ProcursusTeam
+-.\"SPDX-License-Identifier: BSD-4-Clause
++.\" 版权所有 (c) 2020-2021 ProcursusTeam
++.\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 23, 2021
++.Dd 2021年8月23日
+ .Dt DEVICEINFO 1
+ .Os
+ .Sh 名称
+ .Nm deviceinfo
+-.Nd 印出各种装置资讯
++.Nd 输出设备信息
+ .Sh 语法
+-.Nm
+-.Oo Ar cfversion | ecid | locale | serial | uniqueid Oc
+-.Op 选项 ...
++.Bl -compact -tag
++.It
++.Sy deviceinfo
++cfversion
++.It
++.Sy deviceinfo
++ecid
++.Op Fl dh
++.It
++.Sy deviceinfo
++locale
++.Op Fl ilcvh
++.It
++.Sy deviceinfo
++serial
++.It
++.Sy deviceinfo
++uniqueid
++.El
+ .Sh 描述
+ .Nm
+-印出指定的装置资讯，然后退出。
++输出指定的设备信息，然后退出。
+ .Sh 子命令
+ .Bl -tag -width indent
+ .It Ar cfversion
+-印出装置CoreFoundation版本.
+-.It Ar ecid
+-印出装置的唯一晶片识别码 (ECID)。
++输出设备CoreFoundation版本.
++.It Ar ecid Op Fl dh
++输出设备的专有芯片ID (ECID)。
++.Bl -tag -width indent
++.It Fl d
++以十进制输出ECID
++.It Fl h
++以十六进制输出ECID
++未指定选项时，这是默认选项。
++.El
+ .It Ar locale Op Fl ilcvh
+-以要求的格式印出系统区域设置。
++以指定的格式输出系统区域设置。
+ 以下的选项是可用的：
+ .Bl -tag -width indent
+ .It Fl i , -identifier
+-印出区域设置识别吗，这是预设选项。
++输出区域设置标识符，这是默认选项。
+ .It Fl l , -language
+-印出语言编号。
++输出区域设置的语言代码。
+ .It Fl c , -country
+-印出区域设置的国家的编号。
++输出区域设置的国家与地区代码。
+ .It Fl v , -variant
+-印出区域设置变种。
++输出区域设置变种。
+ .It Fl h , -help
+-印出帮助。
++输出帮助。
+ .El
+ .It Ar serial
+-印出装置的串列码。
++输出设备的序列号。
+ .It Ar uniqueid
+-印出装置唯一编号 (UDID)。
++输出设备的唯一标识符 (UDID)。
+ .El
+ .Sh 历史
+-这个
+ .Nm
+-工具程式在2021年8月23日被
++工具在2021年8月23日由
+ .An sunchipnacho
+ 编写，取代uikittools-ng中的
+-.Nm cfversion ，
+-.Nm ecidecid ，
++.Nm cfversion，
++.Nm ecidecid，
+ 和
+-.Nm uiduid 。
++.Nm uiduid。
+--- a/man/zh_CN/ldrestart.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/ldrestart.1	2023-03-09 13:33:11.000000000 +0800
+@@ -1,25 +1,24 @@
+ .\"-
+-.\"Copyright (c) 2020-2021 ProcursusTeam
+-.\"SPDX-License-Identifier: BSD-4-Clause
++.\" 版权所有 (c) 2020-2021 ProcursusTeam
++.\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 19, 2021
++.Dd 2021年8月19日
+ .Dt LDRESTART 1
+ .Os
+ .Sh 名称
+ .Nm ldrestart
+-.Nd 重新启动现正执行的服务
++.Nd 重新启动正在执行的守护进程
+ .Sh 语法
+ .Nm
+ .Sh 描述
+ .Nm
+-当被使用时，会导致所有launchd服务被重新启动。
++当被使用时，会导致所有launchd值守进程被重新启动。
+ .Sh 另见
+ .Xr sbreload 1
+ .Sh 历史
+-这个
+ .Nm
+-工具程式在2016年6月22日出现，由
++工具最早在2016年6月22日出现，由
+ .An Jay Qo Saurik Qc Freeman 编写。
+ 之后
+ .An CoolStar
+-在2019年4月30号为Chimera越狱重新实现这工具程式。
++在2019年4月30号为Chimera越狱而被重新实现。
+--- a/man/zh_CN/lsrebuild.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/lsrebuild.1	2023-03-09 13:35:31.000000000 +0800
+@@ -1,21 +1,20 @@
+ .\"-
+-.\" Copyright (c) 2020-2021 ProcursusTeam
++.\" 版权所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 27, 2021
++.Dd 2021年10月27日
+ .Dt LSREBUILD 1
+ .Os
+ .Sh 名称
+ .Nm lsrebuild
+-.Nd 重构 LaunchServices.csstore 快取
++.Nd 重建 LaunchServices.csstore 缓存
+ .Sh 语法
+ .Nm
+ .Sh 描述
+ .Nm
+-会重构启动服务所使用的快取。
++会重建LaunchServices所使用的缓存数据。
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2011年10月27日在uikittools-ng中出现，由
++工具最早在2011年10月27日在uikittools-ng中出现，由
+ .An Daniel Levi
+ 编写。
+--- a/man/zh_CN/mgask.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/mgask.1	2023-03-09 13:39:48.000000000 +0800
+@@ -2,12 +2,12 @@
+ .\" 版权所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd November 4, 2021
++.Dd 2021年11月4日
+ .Dt MGASK 1
+ .Os
+ .Sh 名称
+ .Nm mgask
+-.Nd 向MobileGestalt问问题
++.Nd 向MobileGestalt提问
+ .Sh 语法
+ .Nm
+ .Op Fl jpq
+@@ -15,33 +15,34 @@
+ .Op Fl -pretty
+ .Ar 问题…
+ .Sh 描述
+-这个
+ .Nm
+-工具程式会向MobileGestalt查询指定问题的答案。
+-所有的阵列或字典会以JSON格式印出。
++工具会向MobileGestalt查询指定问题的答案。
++所有的数组或字典会以JSON格式输出。
+ .Sh 选项
+ .Bl -tag -width indent
++.It Fl c , -calculate
++对于每个指明的键值，计算混淆后的键值。
++这不会回传键值的数值，而只会回传混淆后的键值。
+ .It Fl -gssc
+-令
++使
+ .Nm
+-的行为和旧式的
++的行为和旧的
+ .Nm gssc
+ 一样。
+ .It Fl j , -json
+-把所有键值以JSON格式印出
++把所有键值以JSON格式输出
+ .It Fl p , -plist
+-以NeXTSTEP plist格式印出所有键值。
++以NeXTSTEP plist格式输出所有键值。
+ .It Fl -pretty
+-美丽地印出JSON。
+-视乎是否有指定
++输出格式化的JSON。
++取决于是否有指定
+ .Fl j
+-这只会影响阵列和字典，或整个输出。
++而只影响阵列和字典，或者是整个输出。
+ .It Fl q , -quiet
+-找不到键值时，不印出错误。
++找不到键值时，不输出错误。
+ .El
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2021年11月4日uikittools-ng在出现，由
++工具最早于2021年11月4日出现在uikittools-ng，由
+ .An Cameron Katri
+ 编写。
+--- a/man/zh_CN/sbdidlaunch.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/sbdidlaunch.1	2023-03-09 13:41:42.000000000 +0800
+@@ -1,25 +1,24 @@
+ .\"-
+-.\"Copyright (c) 2020-2021 ProcursusTeam
+-.\"SPDX-License-Identifier: BSD-4-Clause
++.\" 版权所有 (c) 2020-2021 ProcursusTeam
++.\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 19, 2021
++.Dd 2021年8月19日
+ .Dt SBDIDLAUNCH 1
+ .Os
+ .Sh 名称
+ .Nm sbdidlaunch
+-.Nd 等待主画面启动
++.Nd 等待主界面（SpringBoard）启动
+ .Sh 语法
+ .Nm
+ .Sh 描述
+ .Nm
+-.等待主画面启动，然后以0作为退出代码结束。
++.等待主界面启动，然后以0作为退出代码结束。
+ .Sh 另见
+ .Xr sbreload 1
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2010年6月10号出现，由
++工具最早在2010年6月10号出现，由
+ .An Jay Qo Saurik Qc Freeman 编写。
+ 之后
+ .An CoolStar
+-在2019年4月30号为Chimera越狱重新实现这一工具程式。
++在2019年4月30号为Chimera越狱而被重新实现。
+--- a/man/zh_CN/sbreload.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/sbreload.1	2023-03-09 13:43:19.000000000 +0800
+@@ -1,26 +1,25 @@
+ .\"-
+-.\"Copyright (c) 2020-2021 ProcursusTeam
+-.\"SPDX-License-Identifier: BSD-4-Clause
++.\" 版权所有 (c) 2020-2021 ProcursusTeam
++.\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 19, 2021
++.Dd 2021年8月19日
+ .Dt SBRELOAD 1
+ .Os
+ .Sh 名称
+ .Nm sbreload
+-.Nd 快速重启主画面
++.Nd 快速重启主界面（SpringBoard）
+ .Sh 语法
+ .Nm
+ .Sh 用途
+ .Nm
+-当被执行时会重新启动主画面，而且快过用其他方法，例如：
++当被执行时会重新启动主界面，而且速度快过其他方法，例如：
+ .Xr uicache 1 Fl r .
+ .Sh 另见
+ .Xr uicache 1
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2010年12月3号出现在uikittools中，由
++工具最早在2010年12月3号出现在uikittools中，由
+ .An Jay Qo Saurik Qc Freeman所编写。
+ 之后
+ .An CoolStar
+-在2019年4月30号为了Chimera越狱重新实现这一工具程式。
++在2019年4月30号为了Chimera越狱而被重新实现。
+--- a/man/zh_CN/uialert.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/uialert.1	2023-03-09 13:52:27.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版权所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 15, 2021
++.Dd 2021年10月15日
+ .Dt UIALERT 1
+ .Os
+ .Sh 名称
+@@ -11,21 +11,21 @@
+ .Sh 语法
+ .Nm
+ .Op Fl b Ar 正文
+-.Op Fl i Ar 提词
++.Op Fl i Ar 提示语
+ .Op Fl j
+ .Op Fl p Ar primary
+ .Op Fl -priority Ar 数字
+ .Op Fl s Ar second
+-.Op Fl -secure Ar 提词
++.Op Fl -secure Ar 提示语
+ .Op Fl t Ar third
+ .Op Fl -timeout Ar 数字
+ .Ar title
+ .Sh 描述
+-从命令列介面中来令在图形介面中显示一个原生对话框。
+-标题会被设定为
++通过命令行来使图形界面中显示一个原生对话框。
++标题会被指定为
+ .Ar title
+ 。
+-它会印出输入的文字和被选择的按钮的索引到
++它会输出输入的文字和被选择的按钮的索引值到
+ .Ar 标准输出
+ 。
+ .Ss 输出
+@@ -37,49 +37,49 @@
+ .It Sy 2
+ 第三个按钮被按下。
+ .It Sy 3
+-对话框超时或在没有回应的情况下被关闭。
++对话框超时或在没有得到回应的情况下被关闭。
+ .El
+ .Sh OPTIONS
+ .Bl -tag -width indent
+ .It Fl b , -body Ar 正文
+-把对话框的正文设定为
++把对话框的正文设置为
+ .Ar 正文 .
+-.It Fl i , -input Ar 提词
+-加了一个提词为
+-.Ar 提词
++.It Fl i , -input Ar 提示语
++加了一个提示语为
++.Ar 提示语
+ 的文字输入区。
+ 可以通过重复使用这个选项来加入多个输入区。
+ .It Fl j , -json
+-以JSON格式印出输出。
++以JSON格式输出。
+ .It Fl p , -primary Ar 第一
+-把预设按钮的文字设定为
++把预设按钮的文字设置为
+ .Ar 第一
+ 。
+-而不是预设文字
++而不是预设的
+ .Qq 好
+ 。
+ .It Fl -priority Ar 数字
+-把对话框的优先度设定为
++把对话框的优先级设置为
+ .Ar 数字 .
+ .Ar 数字
+ 一定要在0和3之间，且包含0和3。
+-如果不指名的话，那么优先度就是1。  .
++如果不制定的话，那么优先级就是1。  .
+ 这只会影响在
+ .Os macOS
+-上对话框的样貌。
++上对话框的样式。
+ .It Fl s , -secondary Ar 第二
+-把第二个按钮的文字设定为
++把第二个按钮的文字设置为
+ .Ar 第二
+ ，
+-如没有设定，这按钮将不会显示。
+-.It Fl -secure Ar 提词
++如果没有设置，这个按钮将不会显示。
++.It Fl -secure Ar 提示语
+ 这和
+ .Fl i
+ 一样，不过输入的文字会当作密码处理。
+ .It Fl t , -tertiary Ar 第三
+-把第三个按钮的文字设定为
++把第三个按钮的文字设置为
+ .Ar 第三 ,
+-如没有设定，这按钮将不会显示。
++如果没有设置，这个按钮将不会显示。
+ .It Fl -timeout Ar 数字
+ 在经过
+ .Ar 数字
+@@ -96,11 +96,10 @@
+ 。
+ .Dl "uialert -p \*q取消\*q -s \*q仍要继续\*q -b \*q继续？\*q \*q这个操作将会删除数据。\*q"
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2008年2月26日出现在uikittools中，由
++工具首先在2008年2月26日出现于uikittools中，由
+ .An Jay Qo Saurik Qc Freeman
+ 编写。
+ 之后
+ .An Cameron Katri
+-在2021年10月15日为uikittools-ng重新实现了这个工具程式，且用法完全不同。
++在2021年10月15日为uikittools-ng重新实现了这个工具，且用法完全不同。
+--- a/man/zh_CN/uicache.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/uicache.1	2023-03-09 15:56:46.000000000 +0800
+@@ -1,13 +1,13 @@
+ .\"-
+-.\" Copyright (c) 2020-2021 ProcursusTeam
++.\" 版权所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 19, 2021
++.Dd 2021年8月19日
+ .Dt UICACHE 1
+ .Os
+ .Sh 名称
+ .Nm uicache
+-.Nd 更新已注册的应用程式
++.Nd 更新已注册的应用程序
+ .Sh 语法
+ .Nm
+ .Op Fl afhlr
+@@ -15,18 +15,18 @@
+ .Op Fl p Ar 路径
+ .Op Fl u Ar 路径
+ .Sh 描述
+-更新iOS已注册的应用程式，然后可选地重新启动主画面。
++更新iOS应用程序的注册状态，然后可选地重新启动主界面（SpringBoard）。
+ .Sh 选项
+ .Bl -tag -width indent
+ .It Fl a , -all
+-迭代每一个系统应用程式， 并更新快取以反映情况。
++遍历每一个系统应用程序， 并更新缓存以及时映射更改。
+ 这和旧
+ .Nm
+-的行为一样。
++不添加任何选项的行为一样。
+ .It Fl f , -force
+ 当和
+ .Fl a
+-强制重新注册所有的应用程式，而不是改变。
++同时使用时强制重新注册所有的应用程序，而不仅仅是被更改的应用程序。
+ 这个选项会导致
+ .Fl a
+ 的速度明显减慢。
+@@ -35,48 +35,47 @@
+ 或
+ .Fl u ,
+ .Nm
+-一起使用时，会作用在App Store应用程式上。
++一起使用时，会作用在App Store应用程序上。
+ .It Fl h , -help
+-印出帮助文本。
+-.It Fl i , -info Ar 封装识别码
+-显示指定封装识别码的应用程式资讯。
++输出帮助文本。
++.It Fl i , -info Ar bundleid
++显示指定Bundle ID的应用程序信息。
+ .It Fl l , -list
+-列出每一个应用程式的路径和封装识别码。
++列出每一个应用程序的路径和Bundle ID。
+ .It Fl p , -path Ar 路径
+ 把位于指定
+ .Ar 路径
+-, 中的应用程式加入到快取中， 或更新快取。
++, 中的应用程序加入或更新到缓存中。
+ .It Fl r , -respring
+-在完成所有操作之后，重新启动主画面和backboard。
++在完成所有操作之后，重新启动SpringBoard和backboard。
+ .It Fl u , -unregister Ar 路径
+-从快取中移除位于
++从缓存中移除位于
+ .Ar 路径
+-, 的应用程式。
++, 的应用程序。
+ .It Fl v , -verbose
+ 当和
+ .Fl a
+-一起使用时，印出被注册或被取消注册的应用程式。
++一起使用时，输出被注册或被取消注册的应用程序。
+ .El
+ .Sh 例子
+-要重新整理所有应用程式，
++刷新所有应用程序，
+ .Dl "uicache -a"
+ .Pp
+-要注册Sileo，
++注册Sileo，
+ .Dl "uicache -p /Applications/Sileo.app"
+ .Pp
+-要显示关于「设定」应用程式的资讯，
++要显示关于"设置"应用程序的资讯，
+ .Dl "uicache -i com.apple.preferences"
+ .Sh 另见
+ .Xr sbreload 1 ,
+ .Xr uiopen 1
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2008年9月14日在uikittools中出现，由
++工具首先在2008年9月14日于uikittools中出现，由
+ .An Jay Qo Saurik Qc Freeman 编写。
+ 之后，它被
+ .An CoolStar
+-为Chimera越狱重新实现。
++为Chimera越狱而重新实现。
+ .Fl l
+ 和
+ .Fl i
+@@ -84,7 +83,7 @@
+ .Sh 警告
+ 这个
+ .Nm
+-工具程式不会工作在任何由App Store安装的应用程式，
+-这个工具程式有一个检查来防止改动但可以用
++工具对任何由App Store安装的应用程序生效，
++这个工具会进行检查来防止对其进行改动，但仍然可以用
+ .Fl f
+ 来强制执行。
+--- a/man/zh_CN/uidisplay.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/uidisplay.1	2023-03-09 15:12:25.000000000 +0800
+@@ -2,12 +2,12 @@
+ .\" 版权所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 29, 2021
++.Dd 2021年10月29日
+ .Dt UIDISPLAY 1
+ .Os
+ .Sh 名称
+ .Nm uidisplay
+-.Nd 取得或设定关于显示的资讯
++.Nd 获取或设置关于显示的信息
+ .Sh 语法
+ .Nm
+ .Op Fl a Ar 状态
+@@ -20,36 +20,36 @@
+ .Op Fl w Ar 状态
+ .Sh 描述
+ .Nm
+-会印出或设定您的装置的亮度，和其他选项例如自动亮度、暗黑模式、夜间模式、原色调和减少白点。
++会输出或设置您的设备的亮度以及其他选项，例如自动亮度、深色模式、夜览、原彩显示和降低白点值。
+ .Sh 选项
+ .Bl -tag -width indent
+ .It Fl a , -autobrightness Ar 状态
+ .Ar 状态
+ ，可以是 on, 1, off, 或 0.
+ .It Fl b , -brightness Oo Ar + Ns | Ns Ar - Oc Ns Ar 数字
+-把亮度设定为
++把亮度设置为
+ .Ar 数字 ,
+-其必须要是在0到100之间。
+-结尾
++其必须在0到100之间。
++结尾添加
+ .Dq %
+ 是有效的。
+ 如果使用了
+ .Ar +
+-号，那么亮度将会被增加
++号，那么亮度将被增加
+ .Ar 数字
+ 。 如果使用了
+ .Ar -
+-号，那么亮度将会被减少
++号，那么亮度将被减少
+ .Ar 数字
+ 。
+ .It Fl d , -darkmode Ar 状态
+-把暗黑模式的值凌驾到
++把深色模式的值覆盖到
+ .Ar 状态 ,
+ 这可以是on, 1, off, 或 0 。
+ .It Fl h
+-印出帮助文本
++输出帮助文本
+ .It Fl i , -info Ar 键值
+-印出亮度和目前自动亮度、暗黑模式、夜间模式、原色调和减少白度的设定 。
++输出亮度和目前自动亮度、深色模式、夜览、原彩显示和降低白点值的设置 。
+ 如果
+ .Ar 键值
+ 是
+@@ -58,50 +58,51 @@
+ .Ar darkmode ,
+ .Ar nightmode ,
+ .Ar truetone ,
++.Ar reducewhitepoint ,
++.Ar scale ,
++.Ar width ,
+ 或
+-.Ar reducewhitepoint
++.Ar height
+ 其中之一，
+-就只会印出
++就只会输出
+ .Ar 键值
+ 的数值。
+ .It Fl l , -lock
+-锁定装置。
++锁定设备。
+ .It Fl n , -nightshift Ar 状态
+-把夜间模式的数值凌驾为
++把夜间模式的数值覆盖为
+ .Ar 状态 ,
+ 这可以是on, 1, off, 或 0 。
+ .It Fl t , -truetone Ar 状态
+-把原色调的设定设定为
++把原色调的设置设置为
+ .Ar 状态 ,
+ 这可以是on, 1, off, 或 0。
+ .It Fl w , -reducewhitepoint Ar 状态
+-把减少白度设定设定为
++把减少白度设置设置为
+ .Ar 状态 ,
+ 这可以是 1, off, 或 0。
+ .El
+ .Sh 退出状态
+-这个
+ .Nm
+-工具程式会以以下其中一个状态推出：
++工具会以以下其中一个状态退出：
+ .Pp
+ .Bl -tag -width Ds -compact
+ .It 0
+-一切像预期般工作。
++一切如同预期般工作。
+ .It 1
+-有些事情出错了，会印出一则错误讯息。
++有些地方出错了，会输出一则错误信息。
+ .It 2
+-要求的动作不被支援。
++不支持正在请求的操作。
+ .Sh 例子
+ 把亮度增加百分之10：
+ .Dl "uidisplay -b +10"
+ .Pp
+-印出现在的亮度：
++输出现在的亮度：
+ .Dl "uidisplay -i brightness"
+ .Sh 另见
+ .Xr uiopen 1
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2021年10月29日在uikittools-ng中出现，由
++工具首先在2021年10月29日于uikittools-ng中出现，由
+ .An absidue
+ 编写。
+--- a/man/zh_CN/uinotify.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/uinotify.1	2023-03-09 15:18:10.000000000 +0800
+@@ -1,51 +1,50 @@
+ .\"-
+-.\"Copyright (c) 2020-2021 ProcursusTeam
+-.\"SPDX-License-Identifier: BSD-4-Clause
++.\" 版权所有 (c) 2020-2021 ProcursusTeam
++.\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 15, 2021
++.Dd 2021年10月15日
+ .Dt UINOTIFY 1
+ .Os
+ .Sh 名称
+ .Nm uinotify
+-.Nd 发送本地iOS通知
++.Nd 发送本地iOS推送通知
+ .Sh 语法
+ .Nm
+ .Op Fl b Ar 正文
+ .Op Fl d Ar 数字
+-.Op Fl i Ar 封装识别码
++.Op Fl i Ar Bundle ID
+ .Op Fl s Ar 副标题
+ .Ar title
+ .Sh 描述
+ 发出一个标题为
+ .Ar title
+ 的iOS通知。
+-预设会以「设定」 应用程式的身份发信通知。
+-用来作为通知的来源应用程式必须要有发送通知的权限。
++默认会以"设置"应用程序的身份发送通知。
++用来作为通知来源的应用程序必须要有发送通知的权限。
+ .Sh 选项
+ .Bl -tag -width indent
+ .It Fl b , -body Ar body
+-把通知的正文设定为
++把通知的正文设置为
+ .Ar body
+ 。
+ .It Fl d , -delay Ar 数字
+ 在
+ .Ar 数字
+-秒后发信通知。
+-.It Fl i , -identifier Ar 封装识别码
+-以封装识别码为
+-.Ar 封装识别码
+-的应用程式的名义来发生通知。
+-通知预设会以com.apple.Preferences封装识别码来发送。
++秒后发送通知。
++.It Fl i , -identifier Ar Bundle ID
++以Bundle ID为
++.Ar Bundle ID
++的应用程序的身份来发送通知。
++通知会以com.apple.Preferences作为默认Bundle ID来发送。
+ .It Fl s , -subtitle Ar 副标题
+-把副标题的文字设定为
++把副标题的文字设置为
+ .Ar 副标题
+-，如没有设定，副标题就不会显示。
++，如没有指定，副标题就不会显示。
+ .El
+ .Sh 另见
+ .Xr uialert 1
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2021年10月17号出现在uikittools-ng中，由
++工具首先在2021年10月17号出现于uikittools-ng中，由
+ .An Cameron Katri
+ 编写。
+--- a/man/zh_CN/uiopen.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/uiopen.1	2023-03-09 15:24:47.000000000 +0800
+@@ -1,58 +1,57 @@
+ .\"-
+-.\"Copyright (c) 2020-2021 ProcursusTeam
+-.\"SPDX-License-Identifier: BSD-4-Clause
++.\" 版权所有 (c) 2020-2021 ProcursusTeam
++.\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 19, 2021
++.Dd 2021年8月19日
+ .Dt UIOPEN 1
+ .Os
+ .Sh 名称
+ .Nm uiopen
+-.Nd 开启应用程式或网址
++.Nd 开启应用程序或URL
+ .Sh 语法
+ .Nm
+ .Op Fl h
+ .Op Fl a Ar 名称
+-.Op Fl b Ar 识别码
++.Op Fl b Ar ID
+ .Op Fl p Ar 路径
+ .Op Fl u Ar 网址
+ .Sh 描述
+ .Nm
+-会开启指定的应用程式或网页，并在主画面上显示。
++会开启指定的应用程序或网页，并在主画面上显示。
+ .Sh OPTIONS
+ .Bl -tag -width indent
+ .It Fl a , -app Ar 名称
+-寻找这个名称的应用程式， 并把它打开。
++寻找这个名称的应用程序，并把它打开。
+ .It Fl b , -bundleid Ar 识别码
+-开启指定封装识别码的应用程式。
++开启指定Bundle ID的应用程序。
+ .It Fl h , -help
+ 印出帮助文本。
+ .It Fl p , -path Ar 路径
+-开启位于指定.app封装的应用程式。
+-.It Fl u , -网址 Ar 网址
+-在浏览器中使用http或根据网址中的协定来开启网址。
++开启位于指定.app路径的应用程序。
++.It Fl u , -url Ar URL
++在浏览器中使用http或根据URL中的协议来开启URL。
+ .El
+ .Sh 例子
+-要在预设浏览器中开启github.com
++要在默认浏览器中开启github.com
+ .Dl "uiopen -u https://github.com"
+ .Pp
+-要开启「设定」应用程式
++要开启"设置"应用程序
+ .Dl "uiopen -a Settings"
+ .Pp
+-要通过使用路径来开启Sileo, /Applications/Sileo.app
++要通过路径来开启Sileo, /Applications/Sileo.app
+ .Dl "uiopen -p /Application/Sileo.app"
+ .Sh 另见
+ .Xr uicache 1
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2008年8月18号在uikittools中出现，由
++工具首先在2008年8月18号于uikittools中出现，由
+ .An Jay Qo Saurik Qc Freeman .
+ 之后
+ .An CoolStar
+-在2019年4月30号由CoolStar为Chimera越狱重新实现。
++在2019年4月30号由CoolStar为Chimera越狱而重新实现。
+ 选项
+-.Fl u ，
+-.Fl h ，
++.Fl u，
++.Fl h，
+ 和
+ .Fl b
+ 在2020年12月25日由absidue加到uiopen中。
+@@ -61,5 +60,5 @@
+ 和
+ .Fl p
+ 在2020年12月25日由absidue加入。
+-.Nm Ar 网址
++.Nm Ar url
+ 在2021年8月19日被标记为过时。
+--- a/man/zh_CN/uisave.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/uisave.1	2023-03-09 15:27:26.000000000 +0800
+@@ -1,25 +1,24 @@
+ .\"-
+-.\"Copyright (c) 2020-2021 ProcursusTeam
+-.\"SPDX-License-Identifier: BSD-4-Clause
++.\" 版权所有 (c) 2020-2021 ProcursusTeam
++.\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 18, 2021
++.Dd 2021年10月18日
+ .Dt UISAVE 1
+ .Os
+ .Sh 名称
+ .Nm uisave
+-.Nd 把影像和影片储存到相机胶卷中
++.Nd 把图像与视频储存到相机胶卷中
+ .Sh 语法
+ .Nm
+-.Ar 档案......
++.Ar
+ .Sh 描述
+-把单个或更多个的影像和影片储存到相机胶卷中。
++把单个或多个的图像与视频储存到相机胶卷中。
+ 不会移除元数据。
+-能够储存的影像和影片格式受iOS版本而异。
++能够储存的图片与视频格式因iOS版本而异。
+ .Sh 另见
+ .Xr uishoot 1
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2021年10月18日在uikittools-ng中出现，由
++工具首先在2021年10月18日于uikittools-ng中出现，由
+ .An absidue
+ 编写。
+--- a/man/zh_CN/uishoot.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_CN/uishoot.1	2023-03-09 15:30:11.000000000 +0800
+@@ -1,49 +1,47 @@
+ .\"-
+-.\" Copyright (c) 2020-2021 ProcursusTeam
++.\" 版权所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 18, 2021
++.Dd 2021年10月18日
+ .Dt UISHOOT 1
+ .Os
+ .Sh 名称
+ .Nm uishoot
+-.Nd 截取萤幕截图
++.Nd 屏幕截图
+ .Sh 语法
+ .Nm
+ .Op Fl cp
+ .Op Fl d Ar 数字
+ .Op Fl f Op Ar jpeg | png | heic
+-.Op Fl o Ar 档案
++.Op Fl o Ar 文件
+ .Sh 描述
+-这个
+ .Nm
+-工具程式会截取一张萤幕截图。
++工具会截取一张屏幕截图。
+ .Sh 选项
+ .Bl -tag -width indent
+ .It Fl c , -clipboard
+-把萤幕截图储存到剪贴板中。
++将屏幕截图储存到剪贴板中。
+ .It Fl d , -delay Ar 数字
+-在截取萤幕截图前，等待
++在截取屏幕截图前，等待
+ .Ar 数字
+ 秒的时间。
+ .It Fl p , -photos
+-把萤幕截图加到相机胶卷中。
++将屏幕截图添加到相机胶卷中。
+ .It Fl f , -format Op Ar jpeg | png | heic
+-输出并以指定的格式储存萤幕截图。
++输出并以指定的格式储存屏幕截图。
+ .It Fl o , -output Ar 档案
+-把萤幕截图储存到
+-.Ar 档案 。
++把屏幕截图储存到
++.Ar 文件 。
+ 如果
+ .Fl f
+-没有设定那么格式将会以
+-.Ar 档案
+-的副档名来推断出来。
++没有指定，那么最终格式将会以
++.Ar 文件
++的扩展名来推断出来。
+ .El
+ .Sh 历史
+-这个
+ .Nm
+-工具程式首先在2008年8月29日出现，由
++工具首先在2008年8月29日出现，由
+ .An Jay Qo Saurik Qc Freeman 编写。
+ 之后，
+ .An sunchipnacho
+-在2021年10月18日为uikitoools-ng重新实现了这一工具程式，并加入更多的选项。
++在2021年10月18日为uikitoools-ng重新实现了这一工具，并加入更多的选项。
+--- a/man/zh_TW/deviceinfo.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/deviceinfo.1	2023-03-09 13:22:46.000000000 +0800
+@@ -1,17 +1,33 @@
+-,.\"-
++.\"-
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd ugust 23, 2021
++.Dd 2021年8月23日
+ .Dt DEVICEINFO 1
+ .Os
+ .Sh 名稱
+ .Nm deviceinfo
+ .Nd 印出各種裝置資訊
+ .Sh 語法
+-.Nm
+-,.Oo Ar cfversion | ecid | locale | serial | uniqueid Oc
+-.Op 選項 ...
++.Bl -compact -tag
++.It
++.Sy deviceinfo
++cfversion
++.It
++.Sy deviceinfo
++ecid
++.Op Fl dh
++.It
++.Sy deviceinfo
++locale
++.Op Fl ilcvh
++.It
++.Sy deviceinfo
++serial
++.It
++.Sy deviceinfo
++uniqueid
++.El
+ .Sh 描述
+ .Nm
+ 印出指定的裝置資訊，然後退出。
+@@ -44,7 +60,7 @@
+ .Sh 歷史
+ 這個
+ .Nm
+-工具程式在2021年8月23日被
++工具程式在2021年8月23日由
+ .An sunchipnacho
+ 編寫，取代uikittools-ng中的
+ .Nm cfversion ，
+--- a/man/zh_TW/ldrestart.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/ldrestart.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 19, 2021
++.Dd 2021年8月19日
+ .Dt LDRESTART 1
+ .Os
+ .Sh 名稱
+--- a/man/zh_TW/lsrebuild.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/lsrebuild.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 27, 2021
++.Dd 2021年10月27日
+ .Dt LSREBUILD 1
+ .Os
+ .Sh 名稱
+--- a/man/zh_TW/mgask.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/mgask.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd November 4, 2021
++.Dd 2021年11月4日
+ .Dt MGASK 1
+ .Os
+ .Sh 名稱
+@@ -21,6 +21,9 @@
+ 所有的陣列或字典會以JSON格式印出。
+ .Sh 選項
+ .Bl -tag -width indent
++.It Fl c , -calculate
++對於每個指明的鍵值，計算混淆後的鍵值。
++這不會回傳鍵值的數值，而只會回傳混淆後的鍵值。
+ .It Fl -gssc
+ 令
+ .Nm
+@@ -32,7 +35,7 @@
+ .It Fl p , -plist
+ 以NeXTSTEP plist格式印出所有鍵值。
+ .It Fl -pretty
+-美麗地印出JSON。
++印出經格式化的JSON。
+ 視乎是否有指定
+ .Fl j
+ 這只會影響陣列和字典，或整個輸出。
+--- a/man/zh_TW/sbdidlaunch.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/sbdidlaunch.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 19, 2021
++.Dd 2021年8月19日
+ .Dt SBDIDLAUNCH 1
+ .Os
+ .Sh 名稱
+--- a/man/zh_TW/sbreload.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/sbreload.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 19, 2021
++.Dd 2021年8月19日
+ .Dt SBRELOAD 1
+ .Os
+ .Sh 名稱
+--- a/man/zh_TW/uialert.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/uialert.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 15, 2021
++.Dd 2021年10月15日
+ .Dt UIALERT 1
+ .Os
+ .Sh 名稱
+--- a/man/zh_TW/uicache.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/uicache.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 19, 2021
++.Dd 2021年8月19日
+ .Dt UICACHE 1
+ .Os
+ .Sh 名稱
+--- a/man/zh_TW/uidisplay.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/uidisplay.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 29, 2021
++.Dd 2021年10月29日
+ .Dt UIDISPLAY 1
+ .Os
+ .Sh 名稱
+--- a/man/zh_TW/uinotify.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/uinotify.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 15, 2021
++.Dd 2021年10月15日
+ .Dt UINOTIFY 1
+ .Os
+ .Sh 名稱
+--- a/man/zh_TW/uiopen.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/uiopen.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd August 19, 2021
++.Dd 2021年8月19日
+ .Dt UIOPEN 1
+ .Os
+ .Sh 名稱
+--- a/man/zh_TW/uisave.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/uisave.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 18, 2021
++.Dd 2021年10月18日
+ .Dt UISAVE 1
+ .Os
+ .Sh 名稱
+--- a/man/zh_TW/uishoot.1	2023-01-29 01:57:58.000000000 +0800
++++ b/man/zh_TW/uishoot.1	2023-03-09 13:22:46.000000000 +0800
+@@ -2,7 +2,7 @@
+ .\" 版權所有 (c) 2020-2021 ProcursusTeam
+ .\" SPDX-License-Identifier: BSD-4-Clause
+ .\"
+-.Dd October 18, 2021
++.Dd 2021年10月18日
+ .Dt UISHOOT 1
+ .Os
+ .Sh 名稱
+--- a/mgask.m	2023-01-29 01:57:58.000000000 +0800
++++ b/mgask.m	2023-03-09 18:17:18.000000000 +0800
+@@ -53,11 +53,22 @@ NSString *obfuscateKey(const char *key)
+ }
+ 
+ int main(int argc, char **argv) {
++	// Torrekie: u0 compat: unsetenv
++	if (getenv("OS_ACTIVITY_DT_MODE")) {
++		// This would make a bunch of random NSLogs print
++		unsetenv("OS_ACTIVITY_DT_MODE");
++		execvp(argv[0], argv);
++		exit(1);
++	}
+ #if NLS
+ 	setlocale(LC_ALL, "");
+ 	bindtextdomain(PACKAGE, LOCALEDIR);
+ 	textdomain(PACKAGE);
+ #endif
++	// Torrekie: u0 compat: determine later behaviors
++	NSString *filePath = @"/.installed_unc0ver";
++	NSFileManager *fileManager = [NSFileManager defaultManager];
++	BOOL fileExists = [fileManager fileExistsAtPath:filePath];
+ 
+ 	bool json, plist, prettyprint, quiet, gssc, calculate;
+ 	json = plist = prettyprint = quiet = gssc = calculate = false;
+@@ -68,9 +79,10 @@ int main(int argc, char **argv) {
+ 			gssc = plist = quiet = true;
+ 			json = false;
+ 		}
+-		fprintf(stderr, "The gssc utility is deprecated.\nPlease use mgask(1)\n");
++		// Torrekie: u0 compat: silence deprecation warning
++		if (!fileExists) fprintf(stderr, "The gssc utility is deprecated.\nPlease use mgask(1)\n");
+ 	}
+-
++    
+ 	enum options {
+ 		OPT_GSSC = CHAR_MAX + 1,
+ 		OPT_PRETTY
+@@ -165,7 +177,11 @@ int main(int argc, char **argv) {
+ 											forKey:[NSString stringWithUTF8String:array[i]]];
+ 			} else if (typeid == CFBooleanGetTypeID()) {
+ 				if (!json && !plist)
+-					answer = CFBooleanGetValue(mganswer) ? _("true") : _("false");
++					// Torrekie: u0 compat: use decimal answer
++					if (fileExists)
++						answer = CFBooleanGetValue(mganswer) ? "1" : "0";
++					else
++						answer = CFBooleanGetValue(mganswer) ? _("true") : _("false");
+ 				else
+ 					[outDict setObject:CFBooleanGetValue(mganswer) ? @YES : @NO
+ 											forKey:[NSString stringWithUTF8String:array[i]]];
+--- a/po/zh_CN.po	2023-01-29 01:57:58.000000000 +0800
++++ b/po/zh_CN.po	2023-03-09 18:21:38.000000000 +0800
+@@ -20,12 +20,12 @@ msgstr ""
+ #: ../ldrestart.c:78 ../sbreload-launchd.c:78
+ #, c-format
+ msgid "Error stopping service:  %d - %s\n"
+-msgstr "停止服务时出错：  %d - %s\n"
++msgstr "停止服务时出错：%d - %s\n"
+ 
+ #: ../ldrestart.c:112 ../sbreload-launchd.c:106
+ #, c-format
+ msgid "Error: no services returned for list\n"
+-msgstr "错误： 返回列表无服务\n"
++msgstr "错误：返回列表无服务\n"
+ 
+ #: ../ldrestart.c:120 ../sbreload-launchd.c:114
+ #, c-format
+@@ -35,50 +35,52 @@ msgstr "错误：返回服务列表不�
+ #: ../ldrestart.c:138 ../sbreload-launchd.c:136
+ #, c-format
+ msgid "Error:  %d - %s\n"
+-msgstr "错误:  %d - %s\n"
++msgstr "错误：%d - %s\n"
+ 
+ #: ../ldrestart.c:141 ../sbreload-launchd.c:139
+ #, c-format
+ msgid "Unable to get launchd: %d\n"
+-msgstr "无法获得launchd： %d\n"
++msgstr "无法获得launchd：%d\n"
+ 
+ #: ../lsrebuild.m:60
+ msgid "missing necessary method"
+-msgstr ""
++msgstr "缺失必要方法"
+ 
+ #: ../lsrebuild.m:66
+ msgid "RebuildApplicationDatabases failed"
+-msgstr "重建应用程序数据库失败"
++msgstr "重建应用程序数据库(RebuildApplicationDatabases)失败"
+ 
+ #: ../mgask.m:33 ../uialert.m:201 ../uidisplay.m:404
+ #, c-format
+ msgid "JSON formating failed: %s"
+-msgstr "JSON格式化失败： %s"
++msgstr "JSON格式化失败：%s"
+ 
+ #: ../mgask.m:98
+ #, c-format
+ msgid "Usage: %s [-jpq] [--gssc] [--pretty] question ...\n"
+-msgstr "用法： %s [-jpq] [--gssc] [--pretty] 问题 ...\n"
++msgstr "用法：%s [-jpq] [--gssc] [--pretty] 问题 ...\n"
+ 
+ #: ../mgask.m:122
+ #, c-format
+ msgid "Cannot find key %s\n"
+-msgstr "找不到密钥%s\n"
++msgstr "找不到键值 %s\n"
+ 
+ #: ../mgask.m:136 ../uicache.m:253
+ msgid "true"
+-msgstr "真值"
++msgstr "是"
+ 
+ #: ../mgask.m:136 ../uicache.m:253
+ msgid "false"
+-msgstr "错误"
++msgstr "否"
+ 
+ #: ../uialert.m:22
+ #, c-format
+ msgid "Usage: %s [-b body] [-i prompt] [-j] [-p primary] [--priority number] [-s second] [--secure prompt] [-t third] [--timeout number] title\n"
+ "Copyright (C) 2021, Procursus Team. All Rights Reserved.\n\n"
+ "Display an alert\n\n"
+-msgstr ""
++msgstr "用法：%s [-b body] [-i prompt] [-j] [-p primary] [--priority number] [-s second] [--secure prompt] [-t third] [--timeout number] 标题\n"
++"版权所有 (C) 2021, Procursus Team. 保留所有权利。\n\n"
++"显示一个弹窗\n\n"
+ 
+ #: ../uialert.m:26
+ #, c-format
+@@ -92,16 +94,16 @@ msgid "  -b, --body <text>        Text f
+ "  -j, --json               Print the output in JSON\n"
+ "      --secure <text>      Show text field as secure\n"
+ "      --timeout <num>      Number of seconds to wait before exiting\n\n"
+-msgstr "  -b, --body <text>        文本用于警报正文\n"
+-"  -p, --prior <text>     默认按钮文本而不是“确定”\n"
+-"      --priority 0-3 警报优先级\n"
+-"                           这将更改 macOS\n"
+-"  - s, --secondary <text>   第二个按钮文本\n"
+-"  - t, --terirator <text>    第三按钮文本\n"
+-"  -i --input <text>       要求输入文本\n"
+-"  -j, --json 在 JSON 中打印输出\n"
+-"      --secure <text>      显示文本字段为安全\n"
+-"      --timeout <num>      等待秒数才退出\n\n"
++msgstr "  -b, --body <text>        文本用于通知正文\n"
++"  -p, --prior <text>       默认按钮文本，取代默认的“好”\n"
++"      --priority 0-3       通知优先级\n"
++"                           这将更改 macOS 显示图标的方式\n"
++"  -s, --secondary <text>   第二个按钮文本\n"
++"  -t, --terirator <text>   第三个按钮文本\n"
++"  -i, --input <text>       要求输入文本\n"
++"  -j, --json               输出为JSON\n"
++"      --secure <text>      安全输入框（密码框）\n"
++"      --timeout <num>      等待秒数后退出\n\n"
+ 
+ #: ../uialert.m:37
+ #, c-format
+@@ -111,95 +113,102 @@ msgid "Output:\n"
+ "  2 - tertiary button\n"
+ "  3 - timeout/cancel\n\n"
+ "Contact the Procursus Team for support.\n"
+-msgstr ""
++msgstr "输出：\n"
++"  0 - 第一按钮\n"
++"  1 - 第二按钮\n"
++"  2 - 第三按钮\n"
++"  3 - 超时或取消\n\n"
++"联系Procursus Team以寻求支持。\n"
+ 
+ #: ../uialert.m:124
+ #, c-format
+ msgid "the priority is %s: %s"
+-msgstr ""
++msgstr "优先级 %s：%s"
+ 
+ #: ../uialert.m:142 ../uishoot.m:70
+ #, c-format
+ msgid "the timeout is %s: %s"
+-msgstr ""
++msgstr "超时 %s：%s"
+ 
+ #: ../uicache.m:104
+ #, c-format
+ msgid "Usage: %s [-afhlr] [-i id] [-p path] [-u path]\n"
+ "Modified work Copyright (C) 2021, Procursus Team. All Rights Reserved.\n\n"
+-msgstr ""
++msgstr "用法：%s [-afhlr] [-i id] [-p path] [-u path]\n"
++"更改部分版权所有 (C) 2021, Procursus Team. 保留所有权利。\n\n"
+ 
+ #: ../uicache.m:106
+ #, c-format
+ msgid "Update iOS registered applications and optionally restart SpringBoard\n\n"
+-msgstr ""
++msgstr "更新iOS的应用程序注册状态，然后可选地重新启动主界面（SpringBoard）\n\n"
+ 
+ #: ../uicache.m:108
+ #, c-format
+ msgid "  -a, --all                Update all system and internal applications\n"
+-msgstr ""
++msgstr "  -a, --all                遍历更新每一个系统应用程序\n"
+ 
+ #: ../uicache.m:109
+ #, c-format
+ msgid "  -f, --force              Force -a to reregister all Applications\n"
+ "                              and modify App Store apps\n"
+-msgstr ""
++msgstr "  -f, --force              与 -a 同时使用来强制重新注册所有的应用程序\n"
++"                              并且作用于App Store应用程序\n"
+ 
+ #: ../uicache.m:111
+ #, c-format
+ msgid "  -p, --path <path>        Update application bundle at the specified path\n"
+-msgstr ""
++msgstr "  -p, --path <path>        更新指定路径的应用程序本体\n"
+ 
+ #: ../uicache.m:112
+ #, c-format
+ msgid "  -u, --unregister <path>  Unregister application bundle at the specified path\n"
+-msgstr ""
++msgstr "  -u, --unregister <path>  取消指定路径的应用程序本体的注册状态\n"
+ 
+ #: ../uicache.m:113
+ #, c-format
+ msgid "  -r, --respring           Restart SpringBoard and backboardd after\n"
+ "                              updating applications\n"
+-msgstr ""
++msgstr "  -r, --respring           在完成操作之后，重新启动SpringBoard和backboard。\n"
+ 
+ #: ../uicache.m:115
+ #, c-format
+ msgid "  -l, --list               List the bundle ids of installed apps\n"
+-msgstr ""
++msgstr "  -l, --list               列出每一个应用程序的Bundle ID。\n"
+ 
+ #: ../uicache.m:116
+ #, c-format
+ msgid "  -i, --info <bundleid>    Give information about given bundle id\n"
+-msgstr ""
++msgstr "  -i, --info <bundleid>    显示指定Bundle ID的应用程序信息。\n"
+ 
+ #: ../uicache.m:117
+ #, c-format
+ msgid "  -h, --help               Give this help list.\n\n"
+-msgstr ""
++msgstr "  -h, --help               输出帮助文本。\n\n"
+ 
+ #: ../uicache.m:119 ../uisave.m:27
+ #, c-format
+ msgid "Contact the Procursus Team for support.\n"
+-msgstr ""
++msgstr "联系Procursus Team以寻求支持。\n"
+ 
+ #: ../uicache.m:141
+ #, c-format
+ msgid "uicache does not support App Store apps.\n"
+-msgstr ""
++msgstr "uicache不支持App Store应用程序。\n"
+ 
+ #: ../uicache.m:143
+ #, c-format
+ msgid "Continuing anyway...\n"
+-msgstr ""
++msgstr "仍然继续…\n"
+ 
+ #: ../uicache.m:213
+ #, c-format
+ msgid "Error: Unable to register %s\n"
+-msgstr ""
++msgstr "错误：无法注册%s\n"
+ 
+ #: ../uicache.m:217
+ #, c-format
+ msgid "Error: Unable to unregister %s\n"
+-msgstr ""
++msgstr "错误：无法取消注册%s\n"
+ 
+ #: ../uicache.m:237
+ #, c-format
+@@ -212,160 +221,169 @@ msgid "Name: %s\n"
+ "TeamID: %s\n"
+ "Type: %s\n"
+ "Removeable: %s\n"
+-msgstr ""
++msgstr "名称：%s\n"
++"BundleID: %s\n"
++"可执行程序名称：%s\n"
++"路径：%s\n"
++"数据路径：%s\n"
++"发行者名称：%s\n"
++"TeamID: %s\n"
++"类型：%s\n"
++"可移除：%s\n"
+ 
+ #: ../uicache.m:256 ../uicache.m:264
+ #, c-format
+ msgid "URLScheme: %s\n"
+-msgstr ""
++msgstr "URLScheme: %s\n"
+ 
+ #: ../uicache.m:269
+ #, c-format
+ msgid "%s is an invalid bundle id\n"
+-msgstr ""
++msgstr "“%s”是无效的Bundle ID\n"
+ 
+ #: ../uicache.m:373
+ #, c-format
+ msgid "registering %s\n"
+-msgstr ""
++msgstr "正在注册%s\n"
+ 
+ #: ../uicache.m:378
+ #, c-format
+ msgid "unregistering %s\n"
+-msgstr ""
++msgstr "正在取消注册%s\n"
+ 
+ #: ../uidisplay.m:106
+ #, c-format
+ msgid "Usage: %s [-a state] [-b [+|-]num] [-d state] [-h] [-i [key]] [-j] [-l] [-n state] [-t state] [-w state]\n"
+-msgstr ""
++msgstr "用法：%s [-a state] [-b [+|-]num] [-d state] [-h] [-i [key]] [-j] [-l] [-n state] [-t state] [-w state]\n"
+ 
+ #: ../uidisplay.m:117
+ #, c-format
+ msgid "Invalid %s value: '%s', permitted values: 0, off, 1, on\n"
+-msgstr ""
++msgstr "无效的 %s 数值：'%s'，可用数值：0，off，1，on\n"
+ 
+ #: ../uidisplay.m:125
+ msgid "on"
+-msgstr ""
++msgstr "开"
+ 
+ #: ../uidisplay.m:127
+ msgid "off"
+-msgstr ""
++msgstr "关"
+ 
+ #: ../uidisplay.m:129
+ msgid "not supported"
+-msgstr ""
++msgstr "不支持"
+ 
+ #: ../uidisplay.m:181
+ msgid "Dark Mode is only supported on iOS 13 and higher.\n"
+-msgstr ""
++msgstr "“深色模式”仅支持iOS 13或更高版本。\n"
+ 
+ #: ../uidisplay.m:214
+ msgid "Night Shift is not supported on this device.\n"
+-msgstr ""
++msgstr "“夜览”在此设备不可用。\n"
+ 
+ #: ../uidisplay.m:250
+ msgid "True Tone is not supported on this device.\n"
+-msgstr ""
++msgstr "“原彩显示”在此设备不可用。\n"
+ 
+ #: ../uidisplay.m:291
+ #, c-format
+ msgid "Invalid brightness value: %s\n"
+-msgstr ""
++msgstr "无效亮度值：%s\n"
+ 
+ #: ../uidisplay.m:305
+ #, c-format
+ msgid "Invalid brightness value: %s, %s\n"
+-msgstr ""
++msgstr "无效亮度值：%s，%s\n"
+ 
+ #: ../uidisplay.m:328
+ #, c-format
+ msgid "Unable to increase the brightness by %d, %.6g.\n"
+-msgstr ""
++msgstr "无法增加%d的亮度值，%.6g\n"
+ 
+ #: ../uidisplay.m:340
+ #, c-format
+ msgid "Unable to decrease the brightness by %d, %.6g.\n"
+-msgstr ""
++msgstr "无法减少%d的亮度值，%.6g\n"
+ 
+ #: ../uidisplay.m:471
+ #, c-format
+ msgid "Unknown information type: %s\n"
+-msgstr ""
++msgstr "未知信息类型：%s\n"
+ 
+ #: ../uidisplay.m:525 ../uidisplay.m:592 ../uidisplay.m:641 ../uidisplay.m:675
+ msgid "Auto-Brightness"
+-msgstr ""
++msgstr "自动亮度调节"
+ 
+ #: ../uidisplay.m:531 ../uidisplay.m:596 ../uidisplay.m:644 ../uidisplay.m:674
+ msgid "Brightness"
+-msgstr ""
++msgstr "亮度"
+ 
+ #: ../uidisplay.m:537 ../uidisplay.m:600 ../uidisplay.m:647 ../uidisplay.m:676
+ msgid "Dark Mode"
+-msgstr ""
++msgstr "深色模式"
+ 
+ #: ../uidisplay.m:543 ../uidisplay.m:604 ../uidisplay.m:650 ../uidisplay.m:677
+ msgid "Night Shift"
+-msgstr ""
++msgstr "夜览"
+ 
+ #: ../uidisplay.m:549 ../uidisplay.m:608 ../uidisplay.m:653 ../uidisplay.m:678
+ msgid "True Tone"
+-msgstr ""
++msgstr "原彩显示"
+ 
+ #: ../uidisplay.m:555 ../uidisplay.m:612 ../uidisplay.m:656 ../uidisplay.m:679
+ msgid "Reduce White Point"
+-msgstr ""
++msgstr "降低白点值"
+ 
+ #: ../uidisplay.m:561 ../uidisplay.m:616 ../uidisplay.m:659 ../uidisplay.m:680
+ msgid "Height"
+-msgstr ""
++msgstr "高度"
+ 
+ #: ../uidisplay.m:567 ../uidisplay.m:620 ../uidisplay.m:662 ../uidisplay.m:681
+ msgid "Width"
+-msgstr ""
++msgstr "宽度"
+ 
+ #: ../uidisplay.m:573 ../uidisplay.m:624 ../uidisplay.m:665 ../uidisplay.m:682
+ msgid "Physical Height"
+-msgstr ""
++msgstr "物理高度"
+ 
+ #: ../uidisplay.m:579 ../uidisplay.m:628 ../uidisplay.m:668 ../uidisplay.m:683
+ msgid "Physical Width"
+-msgstr ""
++msgstr "物理宽度"
+ 
+ #: ../uidisplay.m:585 ../uidisplay.m:632 ../uidisplay.m:671 ../uidisplay.m:684
+ msgid "Scale"
+-msgstr ""
++msgstr "尺寸"
+ 
+ #: ../uidisplay.m:689
+ msgid "-j/--json may only be used in combination with -i/--info"
+-msgstr ""
++msgstr "-j/--json 仅可与 -i/--info 同时使用"
+ 
+ #: ../uinotify.m:23
+ #, c-format
+ msgid "Usage: %s [-b body] [-d number] [-i bundleid] [-s subtitle] title\n"
+-msgstr ""
++msgstr "用法：%s [-b body] [-d number] [-i bundleid] [-s subtitle] 标题\n"
+ 
+ #: ../uinotify.m:34
+ #, c-format
+ msgid "Authorization request failed: %s\n"
+-msgstr ""
++msgstr "验证请求失败：%s\n"
+ 
+ #: ../uinotify.m:49
+ #, c-format
+ msgid "Failed to add notification: %s\n"
+-msgstr ""
++msgstr "未能添加推送通知：%s\n"
+ 
+ #: ../uinotify.m:93
+ #, c-format
+ msgid "the delay is %s: %s"
+-msgstr ""
++msgstr "延迟为%s：%s"
+ 
+ #: ../uiopen.m:37
+ #, c-format
+ msgid "Usage: %s [OPTION...]\n"
+ "Open URLs and open iOS applications by bundle ID\n\n"
+-msgstr ""
++msgstr "用法：%s [OPTION...]\n"
++"打开URL或者通过Bundle ID打开iOS应用程序\n\n"
+ 
+ #: ../uiopen.m:40
+ #, c-format
+@@ -376,100 +394,105 @@ msgid "  --url <URL>     Open the specif
+ "                     specified name.\n"
+ "  --path <path>   Open application at the specified path\n"
+ "  --help          Give this help list.\n"
+-msgstr ""
++msgstr "  --url <URL>     打开指定的URL\n"
++"  --bundleid <id> 打开指定Bundle ID的应用程序\n"
++"  --app <app>     打开指定名称的应用程序\n"
++"  --path <path>   打开指定路径的应用程序\n"
++"  --help          输出这条帮助\n"
+ 
+ #: ../uiopen.m:149
+ #, c-format
+ msgid "No application called: %s\n"
+-msgstr ""
++msgstr "没有应用程序：%s\n"
+ 
+ #: ../uiopen.m:178
+ #, c-format
+ msgid "No application at path: %s\n"
+-msgstr ""
++msgstr "指定路径没有应用程序：%s\n"
+ 
+ #: ../uiopen.m:182 ../uisave.m:62
+ #, c-format
+ msgid "Invalid path: %s\n"
+-msgstr ""
++msgstr "无效路径：%s\n"
+ 
+ #: ../uisave.m:19
+ #, c-format
+ msgid "Usage: %s file ...\n"
+ "Copyright (C) 2021, Procursus Team. All Rights Reserved.\n\n"
+-msgstr ""
++msgstr "版权所有 (C) 2021, Procursus Team. 保留所有权利。\n\n"
+ 
+ #: ../uisave.m:22
+ #, c-format
+ msgid "Save images and videos to the camera roll\n\n"
+-msgstr ""
++msgstr "保存图片与视频到相机胶卷\n"
+ 
+ #: ../uisave.m:24
+ #, c-format
+ msgid "Image and video formats that can be saved to the camera roll\n"
+ "vary between iOS versions\n\n"
+-msgstr ""
++msgstr "能够储存的图片与视频格式因iOS版本而异。\n\n"
+ 
+ #: ../uisave.m:57
+ #, c-format
+ msgid "No file at path: %s\n"
+-msgstr ""
++msgstr "文件不存在：%s\n"
+ 
+ #: ../uisave.m:73
+ #, c-format
+ msgid "No supported image or video format at: %s\n"
+-msgstr ""
++msgstr "不支持的多媒体格式：%s\n"
+ 
+ #: ../uisave.m:91
+ #, c-format
+ msgid "Failed to save image at %s with error: %s\n"
+-msgstr ""
++msgstr "未能保存位于 %s 的图片：%s\n"
+ 
+ #: ../uisave.m:108
+ #, c-format
+ msgid "Failed to save video at %s with error: %s\n"
+-msgstr ""
++msgstr "未能保存位于 %s 的视频：%s\n"
+ 
+ #: ../uishoot.m:25
+ #, c-format
+ msgid "Usage: %s [-cp] [-d number] [-f [png | jpeg | heic]] [-o file]\n"
+-msgstr ""
++msgstr "用法；%s [-cp] [-d number] [-f [png | jpeg | heic]] [-o file]\n"
+ 
+ #: ../uishoot.m:77
+ #, c-format
+ msgid "Invalid image format '%s'\n"
+-msgstr ""
++msgstr "无效的图片格式 '%s'\n"
+ 
+ #: ../uishoot.m:96
+ #, c-format
+ msgid "Could not capture screenshot!\n"
+-msgstr ""
++msgstr "未能进行屏幕截图！\n"
+ 
+ #: ../uishoot.m:123
+ #, c-format
+ msgid "Could not get image data to write to file!\n"
+-msgstr ""
++msgstr "未能将图像数据写入文件！\n"
+ 
+ #: ../uishoot.m:132
+ #, c-format
+ msgid "Could not write image to %s: %s\n"
+-msgstr ""
++msgstr "未能写入图片%s：%s\n"
+ 
+ #: ../uishoot.m:148
+ #, c-format
+ msgid "Could not save screenshot to Photos: %s\n"
+-msgstr ""
++msgstr "未能保存屏幕截图到相机胶卷：%s\n"
+ 
+ #: ../info/deviceinfo.c:39 ../info/deviceinfo.c:72
+ #, c-format
+ msgid "Usage: %s [cfversion | ecid | locale | serial | uniqueid] [arguments ...]\n"
+-msgstr "用法： %s [cfversion | ecid | 语言 | 序列号| UUID] [参数...]\n"
++msgstr "用法： %s [cfversion | ecid | locale | serial | uniqueid] [参数...]\n"
+ 
+ #: ../info/locale.m:16
+ #, c-format
+ msgid "Usage: deviceinfo locale [-ilcvh]\n"
+ "Print the current locale\n\n"
+-msgstr ""
++msgstr "用法：deviceinfo locale [-ilcvh]\n"
++"输出当前区域设置\n\n"
+ 
+ #: ../info/locale.m:19
+ #, c-format
+@@ -479,5 +502,9 @@ msgid "-h --help      Give this help lis
+ " -c --country    Print the country code\n"
+ " -v --variant    Print the variant code\n\n"
+ "If multiple output formats are specified the last will be used\n"
+-msgstr ""
+-
++msgstr "-h --help      输出这条帮助\n"
++ " -i --identifier 输出区域设置标识符（默认）\n"
++" -l --language   输出区域设置语言代码\n"
++" -c --country    输出区域设置国家与地区代码\n"
++" -v --variant    输出区域设置变种代码\n\n"
++"当多个输出格式被指定时，将使用最后指定的格式\n"
+--- a/sbreload.m	2023-01-29 01:57:58.000000000 +0800
++++ b/sbreload.m	2023-03-09 18:02:18.000000000 +0800
+@@ -36,6 +36,7 @@ typedef NS_OPTIONS(NSUInteger, SBSRelaun
+ @interface PBSSystemService : NSObject
+ + (instancetype)sharedInstance;
+ - (void)relaunch;
++- (void)relaunchBackboardd;
+ @end
+ 
+ pid_t springboardPID;
+@@ -61,7 +62,8 @@ int main() {
+ 		dlopen("/System/Library/PrivateFrameworks/FrontBoardServices.framework/FrontBoardServices", RTLD_NOW);
+ #if TARGET_OS_TV
+ 		dlopen("/System/Library/PrivateFrameworks/PineBoardServices.framework/PineBoardServices", RTLD_NOW);
+-		[[objc_getClass("PBSSystemService") sharedInstance] relaunch];
++		// Torrekie: u0 compat: use relaunchBackboardd
++		[[objc_getClass("PBSSystemService") sharedInstance] relaunchBackboardd];
+ #else
+ 		dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_NOW);
+ 
+--- a/uicache.m	2023-01-29 01:57:58.000000000 +0800
++++ b/uicache.m	2023-03-09 18:28:51.000000000 +0800
+@@ -120,6 +120,15 @@ Modified work Copyright (C) 2021, Procur
+ }
+ // clang-format on
+ 
++static inline char *getAppPath(NSString *path)
++{
++	path = [path stringByResolvingSymlinksInPath];
++	if (![path hasPrefix:@"/Applications/"]) {
++		return nil;
++	}
++	return (char *)[[NSString pathWithComponents:[[path pathComponents] subarrayWithRange:NSMakeRange(0, 3)]] UTF8String];
++}
++
+ void registerPath(char *path, int unregister) {
+ 	dlopen(
+ 		"/System/Library/PrivateFrameworks/MobileContainerManager.framework/"
+@@ -128,7 +137,25 @@ void registerPath(char *path, int unregi
+ 
+ 	LSApplicationWorkspace *workspace =
+ 		[LSApplicationWorkspace defaultWorkspace];
+-	if (unregister && ![[NSFileManager defaultManager] fileExistsAtPath:[NSString stringWithUTF8String:path]]) {
++
++	// Torrekie: u0 compat: allow Bundle ID for option -u
++	NSURL *url = nil;
++	if (unregister && ![[NSString stringWithUTF8String:path] hasPrefix:@"/"]) {
++		// Maybe it's an app_id
++		LSApplicationProxy *app = [LSApplicationProxy applicationProxyForIdentifier:[NSString stringWithUTF8String:path]];
++		url = [app bundleURL];
++		if (url) {
++			// No verbose implemented yet
++			//if (verbose) fprintf(stderr, "Resolved bundle ID %s to path %s\n", path.UTF8String, [url fileSystemRepresentation]);
++			path = (char *)[[url path] fileSystemRepresentation];
++		}
++	} else {
++		path = getAppPath([NSString stringWithUTF8String:path]);
++		if (path) {
++			url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
++		}
++	}
++	if (unregister && ![[NSFileManager defaultManager] fileExistsAtPath:[NSString stringWithUTF8String:path]]) {
+ 		LSApplicationProxy *app = [LSApplicationProxy
+ 			applicationProxyForIdentifier:[NSString stringWithUTF8String:path]];
+ 		if (app.bundleURL)
+@@ -154,7 +181,7 @@ void registerPath(char *path, int unregi
+ 			[rawPath stringByAppendingPathComponent:@"Info.plist"]];
+ 	NSString *bundleID = [infoPlist objectForKey:@"CFBundleIdentifier"];
+ 
+-	NSURL *url = [NSURL fileURLWithPath:rawPath];
++	url = [NSURL fileURLWithPath:rawPath];
+ 
+ 	if (bundleID && !unregister) {
+ 		MCMContainer *appContainer = [objc_getClass("MCMAppDataContainer")
+@@ -460,8 +487,11 @@ int main(int argc, char *argv[]) {
+ 					break;
+ 			}
+ 		}
++		// Torrekie: u0 compat: default behavior
++		// Maybe need to detect parent process to determine?
++		if (argc == 1) all = 1;
+ 
+-		if (showhelp || argc == 1) {
++		if (showhelp) {
+ 			help();
+ 			return 0;
+ 		}
