@@ -1,0 +1,11 @@
+--- a/configure.ac
++++ b/configure.ac
+@@ -118,7 +118,7 @@
+ )
+ 
+ if test "$gl_gcc_warnings" = yes; then
+-  gl_WARN_ADD([-Werror], [WERROR_CFLAGS])
++  gl_WARN_ADD([], [WERROR_CFLAGS])
+   AC_SUBST([WERROR_CFLAGS])
+ 
+   ew=

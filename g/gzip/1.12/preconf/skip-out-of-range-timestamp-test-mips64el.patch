@@ -1,0 +1,18 @@
+--- a/tests/timestamp
++++ b/tests/timestamp
+@@ -23,6 +23,7 @@
+ export TZ
+ oldIFS=$IFS
+
++if [ "$DEB_HOST_ARCH" != "mips64el" ]; then
+ # On platforms supporting timestamps outside gzip's range,
+ # test that gzip warns when converting them to gzip format.
+ for time_date in \
+@@ -44,6 +45,7 @@
+   fi
+   rm -f in.gz in
+ done
++fi
+
+ # Test that timestamps in range for gzip do not generate warnings.
+ for time_date in \

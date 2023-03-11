@@ -1,0 +1,140 @@
+--- a/gzip.1	1648925086.000000000
++++ b/gzip.1	1678525882.026789610
+@@ -161,7 +161,9 @@ standard input and writes the uncompress
+ will uncompress files that have the correct magic number whether
+ they have a
+ .B "\&.gz"
+-suffix or not.
++suffix or not. In POSIX mode zcat will append
++.B ".Z"
++to all filenames that do not have that suffix.
+ .PP
+ The
+ .B gzip
+--- a/gzip.c	1648690373.000000000
++++ b/gzip.c	1678526204.840600514
+@@ -63,6 +63,13 @@ static char const *const license_msg[] =
+ #include <stddef.h>
+ #include <sys/stat.h>
+ #include <errno.h>
++#ifdef __APPLE__
++#include <sys/attr.h>
++#include <copyfile.h>
++#include <get_compat.h>
++#else
++#define COMPAT_MODE(a,b) (1)
++#endif /* __APPLE__ */
+ 
+ #include "tailor.h"
+ #include "gzip.h"
+@@ -192,6 +199,7 @@ static int part_nb;          /* number o
+ static char *env;            /* contents of GZIP env variable */
+ static char const *z_suffix; /* default suffix (can be set with --suffix) */
+ static size_t z_len;         /* strlen(z_suffix) */
++static int zcat;             /* Are we invoked as zcat */
+ 
+ /* The original timestamp (modification time).  If the original is
+    unknown, TIME_STAMP.tv_nsec is negative.  If the original is
+@@ -459,6 +467,8 @@ int main (int argc, char **argv)
+     else if (strequ (program_name + 1, "cat")     /* zcat, pcat, gcat */
+              || strequ (program_name, "gzcat"))   /* gzcat */
+         decompress = to_stdout = 1;
++
++    zcat = strequ (program_name, "zcat");
+ #endif
+ 
+     z_suffix = Z_SUFFIX;
+@@ -865,12 +875,35 @@ atdir_set (char const *dir, ptrdiff_t di
+   return dfd;
+ }
+ 
++#ifdef __APPLE__
++static void
++clear_type_and_creator(char *path)
++{
++	struct attrlist alist;
++	struct {
++		u_int32_t length;
++		char info[32];
++	} abuf;
++
++	memset(&alist, 0, sizeof(alist));
++	alist.bitmapcount = ATTR_BIT_MAP_COUNT;
++	alist.commonattr = ATTR_CMN_FNDRINFO;
++
++	if (!getattrlist(path, &alist, &abuf, sizeof(abuf), 0) && abuf.length == sizeof(abuf)) {
++		memset(abuf.info, 0, 8);
++		setattrlist(path, &alist, abuf.info, sizeof(abuf.info), 0);
++	}
++}
++#endif /* __APPLE__ */
++
+ /* ========================================================================
+  * Compress or decompress the given file
+  */
+ local void treat_file(iname)
+     char *iname;
+ {
++    char newname[MAX_PATH_LEN];
++
+     /* Accept "-" as synonym for stdin */
+     if (strequ(iname, "-")) {
+         int cflag = to_stdout;
+@@ -879,6 +912,21 @@ local void treat_file(iname)
+         return;
+     }
+ 
++    /* POSIX zcat must add .Z to all files if not present when decompressing */
++    if (zcat && COMPAT_MODE("bin/zcat", "Unix2003")) {
++	char *suffix;
++	if ((suffix = strrchr(iname, '.')) == NULL ||
++	    strcmp(suffix, ".Z")) {
++	    if (strlen(iname) > sizeof(newname) - 3) {
++		WARN((stderr, "%s: %s too long to append .Z\n", program_name, iname));
++	    } else {
++		strcpy(newname, iname);
++		strcat(newname, ".Z");
++		iname = newname;
++	    }
++	}
++    }
++
+     /* Check if the input file is present, set ifname and istat: */
+     ifd = open_input_file (iname, &istat);
+     if (ifd < 0)
+@@ -1019,6 +1067,10 @@ local void treat_file(iname)
+ 
+     if (!to_stdout)
+       {
++#ifdef __APPLE__
++	copyfile(ifname, ofname, 0, COPYFILE_ACL | COPYFILE_XATTR);
++	clear_type_and_creator(ofname);
++#endif
+         copy_stat (&istat);
+ 
+         if ((synchronous
+--- a/unlzw.c	1641063870.000000000
++++ b/unlzw.c	1678525854.813549640
+@@ -165,6 +165,11 @@ int unlzw(in, out)
+         }
+         insize = e;
+         posbits = 0;
++	if (e >= 0) {
++		insize = e;
++	} else {
++		posbits = abs(e)<<3;
++	}
+ 
+         if (insize < INBUF_EXTRA) {
+             rsize = read_buffer (in, (char *) inbuf + insize, INBUFSIZ);
+--- a/zless.1	1645414302.000000000
++++ b/zless.1	1678526236.369536185
+@@ -11,8 +11,6 @@ command
+ is a filter which allows examination of compressed or plain text files
+ one screenful at a time on a soft-copy terminal.  It is the equivalent of
+ setting the environment variable LESSOPEN to '|gzip -cdfq -- %s',
+-and the environment variable LESSMETACHARS to
+-\&'<space><tab><newline>;*?"()<>[|&^`#\e$%=~',
+ and then running
+ .BR less .
+ However, enough people seem to think that having the
