@@ -1,0 +1,69 @@
+--- a/Makefile	1630248428.000000000
++++ b/Makefile	1680346715.790373235
+@@ -17,10 +17,6 @@ ifeq (,$(findstring -arch ,$(CFLAGS)))
+ CFLAGS += -arch $(TARGET_ARCH)
+ endif
+ 
+-ifeq (,$(findstring -isysroot ,$(CFLAGS)))
+-CFLAGS += -isysroot $(TARGET_SYSROOT)
+-endif
+-
+ CFLAGS += -m$(TARGET_PLATFORM)-version-min=$(TARGET_VERSION)
+ 
+ ifeq ($(DEBUG),1)
+--- a/src/Firmware.m	1630248428.000000000
++++ b/src/Firmware.m	1680349817.349683427
+@@ -117,9 +117,10 @@
+                            "Essential: yes\n"
+                            "Status: install ok installed\n"
+                            "Priority: required\n"
+-                           "Section: System\n"
++                           "Section: Virtual_Packages\n"
+                            "Installed-Size: 0\n"
+                            "Architecture: all\n"
++                           "Multi-Arch: foreign\n"
+                            "Version: %%@\n"
+                            "Description: %%@\n"
+                            "Maintainer: %@\n"
+@@ -142,9 +143,10 @@
+                            "Essential: yes\n"
+                            "Status: install ok installed\n"
+                            "Priority: required\n"
+-                           "Section: System\n"
++                           "Section: Virtual_Packages\n"
+                            "Installed-Size: 0\n"
+                            "Architecture: all\n"
++                           "Multi-Arch: foreign\n"
+                            "Version: %%@\n"
+                            "Description: %%@\n"
+                            "Maintainer: %@\n"
+@@ -208,7 +210,7 @@
+         NSString *prefixedCp = [NSString stringWithFormat:@"/%@/bin/cp", PREFIX];
+         char *cpPath = (char *) [[prefixedCp stringByReplacingOccurrencesOfString:@"//" withString:@"/"] UTF8String];
+ 
+-        char *argv[] = {
++        char *argv_gnu[] = {
+             cpPath,
+             "-afT",
+             (char *)[userPath UTF8String],
+@@ -216,7 +218,19 @@
+             NULL
+         };
+ 
+-        posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
++        char *argv_bsd[] = {
++            cpPath,
++            "-Rp", // No '-T' for BSD cp
++            (char *)[userPath UTF8String],
++            (char *)[varMobileDirectory UTF8String],
++            NULL
++        };
++
++        // Torrekie: check if we are using GNU coreutils
++        char *args[] = { cpPath, "--version", NULL };
++        bool gnu_cp = (posix_spawn(&pid, cpPath, NULL, NULL, args, NULL) == 0);
++
++        posix_spawn(&pid, gnu_cp ? argv_gnu[0] : argv_bsd[0], NULL, NULL, gnu_cp ? argv_gnu : argv_bsd, environ);
+         waitpid(pid, NULL, 0);
+     }
+ 

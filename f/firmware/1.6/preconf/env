@@ -1,0 +1,3 @@
+FIRMWARE_MAINTAINER="Torrekie <me@torrekie.dev>"
+PREFIX=/
+CFLAGS="-DDISABLE_UNAME_WRAP"

@@ -1,0 +1,57 @@
+--- a/install/xinstall.c	1667520608.000000000
++++ b/install/xinstall.c	1678953116.923071662
+@@ -742,6 +742,29 @@
+ }
+ 
+ /*
++ * find_xcrun --
++ *	Torrekie addition: use xcrun(1) only if exists
++ */
++char *
++find_xcrun() {
++	char *path_env = getenv("PATH");
++	if (path_env == NULL)
++		return NULL;
++
++	char *p = strtok(path_env, ":");
++	while (p != NULL) {
++		char *xcrun_path = (char *) malloc(sizeof(char) * (strlen(p) + strlen("/xcrun") + 1));
++		snprintf(xcrun_path, strlen(p) + strlen("/xcrun") + 1, "%s/xcrun", p);
++		if (access(xcrun_path, X_OK) == 0)
++			return xcrun_path;
++
++		free(xcrun_path);
++		p = strtok(NULL, ":");
++	}
++	return NULL;
++}
++
++/*
+  * strip --
+  *	use strip(1) to strip the target file
+  */
+@@ -752,18 +775,19 @@
+ 	pid_t pid;
+ 	int error;
+ 	extern char** environ;
+-	char *const argv[] = { "xcrun", "strip", "-", to_name, NULL };
+-	
+-	if (0 == (error = posix_spawnp(&pid, "xcrun", NULL, NULL, argv, environ))) {
++	char *xcrun_path = find_xcrun();
++	char *const argv[] = { "strip", "-", to_name, NULL };
++	char *const argv_xcrun[] = { "xcrun", "strip", "-", to_name, NULL };
++	if (0 == (error = posix_spawnp(&pid, xcrun_path ? "xcrun" : "strip", NULL, NULL, xcrun_path ? argv_xcrun : argv, environ))) {
+ 		int status = 0;
+ 		pid_t child = waitpid(pid, &status, 0);
+ 		if ((child == -1) || status) {
+ 			unlink(to_name);
+-			errx(EX_SOFTWARE, "child process failed: xcrun strip - %s", to_name);
++			errx(EX_SOFTWARE, "child process failed: %s - %s", xcrun_path ? "xcrun strip" : "strip", to_name);
+ 		}
+ 	} else {
+ 		errno = error;
+-		err(EX_OSERR, "xcrun strip - %s", to_name);
++		err(EX_OSERR, "%s - %s", xcrun_path ? "xcrun strip" : "strip", to_name);
+ 	}
+ }
+ 
