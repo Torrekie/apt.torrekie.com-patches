@@ -1,0 +1,2216 @@
+--- a/FIXES	1640544298.000000000
++++ b/FIXES	1680781610.117406846
+@@ -156,6 +156,136 @@ February 28, 2020:
+ February 19, 2020:
+ 	More small cleanups from Christos Zoulas.
+ 
++February 16, 2021:
++	Multibyte support to conform to POSIX / UNIX03 awk{69,639,640} in a UTF-8
++	locale. awk passed these tests in a Latin-1 ISO8859-1 locale because
++	non-english characters are still just 1 byte long.
++
++	This is NOT a complete multibyte implementation for awk, there are still
++	many edge cases that will need to be addressed.
++
++	Errors:
++		MULTIBYTE ERRORS:
++		Passing invalid multibyte data to awk (via script or input) while
++		awk is running in a multibyte locale (the default on Darwin) will
++		result in a FATAL multibyte conversion error. If awk'ing binary data,
++		a user will need to set LC_ALL=C prior to their awk invocation.
++			message: "towc: multibyte conversion failure on: '<bad>'"
++
++	Awk now performs char -> wchar_t conversions at select points in its
++	evaluation of regular expressions. This is not a complete fix, and will
++	require some additional work to advance the char -> wchar_t barrier. It is
++	important to note that awk has several routines that leverage the
++	assumption that a character's maximum value is 255 which makes this
++	conversion trickier than just replacing char with wchar_t.
++
++	Notable changes:
++		relex():
++			- The CHAR token's value is now a wchar_t instead of a char stored
++			  as an int
++			- Character class processing has been pulled out into cclex()
++			- The CCL and NCCL tokens will store a wchar_t string
++			- HAT and DOLLAR tokens have been added to the yacc file to
++			  disambiguate the special values that were previously stored in a
++			  CHAR token. DOLLAR is not yet implemented and is a future task.
++		cgoto():
++			- Now accepts a wchar_t and a separate control argument. See notes.
++		match()/pmatch()/nematch()/etc:
++			- Now operate on their input strings by nibbling wchar_t's out and
++			  passing them to cgoto(). The second most notable change here is
++			  bypassing of f->gototab when a wchar_t's value exceeds UCHAR_MAX.
++
++	cgoto() has changed signature to disambiguate an input character c from the
++	special control character HAT (now CGOTO_HAT) which is called by makeinit()
++	to generate the initial state. Now that c is a wchar_t, the value of c can
++	be any integer, including the special value of HAT which would cause c to
++	be ambiguous.
++
++	There are duplicate implementations of quoted and hexstr for char & wchar_t
++	because relex() uses quoted to handle '\\' and prestr is not (yet) a 
++	wchar_t string.
++
++	Character classes are now stored as wchar_t strings instead of char strings
++
++	FUTURE:
++	Character class evaluation should be performed in member() to prevent the
++	possibility of absurdly huge character classes (resulting in memory
++	exhaustion) such as [A-<emoji>].
++
++	An overall improvement to cclenter would be to store the character class
++	definition as a struct of literal characters, ranges, and collating
++	elements instead of just a string. cclenter() could then evaluate all
++	quoted chars (\...) ahead of time, and optimize the character class;
++	perhaps by contracting sequences of characters that are matched literally
++	([abcdewxyz]) down to a list of ranges ([a-ew-z]). The ability to store
++	collating elements ([=a=]) would also greatly simplify the job of
++	cclex() which currently performs a limited check for equivalent characters
++	by walking wchar_t 0-255, which is marginally sufficient.
++
++August 16, 2020:
++	Additional fixes for DJGPP. Thanks to Eli Zaretskii for
++	the testing.
++
++August 7, 2020:
++	Merge PR #93, which adds casts to (void*) for debug prints
++	using the %p format specifier. Thanks to GitHub user YongHaoWu
++	("Chris") for the fixes.
++
++August 4, 2020:
++	In run.c, use non-restartable multibyte routines to attain
++	portability to DJGPP. Should fix Issue 92. Thanks to Albert Wik
++	for the report and to Todd Miller for the suggested fix.
++
++July 30, 2020:
++	Merge PRs 88-91 which fix small bugs. Thanks to Todd Miller and
++	Tim van der Molen for the fixes.
++
++	In order to make life easier, we move exclusively to bison
++	as the parser generator.
++
++July 2, 2020:
++	Merge PRs 85 and 86 which fix regressions. Thanks to
++	Tim van der Molen for the fixes.
++
++June 25, 2020:
++	Merge PRs 82 and 84. The latter fixes issue #83. Thanks to
++	Todd Miller and awkfan77.
++
++June 12, 2020:
++	Clear errno before calling errcheck to avoid any spurious errors
++	left over from previous calls that may have set it. Thanks to
++	Todd Miller for the fix, from PR #80.
++
++	Fix Issue #78 by allowing \r to follow floating point numbers in
++	lib.c:is_number. Thanks to GitHub user ajcarr for the report
++	and to Arnold Robbins for the fix.
++
++June 5, 2020:
++	In fldbld(), make sure that inputFS is set before trying to
++	use it. Thanks to  Steffen Nurpmeso <steffen@sdaoden.eu>
++	for the report.
++
++May 5, 2020:
++	Fix checks for compilers that can handle noreturn. Thanks to
++	GitHub user enh-google for pointing it out. Closes Issue #79.
++
++April 16, 2020:
++	Handle old compilers that don't support C11 (for noreturn).
++	Thanks to Arnold Robbins.
++
++April 5, 2020:
++	Use <stdnoreturn.h> and noreturn instead of GCC attributes.
++	Thanks to GitHub user awkfan77. Closes PR #77.
++
++February 28, 2020:
++	More cleanups from Christos Zoulas: notably backslash continuation
++	inside strings removes the newline and a fix for RS = "^a".
++	Fix for address sanitizer-found problem. Thanks to GitHub user
++	enh-google.
++
++February 19, 2020:
++	More small cleanups from Christos Zoulas.
++
+ February 18, 2020:
+ 	Additional cleanups from Christos Zoulas. It's no longer necessary
+ 	to use the -y flag to bison.
+--- a/awk.1	1640544298.000000000
++++ b/awk.1	1680781664.212175460
+@@ -11,8 +11,11 @@
+ .IP "" "\w'\fB\\$1\ \ \fP'u"
+ .PD 0
+ ..
+-.TH AWK 1
+-.CT 1 files prog_other
++.de TF
++.IP "" "\w'\fB\\$1\ \ \fP'u"
++.PD 0
++..
++.TH AWK 1 2020-11-24
+ .SH NAME
+ awk \- pattern-directed scanning and processing language
+ .SH SYNOPSIS
+@@ -92,7 +95,7 @@ is null, the input line is split into on
+ .PP
+ A pattern-action statement has the form:
+ .IP
+-.IB pattern " { " action " }
++.IB pattern " { " action " } "
+ .PP
+ A missing
+ .BI { " action " }
+@@ -106,7 +109,6 @@ A statement can be one of the following:
+ .EX
+ .ta \w'\f(CWdelete array[expression]\fR'u
+ .RS
+-.nf
+ .ft CW
+ if(\fI expression \fP)\fI statement \fP\fR[ \fPelse\fI statement \fP\fR]\fP
+ while(\fI expression \fP)\fI statement\fP
+@@ -127,7 +129,6 @@ delete\fI array\fP	#\fR delete all eleme
+ exit\fR [ \fP\fIexpression \fP\fR]\fP	#\fR exit immediately; status is \fP\fIexpression\fP
+ .fi
+ .RE
+-.EE
+ .DT
+ .PP
+ Statements are terminated by
+@@ -164,11 +165,11 @@ The
+ .B print
+ statement prints its arguments on the standard output
+ (or on a file if
+-.BI > " file
++.BI > " file "
+ or
+-.BI >> " file
++.BI >> " file "
+ is present or on a pipe if
+-.BI | " cmd
++.BI | " cmd "
+ is present), separated by the current output field separator,
+ and terminated by the output record separator.
+ .I file
+@@ -297,7 +298,7 @@ and
+ .B gsub
+ return the number of replacements.
+ .TP
+-.BI sprintf( fmt , " expr" , " ...\fB)
++.BI sprintf( fmt , " expr" , " ..."\fB)
+ the string resulting from formatting
+ .I expr ...
+ according to the
+@@ -339,7 +340,7 @@ sets
+ .B $0
+ to the next input record from the current input file;
+ .B getline
+-.BI < " file
++.BI < " file "
+ sets
+ .B $0
+ to the next record from
+@@ -350,7 +351,7 @@ sets variable
+ .I x
+ instead.
+ Finally,
+-.IB cmd " | getline
++.IB cmd " | getline "
+ pipes the output of
+ .I cmd
+ into
+@@ -369,10 +370,8 @@ Patterns are arbitrary Boolean combinati
+ .BR "! || &&" )
+ of regular expressions and
+ relational expressions.
+-Regular expressions are as in
+-.IR egrep ;
+-see
+-.IR grep (1).
++Regular expressions are as defined in
++.IR re_format (7).
+ Isolated regular expressions
+ in a pattern apply to the entire line.
+ Regular expressions may also occur in
+@@ -517,12 +516,10 @@ and
+ .B gsub
+ with respect to consecutive backslashes and ampersands.
+ .SH EXAMPLES
+-.TP
+ .EX
+ length($0) > 72
+ .EE
+ Print lines longer than 72 characters.
+-.TP
+ .EX
+ { print $2, $1 }
+ .EE
+@@ -537,28 +534,23 @@ BEGIN { FS = ",[ \et]*|[ \et]+" }
+ Same, with input fields separated by comma and/or spaces and tabs.
+ .PP
+ .EX
+-.nf
+ 	{ s += $1 }
+ END	{ print "sum is", s, " average is", s/NR }
+ .fi
+-.EE
+ .ns
+ .IP
+ Add up first column, print sum and average.
+-.TP
+ .EX
+ /start/, /stop/
+ .EE
+ Print all lines between start/stop pairs.
+ .PP
+ .EX
+-.nf
+ BEGIN	{	# Simulate echo(1)
+ 	for (i = 1; i < ARGC; i++) printf "%s ", ARGV[i]
+ 	printf "\en"
+ 	exit }
+ .fi
+-.EE
+ .SH SEE ALSO
+ .IR grep (1),
+ .IR lex (1),
+--- a/awk.h	1640544298.000000000
++++ b/awk.h	1680781783.746985875
+@@ -24,6 +24,7 @@ THIS SOFTWARE.
+ 
+ #include <assert.h>
+ #include <stdint.h>
++#include <stdlib.h>
+ #include <stdbool.h>
+ #if __STDC_VERSION__ <= 199901L
+ #define noreturn
+@@ -60,6 +61,7 @@ extern enum compile_states {
+ } compile_time;
+ 
+ extern bool	safe;		/* false => unsafe, true => safe */
++extern int	Unix2003_compat;
+ 
+ #define	RECSIZE	(8 * 1024)	/* sets limit on records, fields, etc., etc. */
+ extern int	recsize;	/* size of current record, orig RECSIZE */
+@@ -227,7 +229,7 @@ extern	int	pairstack[], paircnt;
+ 
+ #define NCHARS	(256+3)		/* 256 handles 8-bit chars; 128 does 7-bit */
+ 				/* watch out in match(), etc. */
+-#define	HAT	(NCHARS+2)	/* matches ^ in regular expr */
++#define	HAT_CTRL	(NCHARS+2)	/* matches ^ in regular expr */
+ #define NSTATES	32
+ 
+ typedef struct rrow {
+--- a/awkgram.y	1640544298.000000000
++++ b/awkgram.y	1680853819.162949000
+@@ -50,7 +50,7 @@ Node	*arglist = 0;	/* list of args for c
+ %token	<i>	NL ',' '{' '(' '|' ';' '/' ')' '}' '[' ']'
+ %token	<i>	ARRAY
+ %token	<i>	MATCH NOTMATCH MATCHOP
+-%token	<i>	FINAL DOT ALL CCL NCCL CHAR OR STAR QUEST PLUS EMPTYRE ZERO
++%token	<i>	FINAL DOT ALL CCL NCCL CHAR HAT DOLLAR OR STAR QUEST PLUS EMPTYRE ZERO IGNORE_PRIOR_ATOM
+ %token	<i>	AND BOR APPEND EQ GE GT LE LT NE IN
+ %token	<i>	ARG BLTIN BREAK CLOSE CONTINUE DELETE DO EXIT FOR FUNC
+ %token	<i>	SUB GSUB IF INDEX LSUBSTR MATCHFCN NEXT NEXTFILE
+@@ -360,6 +360,7 @@ term:
+ 	| term '-' term			{ $$ = op2(MINUS, $1, $3); }
+ 	| term '*' term			{ $$ = op2(MULT, $1, $3); }
+ 	| term '/' term			{ $$ = op2(DIVIDE, $1, $3); }
++	| re '/' term			{ $$ = op2(DIVIDE, $1, $3); }
+ 	| term '%' term			{ $$ = op2(MOD, $1, $3); }
+ 	| term POWER term		{ $$ = op2(POWER, $1, $3); }
+ 	| '-' term %prec UMINUS		{ $$ = op1(UMINUS, $2); }
+--- a/b.c	1640544298.000000000
++++ b/b.c	1680854306.541504833
+@@ -31,6 +31,8 @@ THIS SOFTWARE.
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
++#include <xlocale.h>
++#include <wchar.h>
+ #include "awk.h"
+ #include "awkgram.tab.h"
+ 
+@@ -42,10 +44,13 @@ THIS SOFTWARE.
+ #define right(v)	(v)->narg[1]
+ #define parent(v)	(v)->nnext
+ 
+-#define LEAF	case CCL: case NCCL: case CHAR: case DOT: case FINAL: case ALL:
++#define LEAF	case CCL: case NCCL: case CHAR: case HAT: case DOLLAR: case DOT: case FINAL: case ALL:
+ #define ELEAF	case EMPTYRE:		/* empty string in regexp */
+ #define UNARY	case STAR: case PLUS: case QUEST:
+ 
++/* Private libc function - see collate.h */
++void __collate_lookup_l(wchar_t *, int *, int *, int *, locale_t);
++
+ /* encoding in tree Nodes:
+ 	leaf (CCL, NCCL, CHAR, DOT, FINAL, ALL, EMPTYRE):
+ 		left is index, right contains value or pointer to value
+@@ -60,8 +65,8 @@ int	*tmpset;
+ int	maxsetvec = 0;
+ 
+ int	rtok;		/* next token in current re */
+-int	rlxval;
+-static const uschar	*rlxstr;
++wchar_t	rlxval;
++static const wchar_t	*rlxwcs;
+ static const uschar	*prestr;	/* current position in current re */
+ static const uschar	*lastre;	/* origin of last re */
+ static const uschar	*lastatom;	/* origin of last Atom */
+@@ -70,6 +75,8 @@ static const uschar 	*basestr;	/* starts
+ 				   repetition processing */
+ static const uschar 	*firstbasestr;
+ 
++static FILE * replogfile = 0;
++
+ static	int setcnt;
+ static	int poscnt;
+ 
+@@ -131,6 +138,12 @@ resize_state(fa *f, int state)
+ 	f->posns = p3;
+ 
+ 	for (i = f->state_count; i < new_count; ++i) {
++		/*
++		 * It is impossible to track state transitions for every possible character in a multibyte locale (utf-8).
++		 * Therefore, the gototable will remain capable of tracking transitions for single-byte characters as a fast
++		 * path in the C/POSIX locales (as well as ISO Latin-1 locales), but cgoto will be called for every
++		 * multibyte character in multibyte locales.
++		 */
+ 		f->gototab[i] = (unsigned int *) calloc(NCHARS, sizeof(**f->gototab));
+ 		if (f->gototab[i] == NULL)
+ 			goto out;
+@@ -189,6 +202,11 @@ fa *mkdfa(const char *s, bool anchor)	/*
+ 
+ 	firstbasestr = (const uschar *) s;
+ 	basestr = firstbasestr;
++	if (replogfile==0) {
++		/*	disabled
++		replogfile = fopen("/tmp/repeatlog", "a");
++		*/
++	}
+ 	p = reparse(s);
+ 	p1 = op2(CAT, op2(STAR, op2(ALL, NIL, NIL), NIL), p);
+ 		/* put ALL STAR in front of reg.  exp. */
+@@ -209,6 +227,11 @@ fa *mkdfa(const char *s, bool anchor)	/*
+ 	f->initstat = makeinit(f, anchor);
+ 	f->anchor = anchor;
+ 	f->restr = (uschar *) tostring(s);
++	if (replogfile) {
++		fflush(replogfile);
++		fclose(replogfile);
++		replogfile=0;
++	}
+ 	if (firstbasestr != basestr) {
+ 		if (basestr)
+ 			xfree(basestr);
+@@ -232,7 +255,7 @@ int makeinit(fa *f, bool anchor)
+ 		f->out[2] = 1;
+ 	for (i = 0; i < NCHARS; i++)
+ 		f->gototab[2][i] = 0;
+-	f->curstat = cgoto(f, 2, HAT);
++	f->curstat = cgoto(f, 2, 0, HAT_CTRL);
+ 	if (anchor) {
+ 		*f->posns[2] = k-1;	/* leave out position 0 */
+ 		for (i = 0; i < k; i++) {
+@@ -300,9 +323,9 @@ void freetr(Node *p)	/* free parse tree
+ /* in the parsing of regular expressions, metacharacters like . have */
+ /* to be seen literally;  \056 is not a metacharacter. */
+ 
+-int hexstr(const uschar **pp)	/* find and eval hex string at pp, return new p */
++wchar_t wchexstr(const wchar_t **pp)	/* find and eval hex string at pp, return new p */
+ {			/* only pick up one 8-bit byte (2 chars) */
+-	const uschar *p;
++	const wchar_t *p;
+ 	int n = 0;
+ 	int i;
+ 
+@@ -319,8 +342,63 @@ int hexstr(const uschar **pp)	/* find an
+ }
+ 
+ #define isoctdigit(c) ((c) >= '0' && (c) <= '7')	/* multiple use of arg */
++wchar_t wcquoted(const wchar_t **pp)	/* pick up next character after a \\ */
++			/* and increment *pp */
++{
++	const wchar_t *p = *pp;
++	int c;
++
++	if ((c = *p++) == 't')
++		c = '\t';
++	else if (c == 'n')
++		c = '\n';
++	else if (c == 'f')
++		c = '\f';
++	else if (c == 'r')
++		c = '\r';
++	else if (c == 'b')
++		c = '\b';
++	else if (c == 'v')
++		c = '\v';
++	else if (c == 'a')
++		c = '\a';
++	else if (c == '\\')
++		c = '\\';
++	else if (c == 'x') {	/* hexadecimal goo follows */
++		c = wchexstr(&p);	/* this adds a null if number is invalid */
++	} else if (isoctdigit(c)) {	/* \d \dd \ddd */
++		int n = c - '0';
++		if (isoctdigit(*p)) {
++			n = 8 * n + *p++ - '0';
++			if (isoctdigit(*p))
++				n = 8 * n + *p++ - '0';
++		}
++		c = n;
++	} /* else */
++		/* c = c; */
++	*pp = p;
++	return c;
++}
+ 
+-int quoted(const uschar **pp)	/* pick up next thing after a \\ */
++int hexstr(const uschar **pp)	/* find and eval hex string at pp, return new p */
++{			/* only pick up one 8-bit byte (2 chars) */
++	const uschar *p;
++	int n = 0;
++	int i;
++
++	for (i = 0, p = *pp; i < 2 && isxdigit(*p); i++, p++) {
++		if (isdigit(*p))
++			n = 16 * n + *p - '0';
++		else if (*p >= 'a' && *p <= 'f')
++			n = 16 * n + *p - 'a' + 10;
++		else if (*p >= 'A' && *p <= 'F')
++			n = 16 * n + *p - 'A' + 10;
++	}
++	*pp = p;
++	return n;
++}
++
++int quoted(const uschar **pp)	/* pick up next single byte character after a \\ */
+ 			/* and increment *pp */
+ {
+ 	const uschar *p = *pp;
+@@ -358,50 +436,55 @@ int quoted(const uschar **pp)	/* pick up
+ 	return c;
+ }
+ 
+-char *cclenter(const char *argp)	/* add a character class */
++wchar_t *cclenter(const wchar_t *wcs)	/* add a character class */
+ {
+-	int i, c, c2;
+-	const uschar *op, *p = (const uschar *) argp;
+-	uschar *bp;
+-	static uschar *buf = NULL;
+-	static int bufsz = 100;
++	int i;
++	wchar_t wc, wc2;
++	wchar_t *bp;
++	wchar_t *buf = NULL;
++	int bufc = 100;
++	const wchar_t *wcp = wcs;
++
++	if ((buf = malloc(bufc * sizeof(wchar_t))) == NULL) {
++		FATAL("out of space for character class [%.10ls...] 1", wcp);
++	}
+ 
+-	op = p;
+-	if (buf == NULL && (buf = (uschar *) malloc(bufsz)) == NULL)
+-		FATAL("out of space for character class [%.10s...] 1", p);
+ 	bp = buf;
+-	for (i = 0; (c = *p++) != 0; ) {
+-		if (c == '\\') {
+-			c = quoted(&p);
+-		} else if (c == '-' && i > 0 && bp[-1] != 0) {
+-			if (*p != 0) {
+-				c = bp[-1];
+-				c2 = *p++;
+-				if (c2 == '\\')
+-					c2 = quoted(&p);
+-				if (c > c2) {	/* empty; ignore */
+-					bp--;
++	for (i = 0; (wc = *wcp++) != 0; ) {
++		if (wc == '\\') {
++			wc = quoted(&wcp);
++		} else if (wc == '-' && i > 0 && bp[-1] != 0) {
++			/* Expand out a-z to abcdef...xyz */
++			if (*wcp != 0) {
++				wc = bp[-1];
++				wc2 = *wcp++;
++				if (wc2 == '\\')
++					wc2 = quoted(&wcp);
++				if (wc > wc2) {	/* empty; ignore */
++					bp--; /* erase starting character */
+ 					i--;
+ 					continue;
+ 				}
+-				while (c < c2) {
+-					if (!adjbuf((char **) &buf, &bufsz, bp-buf+2, 100, (char **) &bp, "cclenter1"))
+-						FATAL("out of space for character class [%.10s...] 2", p);
+-					*bp++ = ++c;
++				/* WARNING: This could cause buf to become huge */
++				while (wc < wc2) {
++					if (!wcadjbuf((char **) &buf, &bufc, bp-buf+2, 100, &bp, "cclenter1"))
++						FATAL("out of space for character class [%.10ls...] 2", wcp);
++					*bp++ = ++wc;
+ 					i++;
+ 				}
+ 				continue;
+ 			}
+ 		}
+-		if (!adjbuf((char **) &buf, &bufsz, bp-buf+2, 100, (char **) &bp, "cclenter2"))
+-			FATAL("out of space for character class [%.10s...] 3", p);
+-		*bp++ = c;
++		if (!wcadjbuf(&buf, &bufc, bp-buf+2, 100, &bp, "cclenter2"))
++			FATAL("out of space for character class [%.10ls...] 3", wcp);
++		*bp++ = wc;
+ 		i++;
+ 	}
+-	*bp = 0;
+-	DPRINTF("cclenter: in = |%s|, out = |%s|\n", op, buf);
+-	xfree(op);
+-	return (char *) tostring((char *) buf);
++	*bp++ = L'\0';
++	DPRINTF("cclenter:   in = |%ls|, out = |%ls|\n", wcs, buf);
++	xfree(wcs);
++
++	return buf;
+ }
+ 
+ void overflo(const char *s)
+@@ -524,12 +607,10 @@ void follow(Node *v)	/* collects leaves
+ 	}
+ }
+ 
+-int member(int c, const char *sarg)	/* is c in s? */
++int member(wchar_t wc, const wchar_t *wcs)	/* is wc in wcs? */
+ {
+-	const uschar *s = (const uschar *) sarg;
+-
+-	while (*s)
+-		if (c == *s++)
++	while (*wcs)
++		if (wc == *wcs++)
+ 			return(1);
+ 	return(0);
+ }
+@@ -544,15 +625,20 @@ int match(fa *f, const char *p0)	/* shor
+ 
+ 	if (f->out[s])
+ 		return(1);
++	int p_read = 0;
++	size_t p_len = strlen((const char*)p);
+ 	do {
++		wchar_t p_wc = towc(&p_read, (const char*)p, p_len);
++		p_len -= p_read;
++
+ 		/* assert(*p < NCHARS); */
+-		if ((ns = f->gototab[s][*p]) != 0)
++		if (p_read == 1 && (ns = f->gototab[s][*p]) != 0)
+ 			s = ns;
+ 		else
+-			s = cgoto(f, s, *p);
++			s = cgoto(f, s, p_wc, 0);
+ 		if (f->out[s])
+ 			return(1);
+-	} while (*p++ != 0);
++	} while (p += p_read, *(p - p_read) != 0);
+ 	return(0);
+ }
+ 
+@@ -567,37 +653,60 @@ int pmatch(fa *f, const char *p0)	/* lon
+ 
+ 	patbeg = (const char *)p;
+ 	patlen = -1;
++	size_t p_len = strlen((const char*)p);
++	int p_read = 0;
+ 	do {
++		wchar_t p_wc = towc(&p_read, (const char*)p, p_len);
++		size_t q_len = p_len;
++		p_len -= p_read;
++
+ 		q = p;
++		int q_read = 0;
+ 		do {
+-			if (f->out[s])		/* final state */
++			wchar_t q_wc = towc(&q_read, (const char*)q, q_len);
++			q_len -= q_read;
++
++			/* Lots of debug in here as this is the path awk.ex{69,639,640} take */
++			DPRINTF("pmatch: checking wc: %d\n", q_wc);
++			if (f->out[s]) {		/* final state */
+ 				patlen = q-p;
++				DPRINTF("pmatch: f->out[s] is %d. patlen: %d\n", f->out[s], patlen);
++			}
++
+ 			/* assert(*q < NCHARS); */
+-			if ((ns = f->gototab[s][*q]) != 0)
++			if (q_read == 1 && (ns = f->gototab[s][*q]) != 0)
+ 				s = ns;
+ 			else
+-				s = cgoto(f, s, *q);
++				s = cgoto(f, s, q_wc, 0);
+ 
+ 			assert(s < f->state_count);
+-
+ 			if (s == 1) {	/* no transition */
+ 				if (patlen >= 0) {
+ 					patbeg = (const char *) p;
++					DPRINTF("pmatch: RETURN 1: patlen: %d patbeg: %s\n", patlen, patbeg);
+ 					return(1);
+-				}
+-				else
++				} else {
++					DPRINTF("pmatch: nextin\n");
+ 					goto nextin;	/* no match */
++				}
+ 			}
+-		} while (*q++ != 0);
+-		if (f->out[s])
++
++			DPRINTF("pmatch: q: advanced %d: %c\n", q_read, *(q + q_read));
++		} while (q += q_read, *(q - q_read) != 0);;
++
++		DPRINTF("pmatch: out of loop\n");
++		if (f->out[s]) {
++			DPRINTF("pmatch: patlen: f->out[s]: p: %s (%p), q: %s (%p), \n", p, p, q, q);
+ 			patlen = q-p-1;	/* don't count $ */
++		}
+ 		if (patlen >= 0) {
++			DPRINTF("pmatch: patlen: %d begin: %s\n", patlen, p);
+ 			patbeg = (const char *) p;
+ 			return(1);
+ 		}
+ 	nextin:
+ 		s = 2;
+-	} while (*p++);
++	} while (p += p_read, *(p - p_read) != 0);
+ 	return (0);
+ }
+ 
+@@ -612,16 +721,25 @@ int nematch(fa *f, const char *p0)	/* no
+ 
+ 	patbeg = (const char *)p;
+ 	patlen = -1;
++	size_t p_len = strlen((const char *)p);
+ 	while (*p) {
++		int p_read = 0;
++		wchar_t p_wc = towc(&p_read, (const char*)p, p_len);
++		size_t q_len = p_len;
++		p_len -= p_read;
++
+ 		q = p;
++		int q_read = 0;
+ 		do {
++			wchar_t q_wc = towc(&q_read, (const char*)q, q_len);
++			q_len -= q_read;
+ 			if (f->out[s])		/* final state */
+ 				patlen = q-p;
+ 			/* assert(*q < NCHARS); */
+-			if ((ns = f->gototab[s][*q]) != 0)
++			if (q_read == 1 && (ns = f->gototab[s][*q]) != 0)
+ 				s = ns;
+ 			else
+-				s = cgoto(f, s, *q);
++				s = cgoto(f, s, q_wc, 0);
+ 			if (s == 1) {	/* no transition */
+ 				if (patlen > 0) {
+ 					patbeg = (const char *) p;
+@@ -629,7 +747,7 @@ int nematch(fa *f, const char *p0)	/* no
+ 				} else
+ 					goto nnextin;	/* no nonempty match */
+ 			}
+-		} while (*q++ != 0);
++		} while (q += q_read, *(q - q_read) != 0);;
+ 		if (f->out[s])
+ 			patlen = q-p-1;	/* don't count $ */
+ 		if (patlen > 0 ) {
+@@ -638,7 +756,7 @@ int nematch(fa *f, const char *p0)	/* no
+ 		}
+ 	nnextin:
+ 		s = 2;
+-		p++;
++		p += p_read;
+ 	}
+ 	return (0);
+ }
+@@ -667,7 +785,9 @@ bool fnematch(fa *pfa, FILE *f, char **p
+ 
+ 	s = pfa->initstat;
+ 	patlen = 0;
+-
++	/* FUTURE: Wide Character Support - we can easily use fgetwc, but we really need to update callers to handle
++	 * a wchar_t pbuf
++	 */
+ 	/*
+ 	 * All indices relative to buf.
+ 	 * i <= j <= k <= bufsize
+@@ -692,7 +812,7 @@ bool fnematch(fa *pfa, FILE *f, char **p
+ 			if ((ns = pfa->gototab[s][c]) != 0)
+ 				s = ns;
+ 			else
+-				s = cgoto(pfa, s, c);
++				s = cgoto(pfa, s, c, 0);
+ 
+ 			if (pfa->out[s]) {	/* final state */
+ 				patlen = j - i + 1;
+@@ -769,6 +889,11 @@ Node *primary(void)
+ 		rtok = relex();
+ 		return (unary(op2(ALL, NIL, NIL)));
+ 	case EMPTYRE:
++		if (replogfile) {
++			fprintf(replogfile,
++				"returned EMPTYRE from primary\n");
++			fflush(replogfile);
++		}
+ 		rtok = relex();
+ 		return (unary(op2(EMPTYRE, NIL, NIL)));
+ 	case DOT:
+@@ -776,18 +901,18 @@ Node *primary(void)
+ 		rtok = relex();
+ 		return (unary(op2(DOT, NIL, NIL)));
+ 	case CCL:
+-		np = op2(CCL, NIL, (Node*) cclenter((const char *) rlxstr));
++		np = op2(CCL, NIL, (Node*) cclenter(rlxwcs));
+ 		lastatom = starttok;
+ 		rtok = relex();
+ 		return (unary(np));
+ 	case NCCL:
+-		np = op2(NCCL, NIL, (Node *) cclenter((const char *) rlxstr));
++		np = op2(NCCL, NIL, (Node *) cclenter(rlxwcs));
+ 		lastatom = starttok;
+ 		rtok = relex();
+ 		return (unary(np));
+ 	case '^':
+ 		rtok = relex();
+-		return (unary(op2(CHAR, NIL, itonp(HAT))));
++		return (unary(op2(HAT, NIL, NIL)));
+ 	case '$':
+ 		rtok = relex();
+ 		return (unary(op2(CHAR, NIL, NIL)));
+@@ -819,6 +944,11 @@ Node *concat(Node *np)
+ 	case CHAR: case DOT: case ALL: case CCL: case NCCL: case '$': case '(':
+ 		return (concat(op2(CAT, np, primary())));
+ 	case EMPTYRE:
++		if (replogfile) {
++			fprintf(replogfile,
++				"returned EMPTYRE to concat\n");
++			fflush(replogfile);
++		}
+ 		rtok = relex();
+ 		return (concat(op2(CAT, op2(CCL, NIL, (Node *) tostring("")),
+ 				primary())));
+@@ -855,60 +985,6 @@ Node *unary(Node *np)
+ 	}
+ }
+ 
+-/*
+- * Character class definitions conformant to the POSIX locale as
+- * defined in IEEE P1003.1 draft 7 of June 2001, assuming the source
+- * and operating character sets are both ASCII (ISO646) or supersets
+- * thereof.
+- *
+- * Note that to avoid overflowing the temporary buffer used in
+- * relex(), the expanded character class (prior to range expansion)
+- * must be less than twice the size of their full name.
+- */
+-
+-/* Because isblank doesn't show up in any of the header files on any
+- * system i use, it's defined here.  if some other locale has a richer
+- * definition of "blank", define HAS_ISBLANK and provide your own
+- * version.
+- * the parentheses here are an attempt to find a path through the maze
+- * of macro definition and/or function and/or version provided.  thanks
+- * to nelson beebe for the suggestion; let's see if it works everywhere.
+- */
+-
+-/* #define HAS_ISBLANK */
+-#ifndef HAS_ISBLANK
+-
+-int (xisblank)(int c)
+-{
+-	return c==' ' || c=='\t';
+-}
+-
+-#endif
+-
+-static const struct charclass {
+-	const char *cc_name;
+-	int cc_namelen;
+-	int (*cc_func)(int);
+-} charclasses[] = {
+-	{ "alnum",	5,	isalnum },
+-	{ "alpha",	5,	isalpha },
+-#ifndef HAS_ISBLANK
+-	{ "blank",	5,	xisblank },
+-#else
+-	{ "blank",	5,	isblank },
+-#endif
+-	{ "cntrl",	5,	iscntrl },
+-	{ "digit",	5,	isdigit },
+-	{ "graph",	5,	isgraph },
+-	{ "lower",	5,	islower },
+-	{ "print",	5,	isprint },
+-	{ "punct",	5,	ispunct },
+-	{ "space",	5,	isspace },
+-	{ "upper",	5,	isupper },
+-	{ "xdigit",	6,	isxdigit },
+-	{ NULL,		0,	NULL },
+-};
+-
+ #define REPEAT_SIMPLE		0
+ #define REPEAT_PLUS_APPENDED	1
+ #define REPEAT_WITH_Q		2
+@@ -941,6 +1017,19 @@ replace_repeat(const uschar *reptok, int
+ 	}
+ 	if ((buf = (uschar *) malloc(size + 1)) == NULL)
+ 		FATAL("out of space in reg expr %.10s..", lastre);
++	if (replogfile) {
++		fprintf(replogfile, "re before: len=%zd,%s\n"
++				    "         : init_q=%d,n_q_reps=%d\n",
++				strlen((char*)basestr),basestr,
++				init_q,n_q_reps);
++		fprintf(replogfile, "re prefix_length=%d,atomlen=%d\n",
++				prefix_length,atomlen);
++/*
++		fprintf(replogfile, " new buf size: %d, atom=%s, atomlen=%d\n",
++				size, atom, atomlen);
++*/
++		fflush(replogfile);
++	}
+ 	memcpy(buf, basestr, prefix_length);	/* copy prefix	*/
+ 	j = prefix_length;
+ 	if (special_case == REPEAT_ZERO) {
+@@ -966,6 +1055,10 @@ replace_repeat(const uschar *reptok, int
+ 	memcpy(&buf[j], reptok+reptoklen, suffix_length);
+ 	j += suffix_length;
+ 	buf[j] = '\0';
++	if (replogfile) {
++		fprintf(replogfile, "re after : len=%zd,%s\n",strlen((char*)buf),buf);
++		fflush(replogfile);
++	}
+ 	/* free old basestr */
+ 	if (firstbasestr != basestr) {
+ 		if (basestr)
+@@ -993,6 +1086,12 @@ static int repeat(const uschar *reptok,
+ 	if (secondnum < 0) {	/* means {n,} -> repeat n-1 times followed by PLUS */
+ 		if (firstnum < 2) {
+ 			/* 0 or 1: should be handled before you get here */
++			if (replogfile) {
++				fprintf(replogfile,
++					"{%d, %d}, shouldn't be here\n",
++					firstnum, secondnum);
++				fflush(replogfile);
++			}
+ 			FATAL("internal error");
+ 		} else {
+ 			return replace_repeat(reptok, reptoklen, atom, atomlen,
+@@ -1014,19 +1113,216 @@ static int repeat(const uschar *reptok,
+ 		return replace_repeat(reptok, reptoklen, atom, atomlen,
+ 					firstnum, secondnum, REPEAT_WITH_Q);
+ 	} else {	/* Error - shouldn't be here (n>m) */
++		if (replogfile) {
++			fprintf(replogfile,
++				"illegal ERE {%d,%d} shouldn't be here!\n",
++				firstnum,secondnum);
++			fflush(replogfile);
++		}
+ 		FATAL("internal error");
+ 	}
+ 	return 0;
+ }
+ 
++/* Converts a wide character and advances the input string pointer sp */
++static wchar_t wcadvance(int *outlen, const uschar **sp, int max) {
++	wchar_t wc = L'\0';
++	int ret = mbtowc(&wc, (char*)*sp, max);
++
++	if (ret < 0) {
++		FATAL("multibyte conversion failure at %.20s...", *sp);
++	} else {
++		*sp += ret;
++		if (outlen) {
++			*outlen = ret;
++		}
++	}
++	return wc;
++}
++
++static int cclex(void) {
++	int i, len;
++	wchar_t wc;
++	static wchar_t *buf = NULL;
++	static int bufc = 100;
++	wchar_t *bp;
++
++	if (buf == NULL && (buf = malloc(bufc * sizeof(wchar_t))) == NULL)
++		FATAL("out of space in reg expr %.10s..", lastre);
++
++	bp = buf;
++
++	int cflag = 0;
++	if (*prestr == '^') {
++		cflag = 1;
++		prestr++;
++	}
++
++	/* start with a buffer that can hold 2x length of prestr in wchar_ts */
++	int n = 2 * strlen((const char *) prestr)+1;
++	if (!wcadjbuf(&buf, &bufc, n, n, &bp, "relex1"))
++		FATAL("out of space for reg expr %.10s...", lastre);
++
++	for (; ; ) {
++		wc = wcadvance(NULL, &prestr, MB_CUR_MAX);
++		DPRINTF("loop wc: '%c'\n", wc);
++
++		if (wc == L'\\') {
++			*bp++ = L'\\';
++			if ((wc = wcadvance(NULL, &prestr, MB_CUR_MAX)) == '\0')
++				FATAL("nonterminated character class %.20s...", lastre);
++			*bp++ = wc;
++		/* } else if (c == '\n') { */
++		/* 	FATAL("newline in character class %.20s...", lastre); */
++		} else if (wc == L'[' && *prestr == ':') {
++			prestr++;
++
++			/* 9.3.5 RE Bracket Expression specifies that we must support locale
++			 * specific character classes present in the current LC_CTYPE.
++			 * https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap09.html#tag_09_03_05 */
++			int ccnamec = 64;
++			char *ccname = malloc(ccnamec);
++			char *ccnamep = ccname;
++
++			/* Read in the character class name */
++			while (*prestr) {
++				if (!adjbuf(&ccname, &ccnamec, ccnamep-ccname+1, 32, &ccnamep, "relex2"))
++					FATAL("out of space for reg expr %.10s...", lastre);
++
++				*ccnamep++ = *prestr++;
++				if (*prestr == ':' && prestr[1] == ']') {
++					prestr += 2;
++					break;
++				}
++			}
++			*ccnamep++ = '\0';
++
++			wctype_t wc_type = wctype(ccname);
++			DPRINTF("character class %s is wctype %d\n", ccname, wc_type);
++			if (wc_type) {
++				/*
++				 * BUG: We begin at 1, instead of 0, since we
++				 * would otherwise prematurely terminate the
++				 * string for classes like [[:cntrl:]]. This
++				 * means that we can't match the NUL character,
++				 * not without first adapting the entire
++				 * program to track each string's length.
++				 */
++				for (i = 1; i <= UCHAR_MAX; i++) {
++					if (!wcadjbuf(&buf, &bufc, bp-buf+2, 100, &bp, "relex2"))
++						FATAL("out of space for reg expr %.10s...", lastre);
++
++					if (iswctype((wchar_t)i, wc_type)) {
++						/* escape backslash */
++						if (i == L'\\') {
++							*bp++ = (wchar_t)i;
++							n++;
++						}
++
++						*bp++ = (wchar_t)i;
++						n++;
++					}
++				}
++			} else {
++				WARNING("unknown character class: %s", ccname);
++				*bp++ = wc;
++			}
++		} else if (wc == '[' && *prestr == '.') {
++			wchar_t collate_char;
++			prestr++;
++			collate_char = wcadvance(NULL, &prestr, MB_LEN_MAX);
++			if (*prestr == '.' && prestr[1] == ']') {
++				prestr += 2;
++				/* Found it: map via locale TBD: for
++				   now, simply return this char.  This
++				   is sufficient to pass conformance
++				   test awk.ex 156
++				 */
++				if (*prestr == ']') {
++					prestr++;
++					rlxval = collate_char;
++					if (replogfile) {
++						fprintf(replogfile,
++							"[..] collate char=%c\n",
++							collate_char);
++						fflush(replogfile);
++					}
++					/* FIXME: this should really be a CCL with 1 character for now, otherwise ^ / NCCL won't work */
++					return CHAR;
++				}
++			}
++		} else if (wc == '[' && *prestr == '=') {
++			/* Read opening '=' */
++			prestr++;
++
++			wchar_t collate_elem = wcadvance(NULL, &prestr, MB_CUR_MAX);
++
++			if (*prestr == '=' && prestr[1] == ']') {
++				wchar_t wc2;
++				int prim1, prim2, sec1, sec2, len;
++
++				len = 1;
++				prestr += 2;
++
++				__collate_lookup_l(&collate_elem, &len, &prim1, &sec1, LC_GLOBAL_LOCALE);
++				DPRINTF("collate_elem: 0x%x p: %d s:%d\n", collate_elem, prim1, sec1);
++
++				/* Lookup all ISO wide characters (0 -> 255) for primary weights */
++				/* FUTURE: like ranges (a-z) we should just store collate_elem and perform lookups in member() */
++				for (wc2 = 1; wc2 < UCHAR_MAX; wc2++) {
++					if (!wcadjbuf(&buf, &bufc, bp-buf+1, 100, &bp, "relex2"))
++						FATAL("out of space for reg expr %.10s...", lastre);
++
++					len = 1;
++					__collate_lookup_l(&wc2, &len, &prim2, &sec2, LC_GLOBAL_LOCALE);
++
++					DPRINTF("compare_char: (0x%x) p: %d s:%d\n", wc2, prim2, sec2);
++					if (prim1 == prim2) {
++						DPRINTF("                -> Primary weights match @ %p\n", bp);
++						if (wc2 == L'\\') {
++							*bp++ = wc2;
++							n++;
++						}
++
++						*bp++ = wc2;
++						n++;
++					}
++				}
++			}
++		} else if (wc == '\0') {
++			FATAL("nonterminated character class %.20s", lastre);
++		} else if (bp == buf) {
++			/* 1st char is special */
++			/* NOTE/BUG: If [:name:], [=a=], or others expand to an empty set,
++			 * the next character will still be considered "first".
++			 */
++			*bp++ = wc;
++		} else if (wc == L']') {
++			*bp++ = L'\0';
++			rlxwcs = wcsdup(buf);
++			if (replogfile) {
++				fprintf(replogfile,
++				"detecting []: cflag=%d, len=%zd,%ls\n",
++					cflag,wcslen(rlxwcs),rlxwcs);
++				fflush(replogfile);
++			}
++			if (cflag == 0)
++				return CCL;
++			else
++				return NCCL;
++		} else {
++			/* just a simple character in the class: [abc] */
++			*bp++ = wc;
++		}
++	}
++}
++
+ int relex(void)		/* lexical analyzer for reparse */
+ {
+ 	int c, n;
+-	int cflag;
+ 	static uschar *buf = NULL;
+ 	static int bufsz = 100;
+ 	uschar *bp;
+-	const struct charclass *cc;
+ 	int i;
+ 	int num, m;
+ 	bool commafound, digitfound;
+@@ -1058,113 +1354,20 @@ rescan:
+ 		rlxval = c;
+ 		return CHAR;
+ 	case '\\':
++		/* FUTURE: prestr is not a wchar_t, when it is, use wcquoted() * */
+ 		rlxval = quoted(&prestr);
+ 		return CHAR;
+ 	default:
+-		rlxval = c;
+-		return CHAR;
+-	case '[':
+-		if (buf == NULL && (buf = (uschar *) malloc(bufsz)) == NULL)
+-			FATAL("out of space in reg expr %.10s..", lastre);
+-		bp = buf;
+-		if (*prestr == '^') {
+-			cflag = 1;
+-			prestr++;
+-		}
+-		else
+-			cflag = 0;
+-		n = 2 * strlen((const char *) prestr)+1;
+-		if (!adjbuf((char **) &buf, &bufsz, n, n, (char **) &bp, "relex1"))
+-			FATAL("out of space for reg expr %.10s...", lastre);
+-		for (; ; ) {
+-			if ((c = *prestr++) == '\\') {
+-				*bp++ = '\\';
+-				if ((c = *prestr++) == '\0')
+-					FATAL("nonterminated character class %.20s...", lastre);
+-				*bp++ = c;
+-			/* } else if (c == '\n') { */
+-			/* 	FATAL("newline in character class %.20s...", lastre); */
+-			} else if (c == '[' && *prestr == ':') {
+-				/* POSIX char class names, Dag-Erling Smorgrav, des@ofug.org */
+-				for (cc = charclasses; cc->cc_name; cc++)
+-					if (strncmp((const char *) prestr + 1, (const char *) cc->cc_name, cc->cc_namelen) == 0)
+-						break;
+-				if (cc->cc_name != NULL && prestr[1 + cc->cc_namelen] == ':' &&
+-				    prestr[2 + cc->cc_namelen] == ']') {
+-					prestr += cc->cc_namelen + 3;
+-					/*
+-					 * BUG: We begin at 1, instead of 0, since we
+-					 * would otherwise prematurely terminate the
+-					 * string for classes like [[:cntrl:]]. This
+-					 * means that we can't match the NUL character,
+-					 * not without first adapting the entire
+-					 * program to track each string's length.
+-					 */
+-					for (i = 1; i <= UCHAR_MAX; i++) {
+-						if (!adjbuf((char **) &buf, &bufsz, bp-buf+2, 100, (char **) &bp, "relex2"))
+-						    FATAL("out of space for reg expr %.10s...", lastre);
+-						if (cc->cc_func(i)) {
+-							/* escape backslash */
+-							if (i == '\\') {
+-								*bp++ = '\\';
+-								n++;
+-							}
++		{
++			/* put us back at `c` for a multibyte conversion */
++			prestr--;
+ 
+-							*bp++ = i;
+-							n++;
+-						}
+-					}
+-				} else
+-					*bp++ = c;
+-			} else if (c == '[' && *prestr == '.') {
+-				char collate_char;
+-				prestr++;
+-				collate_char = *prestr++;
+-				if (*prestr == '.' && prestr[1] == ']') {
+-					prestr += 2;
+-					/* Found it: map via locale TBD: for
+-					   now, simply return this char.  This
+-					   is sufficient to pass conformance
+-					   test awk.ex 156
+-					 */
+-					if (*prestr == ']') {
+-						prestr++;
+-						rlxval = collate_char;
+-						return CHAR;
+-					}
+-				}
+-			} else if (c == '[' && *prestr == '=') {
+-				char equiv_char;
+-				prestr++;
+-				equiv_char = *prestr++;
+-				if (*prestr == '=' && prestr[1] == ']') {
+-					prestr += 2;
+-					/* Found it: map via locale TBD: for now
+-					   simply return this char. This is
+-					   sufficient to pass conformance test
+-					   awk.ex 156
+-					 */
+-					if (*prestr == ']') {
+-						prestr++;
+-						rlxval = equiv_char;
+-						return CHAR;
+-					}
+-				}
+-			} else if (c == '\0') {
+-				FATAL("nonterminated character class %.20s", lastre);
+-			} else if (bp == buf) {	/* 1st char is special */
+-				*bp++ = c;
+-			} else if (c == ']') {
+-				*bp++ = 0;
+-				rlxstr = (uschar *) tostring((char *) buf);
+-				if (cflag == 0)
+-					return CCL;
+-				else
+-					return NCCL;
+-			} else
+-				*bp++ = c;
++			rlxval = wcadvance(NULL, &prestr, MB_CUR_MAX);
++
++			return CHAR;
+ 		}
+-		break;
++	case '[':
++		return cclex();
+ 	case '{':
+ 		if (isdigit(*(prestr))) {
+ 			num = 0;	/* Process as a repetition */
+@@ -1238,12 +1441,18 @@ rescan:
+ 	}
+ }
+ 
+-int cgoto(fa *f, int s, int c)
++int cgoto(fa *f, int s, wchar_t wc, int ctrl)
+ {
+ 	int *p, *q;
+ 	int i, j, k;
+ 
+-	assert(c == HAT || c < NCHARS);
++	DPRINTF("cgoto: wc: %d ctrl: %d\n", wc, ctrl);
++
++	/* The ctrl replaces cases where cgoto was called w/ a special int like HAT to indicate the beginning of input */
++	if (ctrl != 0 && wc != 0) {
++		FATAL("cgoto: non-zero ctrl instruction passed with wc: ctrl: %d wc: %d", ctrl, wc);
++	}
++
+ 	while (f->accept >= maxsetvec) {	/* guessing here! */
+ 		resizesetvec(__func__);
+ 	}
+@@ -1255,12 +1464,16 @@ int cgoto(fa *f, int s, int c)
+ 	p = f->posns[s];
+ 	for (i = 1; i <= *p; i++) {
+ 		if ((k = f->re[p[i]].ltype) != FINAL) {
+-			if ((k == CHAR && c == ptoi(f->re[p[i]].lval.np))
+-			 || (k == DOT && c != 0 && c != HAT)
+-			 || (k == ALL && c != 0)
+-			 || (k == EMPTYRE && c != 0)
+-			 || (k == CCL && member(c, (char *) f->re[p[i]].lval.up))
+-			 || (k == NCCL && !member(c, (char *) f->re[p[i]].lval.up) && c != 0 && c != HAT)) {
++			DPRINTF("cgoto: k: %d wc: %d ctrl: %d\n", k, wc, ctrl);
++			if ((k == CHAR && wc == ptoi(f->re[p[i]].lval.np) && ctrl == 0)
++			 || (k == HAT && ctrl == HAT_CTRL)
++			 || (k == DOT && wc != 0)
++			 || (k == ALL && (wc != 0 || ctrl == HAT_CTRL)) /* ALL should match the initial makeinit call */
++			 || (k == EMPTYRE && wc != 0)
++			 || (k == CCL && member(wc, (wchar_t *) f->re[p[i]].lval.up))
++			 || (k == NCCL && wc != 0 && !member(wc, (wchar_t *) f->re[p[i]].lval.up))) {
++				DPRINTF("cgoto: match\n");
++
+ 				q = f->re[p[i]].lfollow;
+ 				for (j = 1; j <= *q; j++) {
+ 					if (q[j] >= maxsetvec) {
+@@ -1274,6 +1487,7 @@ int cgoto(fa *f, int s, int c)
+ 			}
+ 		}
+ 	}
++	DPRINTF("cgoto: out loop\n");
+ 	/* determine if setvec is a previous state */
+ 	tmpset[0] = setcnt;
+ 	j = 1;
+@@ -1291,8 +1505,10 @@ int cgoto(fa *f, int s, int c)
+ 			if (tmpset[j] != p[j])
+ 				goto different;
+ 		/* setvec is state i */
+-		if (c != HAT)
+-			f->gototab[s][c] = i;
++		if (ctrl != HAT_CTRL && wc < NCHARS) {
++			f->gototab[s][(int)wc] = i;
++		}
++
+ 		return i;
+ 	  different:;
+ 	}
+@@ -1306,8 +1522,10 @@ int cgoto(fa *f, int s, int c)
+ 	p = intalloc(setcnt + 1, __func__);
+ 
+ 	f->posns[f->curstat] = p;
+-	if (c != HAT)
+-		f->gototab[s][c] = f->curstat;
++	if (ctrl != HAT_CTRL && wc < NCHARS) {
++		f->gototab[s][(int)wc] = f->curstat;
++	}
++
+ 	for (i = 0; i <= setcnt; i++)
+ 		p[i] = tmpset[i];
+ 	if (setvec[f->accept])
+--- a/main.c	1640544298.000000000
++++ b/main.c	1680783076.682541137
+@@ -33,6 +33,12 @@ const char	*version = "version 20211208"
+ #include <signal.h>
+ #include "awk.h"
+ 
++#ifdef __APPLE__
++#include "get_compat.h"
++#else
++#define COMPAT_MODE(func, mode) 1
++#endif
++
+ extern	char	**environ;
+ extern	int	nfields;
+ 
+@@ -50,6 +56,7 @@ static size_t	npfile;		/* number of file
+ static size_t	curpfile;	/* current filename */
+ 
+ bool	safe = false;	/* true => "safe" mode */
++int	Unix2003_compat;
+ 
+ static noreturn void fpecatch(int n
+ #ifdef SA_SIGINFO
+@@ -113,6 +120,7 @@ int main(int argc, char *argv[])
+ 	char *fn, *vn;
+ 
+ 	setlocale(LC_CTYPE, "");
++	setlocale(LC_COLLATE, "");
+ 	setlocale(LC_NUMERIC, "C"); /* for parsing cmdline & prog */
+ 	cmdname = argv[0];
+ 	if (argc == 1) {
+@@ -121,6 +129,7 @@ int main(int argc, char *argv[])
+ 		  cmdname);
+ 		exit(1);
+ 	}
++	Unix2003_compat = COMPAT_MODE("bin/awk", "unix2003");
+ #ifdef SA_SIGINFO
+ 	{
+ 		struct sigaction sa;
+--- a/proto.h	1640544298.000000000
++++ b/proto.h	1680854341.427176717
+@@ -45,12 +45,14 @@ extern	void	penter(Node *);
+ extern	void	freetr(Node *);
+ extern	int	hexstr(const uschar **);
+ extern	int	quoted(const uschar **);
+-extern	char	*cclenter(const char *);
++extern	wchar_t	wchexstr(const wchar_t **);
++extern	wchar_t	wcquoted(const wchar_t **);
++extern	wchar_t	*cclenter(const wchar_t *);
+ extern	noreturn void	overflo(const char *);
+ extern	void	cfoll(fa *, Node *);
+ extern	int	first(Node *);
+ extern	void	follow(Node *);
+-extern	int	member(int, const char *);
++extern	int	member(wchar_t, const wchar_t *);
+ extern	int	match(fa *, const char *);
+ extern	int	pmatch(fa *, const char *);
+ extern	int	nematch(fa *, const char *);
+@@ -62,7 +64,7 @@ extern	Node	*concat(Node *);
+ extern	Node	*alt(Node *);
+ extern	Node	*unary(Node *);
+ extern	int	relex(void);
+-extern	int	cgoto(fa *, int, int);
++extern	int	cgoto(fa *, int, wchar_t, int);
+ extern	void	freefa(fa *);
+ 
+ extern	int	pgetc(void);
+@@ -99,6 +101,7 @@ extern	void	arginit(int, char **);
+ extern	void	envinit(char **);
+ extern	Array	*makesymtab(int);
+ extern	void	freesymtab(Cell *);
++extern	int	insymtab(Cell *ap, Cell *needle);
+ extern	void	freeelem(Cell *, const char *);
+ extern	Cell	*setsymtab(const char *, const char *, double, unsigned int, Array *);
+ extern	int	hash(const char *, int);
+@@ -112,6 +115,9 @@ extern	char	*getsval(Cell *);
+ extern	char	*getpssval(Cell *);     /* for print */
+ extern	char	*tostring(const char *);
+ extern	char	*tostringN(const char *, size_t);
++extern  wchar_t towc(int *, const char *, int);
++
++
+ extern	char	*qstring(const char *, int);
+ extern	Cell	*catstr(Cell *, Cell *);
+ 
+@@ -151,6 +157,8 @@ extern	bool	is_valid_number(const char *
+ #define is_number(s, val)	is_valid_number(s, false, NULL, val)
+ 
+ extern	int	adjbuf(char **pb, int *sz, int min, int q, char **pbp, const char *what);
++extern	int	wcadjbuf(wchar_t **pb, int *sz, int min, int q, wchar_t **pbp, const char *what);
++
+ extern	void	run(Node *);
+ extern	Cell	*execute(Node *);
+ extern	Cell	*program(Node **, int);
+--- a/run.c	1640544298.000000000
++++ b/run.c	1680855408.347489482
+@@ -98,7 +98,46 @@ static Cell	tempcell	={ OCELL, CTEMP, 0,
+ 
+ Node	*curnode = NULL;	/* the node being executed, for debugging */
+ 
++static Awkfloat prev_srand, tmp_srand;
++
+ /* buffer memory management */
++int wcadjbuf(wchar_t **pbuf, int *psiz, int minlen, int quantum, wchar_t **pbptr,
++	const char *whatrtn)
++/* wchar_t version of adjbuf, handles wchar_t pointers appropriately
++ * pbuf:    address of pointer to buffer being managed
++ * psiz:    address of buffer size variable
++ * minlen:  minimum length of buffer needed
++ * quantum: buffer size quantum
++ * pbptr:   address of movable pointer into buffer, or 0 if none
++ * whatrtn: name of the calling routine if failure should cause fatal error
++ *
++ * return   0 for realloc failure, !=0 for success
++ */
++{
++	size_t elem_sz = sizeof(wchar_t);
++	if (minlen > *psiz) {
++		wchar_t *tbuf;
++		int rminlen = quantum ? minlen % quantum : 0;
++		int boff = pbptr ? *pbptr - *pbuf : 0;
++		/* round up to next multiple of quantum */
++		if (rminlen)
++			minlen += quantum - rminlen;
++		tbuf = realloc(*pbuf, minlen * elem_sz);
++		DPRINTF("wcadjbuf %s: %d %d (pbuf=%p, tbuf=%p)\n", whatrtn, *psiz, minlen, (void*)*pbuf, (void*)tbuf);
++
++		if (tbuf == NULL) {
++			if (whatrtn)
++				FATAL("out of memory in %s", whatrtn);
++			return 0;
++		}
++		*pbuf = tbuf;
++		*psiz = minlen;
++		if (pbptr)
++			*pbptr = tbuf + boff;
++	}
++	return 1;
++}
++
+ int adjbuf(char **pbuf, int *psiz, int minlen, int quantum, char **pbptr,
+ 	const char *whatrtn)
+ /* pbuf:    address of pointer to buffer being managed
+@@ -203,6 +242,7 @@ Cell *program(Node **a, int n)	/* execut
+ 	if (setjmp(env) != 0)	/* handles exit within END */
+ 		goto ex1;
+ 	if (a[2]) {		/* END */
++		donefld = 1;	/* avoid updating NF */
+ 		x = execute(a[2]);
+ 		if (isbreak(x) || isnext(x) || iscont(x))
+ 			FATAL("illegal break, continue, next or nextfile from END");
+@@ -293,6 +333,11 @@ Cell *call(Node **a, int n)	/* function
+ 		if (isarr(t)) {
+ 			if (t->csub == CCOPY) {
+ 				if (i >= ncall) {
++					/* T.misc unireghf dropped core */
++					if (insymtab(t, y)) {
++						freed = 1;
++					}
++
+ 					freesymtab(t);
+ 					t->csub = CTEMP;
+ 					tempfree(t);
+@@ -313,9 +358,9 @@ Cell *call(Node **a, int n)	/* function
+ 		}
+ 	}
+ 	tempfree(fcn);
+-	if (isexit(y) || isnext(y))
+-		return y;
+ 	if (freed == 0) {
++		if (isexit(y) || isnext(y))
++			return y;
+ 		tempfree(y);	/* don't free twice! */
+ 	}
+ 	z = frp->retval;			/* return value */
+@@ -664,7 +709,7 @@ Cell *relop(Node **a, int n)	/* a[0 < a[
+ 		j = x->fval - y->fval;
+ 		i = j<0? -1: (j>0? 1: 0);
+ 	} else {
+-		i = strcmp(getsval(x), getsval(y));
++		i = strcoll(getsval(x), getsval(y));
+ 	}
+ 	tempfree(x);
+ 	tempfree(y);
+@@ -939,9 +984,9 @@ int format(char **pbuf, int *pbufsize, c
+ 			break;
+ 		case 'a':
+ 		case 'A':
+-		case 'f':	snprintf(p, BUFSZ(p), fmt, getfval(x)); break;
+-		case 'd':	snprintf(p, BUFSZ(p), fmt, (intmax_t) getfval(x)); break;
+-		case 'u':	snprintf(p, BUFSZ(p), fmt, (uintmax_t) getfval(x)); break;
++		case 'f':	snprintf(p, BUFSZ(p), fmtcheck(fmt, "%f"), getfval(x)); break;
++		case 'd':	snprintf(p, BUFSZ(p), fmtcheck(fmt, "%jd"), (intmax_t) getfval(x)); break;
++		case 'u':	snprintf(p, BUFSZ(p), fmtcheck(fmt, "%ju"), (uintmax_t) getfval(x)); break;
+ 		case 's':
+ 			t = getsval(x);
+ 			n = strlen(t);
+@@ -949,25 +994,28 @@ int format(char **pbuf, int *pbufsize, c
+ 				n = fmtwd;
+ 			if (!adjbuf(&buf, &bufsize, 1+n+p-buf, recsize, &p, "format7"))
+ 				FATAL("huge string/format (%d chars) in printf %.30s... ran format() out of memory", n, t);
+-			snprintf(p, BUFSZ(p), fmt, t);
++			snprintf(p, BUFSZ(p), fmtcheck(fmt, "%s"), t);
+ 			break;
+ 		case 'c':
+ 			if (isnum(x)) {
+ 				if ((int)getfval(x))
+-					snprintf(p, BUFSZ(p), fmt, (int) getfval(x));
++					snprintf(p, BUFSZ(p), fmtcheck(fmt, "%c"), (int) getfval(x));
+ 				else {
+ 					*p++ = '\0'; /* explicit null byte */
+ 					*p = '\0';   /* next output will start here */
+ 				}
+ 			} else
+-				snprintf(p, BUFSZ(p), fmt, getsval(x)[0]);
++				snprintf(p, BUFSZ(p), fmtcheck(fmt, "%c"), getsval(x)[0]);
+ 			break;
+ 		default:
+ 			FATAL("can't happen: bad conversion %c in format()", flag);
+ 		}
+ 		tempfree(x);
+ 		p += strlen(p);
+-		s++;
++
++		if (*s) {
++			s++;
++		}
+ 	}
+ 	*p = '\0';
+ 	free(fmt);
+@@ -1076,10 +1124,10 @@ Cell *arith(Node **a, int n)	/* a[0] + a
+ 	case POWER:
+ 		if (j >= 0 && modf(j, &v) == 0.0)	/* pos integer exponent */
+ 			i = ipow(i, (int) j);
+-               else {
++		else {
+ 			errno = 0;
+ 			i = errcheck(pow(i, j), "pow");
+-               }
++		}
+ 		break;
+ 	default:	/* can't happen */
+ 		FATAL("illegal arithmetic operator %d", n);
+@@ -1172,10 +1220,10 @@ Cell *assign(Node **a, int n)	/* a[0] =
+ 	case POWEQ:
+ 		if (yf >= 0 && modf(yf, &v) == 0.0)	/* pos integer exponent */
+ 			xf = ipow(xf, (int) yf);
+-               else {
++		else {
+ 			errno = 0;
+ 			xf = errcheck(pow(xf, yf), "pow");
+-               }
++		}
+ 		break;
+ 	default:
+ 		FATAL("illegal assignment operator %d", n);
+@@ -1266,6 +1314,7 @@ Cell *split(Node **a, int nnn)	/* split(
+ 
+ 	y = execute(a[0]);	/* source string */
+ 	origs = s = strdup(getsval(y));
++	tempfree(y);	/* t.split2a: free now bc. it is ref'd by output array */
+ 	arg3type = ptoi(a[3]);
+ 	if (a[2] == NULL)		/* fs string */
+ 		fs = getsval(fsloc);
+@@ -1286,7 +1335,7 @@ Cell *split(Node **a, int nnn)	/* split(
+ 	ap->sval = (char *) makesymtab(NSYMTAB);
+ 
+ 	n = 0;
+-        if (arg3type == REGEXPR && strlen((char*)((fa*)a[2])->restr) == 0) {
++	if (arg3type == REGEXPR && a[2] != NULL && strlen((char*)((fa*)a[2])->restr) == 0) {
+ 		/* split(s, a, //); have to arrange that it looks like empty sep */
+ 		arg3type = 0;
+ 		fs = "";
+@@ -1386,7 +1435,6 @@ Cell *split(Node **a, int nnn)	/* split(
+ 		}
+ 	}
+ 	tempfree(ap);
+-	tempfree(y);
+ 	xfree(origs);
+ 	xfree(origfs);
+ 	x = gettemp();
+@@ -1574,6 +1622,24 @@ static char *nawk_convert(const char *s,
+ 
+ #ifdef __DJGPP__
+ static wint_t towupper(wint_t wc)
++{
++	if (wc >= 0 && wc < 256)
++		return toupper(wc & 0xFF);
++
++	return wc;
++}
++
++static wint_t towlower(wint_t wc)
++{
++	if (wc >= 0 && wc < 256)
++		return tolower(wc & 0xFF);
++
++	return wc;
++}
++#endif
++
++#ifdef __DJGPP__
++static wint_t towupper(wint_t wc)
+ {
+ 	if (wc >= 0 && wc < 256)
+ 		return toupper(wc & 0xFF);
+--- a/testdir/T.errmsg	1640544298.000000000
++++ b/testdir/T.errmsg	1680783304.099497685
+@@ -40,6 +40,9 @@ nonterminated character class
+ nonterminated character class
+ BEGIN { s = "[x"; if (1 ~ s) print "foo"}
+ 
++unknown character class: abcdef
++/[[:abcdef:]]/
++
+ syntax error in regular expression
+ BEGIN { if ("x" ~ /$^/) print "ugh" }
+ 
+--- a/tran.c	1640544298.000000000
++++ b/tran.c	1680854391.253967855
+@@ -24,6 +24,7 @@ THIS SOFTWARE.
+ 
+ #define	DEBUG
+ #include <stdio.h>
++#include <limits.h>
+ #include <math.h>
+ #include <ctype.h>
+ #include <string.h>
+@@ -180,6 +181,32 @@ Array *makesymtab(int n)	/* make a new s
+ 	return(ap);
+ }
+ 
++int insymtab(Cell *ap, Cell *needle)	/* Determines if needle is in the symbol table */
++{
++	Cell *cp;
++	Array *tp;
++	int i;
++
++	DPRINTF("insymtab %p: n=%s s=\"%s\" f=%g t=%o\n",
++		(void*)ap, ap->nval, ap->sval, ap->fval, ap->tval);
++
++	if (!isarr(ap))
++		return 0;
++
++	tp = (Array *) ap->sval;
++	if (tp == NULL)
++		return 0;
++
++	for (i = 0; i < tp->size; i++) {
++		for (cp = tp->tab[i]; cp != NULL; cp = cp->cnext) {
++			if (cp == needle) {
++				return 1;
++			}
++		}
++	}
++	return 0;
++}
++
+ void freesymtab(Cell *ap)	/* free a symbol table */
+ {
+ 	Cell *cp, *temp;
+@@ -474,7 +501,7 @@ static char *get_str_val(Cell *vp, char
+ 		else if (modf(vp->fval, &dtemp) == 0)	/* it's integral */ \
+ 			snprintf(s, sizeof (s), "%.30g", vp->fval); \
+ 		else \
+-			snprintf(s, sizeof (s), *fmt, vp->fval); \
++			snprintf(s, sizeof (s), fmtcheck(*fmt, "%g"), vp->fval); \
+ 		vp->sval = tostring(s); \
+ 		vp->tval &= ~DONTFREE; \
+ 		vp->tval |= STR; \
+@@ -538,6 +565,23 @@ char *tostring(const char *s)	/* make a
+ 	return(p);
+ }
+ 
++wchar_t towc(int* outlen, const char *s, int slen) {
++	wchar_t wc = L'\0';
++	if (*s) {
++		if ((*outlen = mbtowc(&wc, s, slen)) > 0) {
++			if (wc > UCHAR_MAX) {
++				DPRINTF("pmatch: converted wchar_t is out of uchar range: %s -> %d\n", s, wc);
++			}
++		} else {
++			FATAL("towc: multibyte conversion failure on: '%s'\n", s);
++		}
++	} else {
++		/* Technically wrong */
++		*outlen = 1;
++	}
++	return wc;
++}
++
+ char *tostringN(const char *s, size_t n)	/* make a copy of string s */
+ {
+ 	char *p;
+--- /dev/null	1680855974.109066000
++++ awkgram.y	1680853819.162949000
+@@ -0,0 +1,493 @@
++/****************************************************************
++Copyright (C) Lucent Technologies 1997
++All Rights Reserved
++
++Permission to use, copy, modify, and distribute this software and
++its documentation for any purpose and without fee is hereby
++granted, provided that the above copyright notice appear in all
++copies and that both that the copyright notice and this
++permission notice and warranty disclaimer appear in supporting
++documentation, and that the name Lucent Technologies or any of
++its entities not be used in advertising or publicity pertaining
++to distribution of the software without specific, written prior
++permission.
++
++LUCENT DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
++INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS.
++IN NO EVENT SHALL LUCENT OR ANY OF ITS ENTITIES BE LIABLE FOR ANY
++SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER
++IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
++ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
++THIS SOFTWARE.
++****************************************************************/
++
++%{
++#include <stdio.h>
++#include <string.h>
++#include "awk.h"
++
++void checkdup(Node *list, Cell *item);
++int yywrap(void) { return(1); }
++
++Node	*beginloc = 0;
++Node	*endloc = 0;
++bool	infunc	= false;	/* = true if in arglist or body of func */
++int	inloop	= 0;	/* >= 1 if in while, for, do; can't be bool, since loops can next */
++char	*curfname = 0;	/* current function name */
++Node	*arglist = 0;	/* list of args for current function */
++%}
++
++%union {
++	Node	*p;
++	Cell	*cp;
++	int	i;
++	char	*s;
++}
++
++%token	<i>	FIRSTTOKEN	/* must be first */
++%token	<p>	PROGRAM PASTAT PASTAT2 XBEGIN XEND
++%token	<i>	NL ',' '{' '(' '|' ';' '/' ')' '}' '[' ']'
++%token	<i>	ARRAY
++%token	<i>	MATCH NOTMATCH MATCHOP
++%token	<i>	FINAL DOT ALL CCL NCCL CHAR HAT DOLLAR OR STAR QUEST PLUS EMPTYRE ZERO IGNORE_PRIOR_ATOM
++%token	<i>	AND BOR APPEND EQ GE GT LE LT NE IN
++%token	<i>	ARG BLTIN BREAK CLOSE CONTINUE DELETE DO EXIT FOR FUNC
++%token	<i>	SUB GSUB IF INDEX LSUBSTR MATCHFCN NEXT NEXTFILE
++%token	<i>	ADD MINUS MULT DIVIDE MOD
++%token	<i>	ASSIGN ASGNOP ADDEQ SUBEQ MULTEQ DIVEQ MODEQ POWEQ
++%token	<i>	PRINT PRINTF SPRINTF
++%token	<p>	ELSE INTEST CONDEXPR
++%token	<i>	POSTINCR PREINCR POSTDECR PREDECR
++%token	<cp>	VAR IVAR VARNF CALL NUMBER STRING
++%token	<s>	REGEXPR
++
++%type	<p>	pas pattern ppattern plist pplist patlist prarg term re
++%type	<p>	pa_pat pa_stat pa_stats
++%type	<s>	reg_expr
++%type	<p>	simple_stmt opt_simple_stmt stmt stmtlist
++%type	<p>	var varname funcname varlist
++%type	<p>	for if else while
++%type	<i>	do st
++%type	<i>	pst opt_pst lbrace rbrace rparen comma nl opt_nl and bor
++%type	<i>	subop print
++%type	<cp>	string
++
++%right	ASGNOP
++%right	'?'
++%right	':'
++%left	BOR
++%left	AND
++%left	GETLINE
++%nonassoc APPEND EQ GE GT LE LT NE MATCHOP IN '|'
++%left	ARG BLTIN BREAK CALL CLOSE CONTINUE DELETE DO EXIT FOR FUNC
++%left	GSUB IF INDEX LSUBSTR MATCHFCN NEXT NUMBER
++%left	PRINT PRINTF RETURN SPLIT SPRINTF STRING SUB SUBSTR
++%left	REGEXPR VAR VARNF IVAR WHILE '('
++%left	CAT
++%left	'+' '-'
++%left	'*' '/' '%'
++%left	NOT UMINUS UPLUS
++%right	POWER
++%right	DECR INCR
++%left	INDIRECT
++%token	LASTTOKEN	/* must be last */
++
++%%
++
++program:
++	  pas	{ if (errorflag==0)
++			winner = (Node *)stat3(PROGRAM, beginloc, $1, endloc); }
++	| error	{ yyclearin; bracecheck(); SYNTAX("bailing out"); }
++	;
++
++and:
++	  AND | and NL
++	;
++
++bor:
++	  BOR | bor NL
++	;
++
++comma:
++	  ',' | comma NL
++	;
++
++do:
++	  DO | do NL
++	;
++
++else:
++	  ELSE | else NL
++	;
++
++for:
++	  FOR '(' opt_simple_stmt ';' opt_nl pattern ';' opt_nl opt_simple_stmt rparen {inloop++;} stmt
++		{ --inloop; $$ = stat4(FOR, $3, notnull($6), $9, $12); }
++	| FOR '(' opt_simple_stmt ';'  ';' opt_nl opt_simple_stmt rparen {inloop++;} stmt
++		{ --inloop; $$ = stat4(FOR, $3, NIL, $7, $10); }
++	| FOR '(' varname IN varname rparen {inloop++;} stmt
++		{ --inloop; $$ = stat3(IN, $3, makearr($5), $8); }
++	;
++
++funcname:
++	  VAR	{ setfname($1); }
++	| CALL	{ setfname($1); }
++	;
++
++if:
++	  IF '(' pattern rparen		{ $$ = notnull($3); }
++	;
++
++lbrace:
++	  '{' | lbrace NL
++	;
++
++nl:
++	  NL | nl NL
++	;
++
++opt_nl:
++	  /* empty */	{ $$ = 0; }
++	| nl
++	;
++
++opt_pst:
++	  /* empty */	{ $$ = 0; }
++	| pst
++	;
++
++
++opt_simple_stmt:
++	  /* empty */			{ $$ = 0; }
++	| simple_stmt
++	;
++
++pas:
++	  opt_pst			{ $$ = 0; }
++	| opt_pst pa_stats opt_pst	{ $$ = $2; }
++	;
++
++pa_pat:
++	  pattern	{ $$ = notnull($1); }
++	;
++
++pa_stat:
++	  pa_pat			{ $$ = stat2(PASTAT, $1, stat2(PRINT, rectonode(), NIL)); }
++	| pa_pat lbrace stmtlist '}'	{ $$ = stat2(PASTAT, $1, $3); }
++	| pa_pat ',' opt_nl pa_pat		{ $$ = pa2stat($1, $4, stat2(PRINT, rectonode(), NIL)); }
++	| pa_pat ',' opt_nl pa_pat lbrace stmtlist '}'	{ $$ = pa2stat($1, $4, $6); }
++	| lbrace stmtlist '}'		{ $$ = stat2(PASTAT, NIL, $2); }
++	| XBEGIN lbrace stmtlist '}'
++		{ beginloc = linkum(beginloc, $3); $$ = 0; }
++	| XEND lbrace stmtlist '}'
++		{ endloc = linkum(endloc, $3); $$ = 0; }
++	| FUNC funcname '(' varlist rparen {infunc = true;} lbrace stmtlist '}'
++		{ infunc = false; curfname=0; defn((Cell *)$2, $4, $8); $$ = 0; }
++	;
++
++pa_stats:
++	  pa_stat
++	| pa_stats opt_pst pa_stat	{ $$ = linkum($1, $3); }
++	;
++
++patlist:
++	  pattern
++	| patlist comma pattern		{ $$ = linkum($1, $3); }
++	;
++
++ppattern:
++	  var ASGNOP ppattern		{ $$ = op2($2, $1, $3); }
++	| ppattern '?' ppattern ':' ppattern %prec '?'
++	 	{ $$ = op3(CONDEXPR, notnull($1), $3, $5); }
++	| ppattern bor ppattern %prec BOR
++		{ $$ = op2(BOR, notnull($1), notnull($3)); }
++	| ppattern and ppattern %prec AND
++		{ $$ = op2(AND, notnull($1), notnull($3)); }
++	| ppattern MATCHOP reg_expr	{ $$ = op3($2, NIL, $1, (Node*)makedfa($3, 0)); }
++	| ppattern MATCHOP ppattern
++		{ if (constnode($3))
++			$$ = op3($2, NIL, $1, (Node*)makedfa(strnode($3), 0));
++		  else
++			$$ = op3($2, (Node *)1, $1, $3); }
++	| ppattern IN varname		{ $$ = op2(INTEST, $1, makearr($3)); }
++	| '(' plist ')' IN varname	{ $$ = op2(INTEST, $2, makearr($5)); }
++	| ppattern term %prec CAT	{ $$ = op2(CAT, $1, $2); }
++	| re
++	| term
++	;
++
++pattern:
++	  var ASGNOP pattern		{ $$ = op2($2, $1, $3); }
++	| pattern '?' pattern ':' pattern %prec '?'
++	 	{ $$ = op3(CONDEXPR, notnull($1), $3, $5); }
++	| pattern bor pattern %prec BOR
++		{ $$ = op2(BOR, notnull($1), notnull($3)); }
++	| pattern and pattern %prec AND
++		{ $$ = op2(AND, notnull($1), notnull($3)); }
++	| pattern EQ pattern		{ $$ = op2($2, $1, $3); }
++	| pattern GE pattern		{ $$ = op2($2, $1, $3); }
++	| pattern GT pattern		{ $$ = op2($2, $1, $3); }
++	| pattern LE pattern		{ $$ = op2($2, $1, $3); }
++	| pattern LT pattern		{ $$ = op2($2, $1, $3); }
++	| pattern NE pattern		{ $$ = op2($2, $1, $3); }
++	| pattern MATCHOP reg_expr	{ $$ = op3($2, NIL, $1, (Node*)makedfa($3, 0)); }
++	| pattern MATCHOP pattern
++		{ if (constnode($3))
++			$$ = op3($2, NIL, $1, (Node*)makedfa(strnode($3), 0));
++		  else
++			$$ = op3($2, (Node *)1, $1, $3); }
++	| pattern IN varname		{ $$ = op2(INTEST, $1, makearr($3)); }
++	| '(' plist ')' IN varname	{ $$ = op2(INTEST, $2, makearr($5)); }
++	| pattern '|' GETLINE var	{
++			if (safe) SYNTAX("cmd | getline is unsafe");
++			else $$ = op3(GETLINE, $4, itonp($2), $1); }
++	| pattern '|' GETLINE		{
++			if (safe) SYNTAX("cmd | getline is unsafe");
++			else $$ = op3(GETLINE, (Node*)0, itonp($2), $1); }
++	| pattern term %prec CAT	{ $$ = op2(CAT, $1, $2); }
++	| re
++	| term
++	;
++
++plist:
++	  pattern comma pattern		{ $$ = linkum($1, $3); }
++	| plist comma pattern		{ $$ = linkum($1, $3); }
++	;
++
++pplist:
++	  ppattern
++	| pplist comma ppattern		{ $$ = linkum($1, $3); }
++	;
++
++prarg:
++	  /* empty */			{ $$ = rectonode(); }
++	| pplist
++	| '(' plist ')'			{ $$ = $2; }
++	;
++
++print:
++	  PRINT | PRINTF
++	;
++
++pst:
++	  NL | ';' | pst NL | pst ';'
++	;
++
++rbrace:
++	  '}' | rbrace NL
++	;
++
++re:
++	   reg_expr
++		{ $$ = op3(MATCH, NIL, rectonode(), (Node*)makedfa($1, 0)); }
++	| NOT re	{ $$ = op1(NOT, notnull($2)); }
++	;
++
++reg_expr:
++	  '/' {startreg();} REGEXPR '/'		{ $$ = $3; }
++	;
++
++rparen:
++	  ')' | rparen NL
++	;
++
++simple_stmt:
++	  print prarg '|' term		{
++			if (safe) SYNTAX("print | is unsafe");
++			else $$ = stat3($1, $2, itonp($3), $4); }
++	| print prarg APPEND term	{
++			if (safe) SYNTAX("print >> is unsafe");
++			else $$ = stat3($1, $2, itonp($3), $4); }
++	| print prarg GT term		{
++			if (safe) SYNTAX("print > is unsafe");
++			else $$ = stat3($1, $2, itonp($3), $4); }
++	| print prarg			{ $$ = stat3($1, $2, NIL, NIL); }
++	| DELETE varname '[' patlist ']' { $$ = stat2(DELETE, makearr($2), $4); }
++	| DELETE varname		 { $$ = stat2(DELETE, makearr($2), 0); }
++	| pattern			{ $$ = exptostat($1); }
++	| error				{ yyclearin; SYNTAX("illegal statement"); }
++	;
++
++st:
++	  nl
++	| ';' opt_nl
++	;
++
++stmt:
++	  BREAK st		{ if (!inloop) SYNTAX("break illegal outside of loops");
++				  $$ = stat1(BREAK, NIL); }
++	| CONTINUE st		{  if (!inloop) SYNTAX("continue illegal outside of loops");
++				  $$ = stat1(CONTINUE, NIL); }
++	| do {inloop++;} stmt {--inloop;} WHILE '(' pattern ')' st
++		{ $$ = stat2(DO, $3, notnull($7)); }
++	| EXIT pattern st	{ $$ = stat1(EXIT, $2); }
++	| EXIT st		{ $$ = stat1(EXIT, NIL); }
++	| for
++	| if stmt else stmt	{ $$ = stat3(IF, $1, $2, $4); }
++	| if stmt		{ $$ = stat3(IF, $1, $2, NIL); }
++	| lbrace stmtlist rbrace { $$ = $2; }
++	| NEXT st	{ if (infunc)
++				SYNTAX("next is illegal inside a function");
++			  $$ = stat1(NEXT, NIL); }
++	| NEXTFILE st	{ if (infunc)
++				SYNTAX("nextfile is illegal inside a function");
++			  $$ = stat1(NEXTFILE, NIL); }
++	| RETURN pattern st	{ $$ = stat1(RETURN, $2); }
++	| RETURN st		{ $$ = stat1(RETURN, NIL); }
++	| simple_stmt st
++	| while {inloop++;} stmt	{ --inloop; $$ = stat2(WHILE, $1, $3); }
++	| ';' opt_nl		{ $$ = 0; }
++	;
++
++stmtlist:
++	  stmt
++	| stmtlist stmt		{ $$ = linkum($1, $2); }
++	;
++
++subop:
++	  SUB | GSUB
++	;
++
++string:
++	  STRING
++	| string STRING		{ $$ = catstr($1, $2); }
++	;
++
++term:
++ 	  term '/' ASGNOP term		{ $$ = op2(DIVEQ, $1, $4); }
++ 	| term '+' term			{ $$ = op2(ADD, $1, $3); }
++	| term '-' term			{ $$ = op2(MINUS, $1, $3); }
++	| term '*' term			{ $$ = op2(MULT, $1, $3); }
++	| term '/' term			{ $$ = op2(DIVIDE, $1, $3); }
++	| re '/' term			{ $$ = op2(DIVIDE, $1, $3); }
++	| term '%' term			{ $$ = op2(MOD, $1, $3); }
++	| term POWER term		{ $$ = op2(POWER, $1, $3); }
++	| '-' term %prec UMINUS		{ $$ = op1(UMINUS, $2); }
++	| '+' term %prec UMINUS		{ $$ = op1(UPLUS, $2); }
++	| NOT term %prec UMINUS		{ $$ = op1(NOT, notnull($2)); }
++	| BLTIN '(' ')'			{ $$ = op2(BLTIN, itonp($1), rectonode()); }
++	| BLTIN '(' patlist ')'		{ $$ = op2(BLTIN, itonp($1), $3); }
++	| BLTIN				{ $$ = op2(BLTIN, itonp($1), rectonode()); }
++	| CALL '(' ')'			{ $$ = op2(CALL, celltonode($1,CVAR), NIL); }
++	| CALL '(' patlist ')'		{ $$ = op2(CALL, celltonode($1,CVAR), $3); }
++	| CLOSE term			{ $$ = op1(CLOSE, $2); }
++	| DECR var			{ $$ = op1(PREDECR, $2); }
++	| INCR var			{ $$ = op1(PREINCR, $2); }
++	| var DECR			{ $$ = op1(POSTDECR, $1); }
++	| var INCR			{ $$ = op1(POSTINCR, $1); }
++	| GETLINE var LT term		{ $$ = op3(GETLINE, $2, itonp($3), $4); }
++	| GETLINE LT term		{ $$ = op3(GETLINE, NIL, itonp($2), $3); }
++	| GETLINE var			{ $$ = op3(GETLINE, $2, NIL, NIL); }
++	| GETLINE			{ $$ = op3(GETLINE, NIL, NIL, NIL); }
++	| INDEX '(' pattern comma pattern ')'
++		{ $$ = op2(INDEX, $3, $5); }
++	| INDEX '(' pattern comma reg_expr ')'
++		{ SYNTAX("index() doesn't permit regular expressions");
++		  $$ = op2(INDEX, $3, (Node*)$5); }
++	| '(' pattern ')'		{ $$ = $2; }
++	| MATCHFCN '(' pattern comma reg_expr ')'
++		{ $$ = op3(MATCHFCN, NIL, $3, (Node*)makedfa($5, 1)); }
++	| MATCHFCN '(' pattern comma pattern ')'
++		{ if (constnode($5))
++			$$ = op3(MATCHFCN, NIL, $3, (Node*)makedfa(strnode($5), 1));
++		  else
++			$$ = op3(MATCHFCN, (Node *)1, $3, $5); }
++	| NUMBER			{ $$ = celltonode($1, CCON); }
++	| SPLIT '(' pattern comma varname comma pattern ')'     /* string */
++		{ $$ = op4(SPLIT, $3, makearr($5), $7, (Node*)STRING); }
++	| SPLIT '(' pattern comma varname comma reg_expr ')'    /* const /regexp/ */
++		{ $$ = op4(SPLIT, $3, makearr($5), (Node*)makedfa($7, 1), (Node *)REGEXPR); }
++	| SPLIT '(' pattern comma varname ')'
++		{ $$ = op4(SPLIT, $3, makearr($5), NIL, (Node*)STRING); }  /* default */
++	| SPRINTF '(' patlist ')'	{ $$ = op1($1, $3); }
++	| string	 		{ $$ = celltonode($1, CCON); }
++	| subop '(' reg_expr comma pattern ')'
++		{ $$ = op4($1, NIL, (Node*)makedfa($3, 1), $5, rectonode()); }
++	| subop '(' pattern comma pattern ')'
++		{ if (constnode($3))
++			$$ = op4($1, NIL, (Node*)makedfa(strnode($3), 1), $5, rectonode());
++		  else
++			$$ = op4($1, (Node *)1, $3, $5, rectonode()); }
++	| subop '(' reg_expr comma pattern comma var ')'
++		{ $$ = op4($1, NIL, (Node*)makedfa($3, 1), $5, $7); }
++	| subop '(' pattern comma pattern comma var ')'
++		{ if (constnode($3))
++			$$ = op4($1, NIL, (Node*)makedfa(strnode($3), 1), $5, $7);
++		  else
++			$$ = op4($1, (Node *)1, $3, $5, $7); }
++	| SUBSTR '(' pattern comma pattern comma pattern ')'
++		{ $$ = op3(SUBSTR, $3, $5, $7); }
++	| SUBSTR '(' pattern comma pattern ')'
++		{ $$ = op3(SUBSTR, $3, $5, NIL); }
++	| var
++	;
++
++var:
++	  varname
++	| varname '[' patlist ']'	{ $$ = op2(ARRAY, makearr($1), $3); }
++	| IVAR				{ $$ = op1(INDIRECT, celltonode($1, CVAR)); }
++	| INDIRECT term	 		{ $$ = op1(INDIRECT, $2); }
++	;
++
++varlist:
++	  /* nothing */		{ arglist = $$ = 0; }
++	| VAR			{ arglist = $$ = celltonode($1,CVAR); }
++	| varlist comma VAR	{
++			checkdup($1, $3);
++			arglist = $$ = linkum($1,celltonode($3,CVAR)); }
++	;
++
++varname:
++	  VAR			{ $$ = celltonode($1, CVAR); }
++	| ARG 			{ $$ = op1(ARG, itonp($1)); }
++	| VARNF			{ $$ = op1(VARNF, (Node *) $1); }
++	;
++
++
++while:
++	  WHILE '(' pattern rparen	{ $$ = notnull($3); }
++	;
++
++%%
++
++void setfname(Cell *p)
++{
++	if (isarr(p))
++		SYNTAX("%s is an array, not a function", p->nval);
++	else if (isfcn(p))
++		SYNTAX("you can't define function %s more than once", p->nval);
++	curfname = p->nval;
++}
++
++int constnode(Node *p)
++{
++	return isvalue(p) && ((Cell *) (p->narg[0]))->csub == CCON;
++}
++
++char *strnode(Node *p)
++{
++	return ((Cell *)(p->narg[0]))->sval;
++}
++
++Node *notnull(Node *n)
++{
++	switch (n->nobj) {
++	case LE: case LT: case EQ: case NE: case GT: case GE:
++	case BOR: case AND: case NOT:
++		return n;
++	default:
++		return op2(NE, n, nullnode);
++	}
++}
++
++void checkdup(Node *vl, Cell *cp)	/* check if name already in list */
++{
++	char *s = cp->nval;
++	for ( ; vl; vl = vl->nnext) {
++		if (strcmp(s, ((Cell *)(vl->narg[0]))->nval) == 0) {
++			SYNTAX("duplicate argument %s", s);
++			break;
++		}
++	}
++}

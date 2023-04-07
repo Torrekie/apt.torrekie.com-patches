@@ -1,0 +1,73 @@
+--- a/libraries/liblmdb/Doxyfile	1675881697.000000000
++++ b/libraries/liblmdb/Doxyfile	1680770444.125299429
+@@ -839,7 +839,7 @@ HTML_COLORSTYLE_GAMMA  = 80
+ # page will contain the date and time when the page was generated. Setting
+ # this to NO can help when comparing the output of multiple runs.
+ 
+-HTML_TIMESTAMP         = YES
++HTML_TIMESTAMP         = NO
+ 
+ # If the HTML_ALIGN_MEMBERS tag is set to YES, the members of classes,
+ # files or namespaces will be aligned in HTML using tables. If set to
+--- a/libraries/liblmdb/Makefile	1675881697.000000000
++++ b/libraries/liblmdb/Makefile	1680770439.267718021
+@@ -27,10 +27,12 @@ CFLAGS	= $(THREADS) $(OPT) $(W) $(XCFLAG
+ LDLIBS	=
+ SOLIBS	=
+ SOEXT	= .so
+-prefix	= /usr/local
++SOVER   = 0
++prefix	= /usr
+ exec_prefix = $(prefix)
+ bindir = $(exec_prefix)/bin
+ libdir = $(exec_prefix)/lib
++SOEXT := .dylib
+ includedir = $(prefix)/include
+ datarootdir = $(prefix)/share
+ mandir = $(datarootdir)/man
+@@ -38,7 +40,7 @@ mandir = $(datarootdir)/man
+ ########################################################################
+ 
+ IHDRS	= lmdb.h
+-ILIBS	= liblmdb.a liblmdb$(SOEXT)
++ILIBS	= liblmdb.a liblmdb$(SOEXT) liblmdb.$(SOVER)$(SOEXT) liblmdb.$(SOVER).0.0$(SOEXT)
+ IPROGS	= mdb_stat mdb_copy mdb_dump mdb_load
+ IDOCS	= mdb_stat.1 mdb_copy.1 mdb_dump.1 mdb_load.1
+ PROGS	= $(IPROGS) mtest mtest2 mtest3 mtest4 mtest5
+@@ -49,13 +51,13 @@ install: $(ILIBS) $(IPROGS) $(IHDRS)
+ 	mkdir -p $(DESTDIR)$(libdir)
+ 	mkdir -p $(DESTDIR)$(includedir)
+ 	mkdir -p $(DESTDIR)$(mandir)/man1
+-	for f in $(IPROGS); do cp $$f $(DESTDIR)$(bindir); done
+-	for f in $(ILIBS); do cp $$f $(DESTDIR)$(libdir); done
+-	for f in $(IHDRS); do cp $$f $(DESTDIR)$(includedir); done
+-	for f in $(IDOCS); do cp $$f $(DESTDIR)$(mandir)/man1; done
++	for f in $(IPROGS); do cp -pP $$f $(DESTDIR)$(bindir); done
++	for f in $(ILIBS); do cp -pP $$f $(DESTDIR)$(libdir); done
++	for f in $(IHDRS); do cp -pP $$f $(DESTDIR)$(includedir); done
++	for f in $(IDOCS); do cp -pP $$f $(DESTDIR)$(mandir)/man1; done
+ 
+ clean:
+-	rm -rf $(PROGS) *.[ao] *.[ls]o *~ testdb
++	rm -rf $(PROGS) *.dylib *.[ao] *.[ls]o *.[ls]o.* *~ testdb
+ 
+ test:	all
+ 	rm -rf testdb && mkdir testdb
+@@ -64,9 +66,14 @@ test:	all
+ liblmdb.a:	mdb.o midl.o
+ 	$(AR) rs $@ mdb.o midl.o
+ 
+-liblmdb$(SOEXT):	mdb.lo midl.lo
+-#	$(CC) $(LDFLAGS) -pthread -shared -Wl,-Bsymbolic -o $@ mdb.o midl.o $(SOLIBS)
+-	$(CC) $(LDFLAGS) -pthread -shared -o $@ mdb.lo midl.lo $(SOLIBS)
++liblmdb.$(SOVER).0.0$(SOEXT):	mdb.lo midl.lo
++	$(CC) $(LDFLAGS) -fPIC -Wl,-install_name,$(libdir)/liblmdb.$(SOVER)$(SOEXT) -pthread -shared -o $@ mdb.lo midl.lo $(SOLIBS)
++
++liblmdb.$(SOVER)$(SOEXT):	liblmdb.$(SOVER).0.0$(SOEXT)
++	ln -sf liblmdb.$(SOVER).0.0$(SOEXT) liblmdb.$(SOVER)$(SOEXT)
++
++liblmdb$(SOEXT):	liblmdb.$(SOVER)$(SOEXT)
++	ln -sf liblmdb.$(SOVER)$(SOEXT) liblmdb$(SOEXT)
+ 
+ mdb_stat: mdb_stat.o liblmdb.a
+ mdb_copy: mdb_copy.o liblmdb.a

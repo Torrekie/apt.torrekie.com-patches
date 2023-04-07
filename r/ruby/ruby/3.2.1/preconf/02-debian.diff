@@ -1,0 +1,532 @@
+--- a/configure.ac	1675828940.000000000
++++ b/configure.ac	1679042813.011634342
+@@ -2596,6 +2596,12 @@ AS_CASE([$coroutine_type], [yes|''], [
+         [powerpc64-darwin*|ppc64-darwin*], [
+             coroutine_type=ppc64
+         ],
++        [x86_64-linux-gnux32], [
++            coroutine_type=ucontext
++        ],
++        [x86_64-linux-gnux32], [
++            coroutine_type=ucontext
++        ],
+         [x*64-linux*], [
+             AS_CASE(["$ac_cv_sizeof_voidp"],
+                 [8], [ coroutine_type=amd64 ],
+--- a/defs/gmake.mk	1675828940.000000000
++++ b/defs/gmake.mk	1679043089.729218718
+@@ -295,7 +295,7 @@ bundled-gem-gemfile = $(srcdir)/gems/$(1
+ bundled-gem-srcdir = $(srcdir)/gems/src/$(1)
+ bundled-gem-extracted = $(srcdir)/.bundle/gems/$(1)-$(2)
+ 
+-update-gems: | $(patsubst %,$(srcdir)/gems/%.gem,$(bundled-gems))
++update-gems:
+ update-gems: | $(call foreach-bundled-gems-rev,bundled-gem-gemfile)
+ update-gems: | $(call foreach-bundled-gems-rev,bundled-gem-srcdir)
+ 
+--- a/ext/bigdecimal/bigdecimal.gemspec	1675828940.000000000
++++ b/ext/bigdecimal/bigdecimal.gemspec	1679042558.817091475
+@@ -4,6 +4,7 @@ Gem::Specification.new do |s|
+   s.name          = "bigdecimal"
+   s.version       = "3.1.3"
+   s.authors       = ["Kenta Murata", "Zachary Scott", "Shigeo Kobayashi"]
++  s.date          = RUBY_RELEASE_DATE
+   s.email         = ["mrkn@mrkn.jp"]
+ 
+   s.summary       = "Arbitrary-precision decimal floating-point number library."
+--- a/ext/fiddle/fiddle.gemspec	1675828940.000000000
++++ b/ext/fiddle/fiddle.gemspec	1679042558.817699426
+@@ -8,6 +8,7 @@ end
+ Gem::Specification.new do |spec|
+   spec.name          = "fiddle"
+   spec.version       = version_module::Fiddle::VERSION
++  spec.date          = RUBY_RELEASE_DATE
+   spec.authors       = ["Aaron Patterson", "SHIBATA Hiroshi"]
+   spec.email         = ["aaron@tenderlovemaking.com", "hsbt@ruby-lang.org"]
+ 
+--- a/ext/io/console/io-console.gemspec	1675828940.000000000
++++ b/ext/io/console/io-console.gemspec	1679042558.818170713
+@@ -4,6 +4,7 @@ _VERSION = "0.6.0"
+ Gem::Specification.new do |s|
+   s.name = "io-console"
+   s.version = _VERSION
++  s.date = RUBY_RELEASE_DATE
+   s.summary = "Console interface"
+   s.email = "nobu@ruby-lang.org"
+   s.description = "add console capabilities to IO instances."
+--- a/ext/openssl/History.md	1675828940.000000000
++++ b/ext/openssl/History.md	1679042821.757200794
+@@ -195,6 +195,18 @@ Version 2.2.2
+ Merged changes in 2.1.4.
+ 
+ 
++Version 2.2.2
++=============
++
++Merged changes in 2.1.4.
++
++
++Version 2.2.2
++=============
++
++Merged changes in 2.1.4.
++
++
+ Version 2.2.1
+ =============
+ 
+@@ -290,6 +302,26 @@ Notable changes
+ 
+ 
+ Version 2.1.4
++=============
++
++Bug fixes
++---------
++
++* Do not use pkg-config if --with-openssl-dir option is specified.
++ [[GitHub #486]](https://github.com/ruby/openssl/pull/486)
++
++
++Version 2.1.4
++=============
++
++Bug fixes
++---------
++
++* Do not use pkg-config if --with-openssl-dir option is specified.
++ [[GitHub #486]](https://github.com/ruby/openssl/pull/486)
++
++
++Version 2.1.4
+ =============
+ 
+ Bug fixes
+--- a/ext/socket/option.c	1675828940.000000000
++++ b/ext/socket/option.c	1679042558.944502477
+@@ -10,6 +10,7 @@ VALUE rb_cSockOpt;
+ #if defined(__linux__) || \
+     defined(__GNU__) /* GNU/Hurd */ || \
+     defined(__FreeBSD__) || \
++    defined(__FreeBSD_kernel__) || \
+     defined(__DragonFly__) || \
+     defined(__APPLE__) || \
+     defined(_WIN32) || \
+--- a/ext/socket/raddrinfo.c	1675828940.000000000
++++ b/ext/socket/raddrinfo.c	1679042558.945849212
+@@ -1722,10 +1722,21 @@ addrinfo_mload(VALUE self, VALUE ary)
+         INIT_SOCKADDR_UN(&uaddr, sizeof(struct sockaddr_un));
+ 
+         StringValue(v);
++#ifdef __FreeBSD_kernel__
++       /* sys/un.h defines struct sockaddr_un as:
++          char sun_path[104];
++          char __sun_user_compat[4];
++       */
++        if (sizeof(uaddr.sun_path) + 4 < (size_t)RSTRING_LEN(v))
++            rb_raise(rb_eSocket,
++                "too long AF_UNIX path (%"PRIuSIZE" bytes given but %"PRIuSIZE" bytes max)",
++                (size_t)RSTRING_LEN(v), sizeof(uaddr.sun_path) + 4);
++#else
+         if (sizeof(uaddr.sun_path) < (size_t)RSTRING_LEN(v))
+             rb_raise(rb_eSocket,
+                 "too long AF_UNIX path (%"PRIuSIZE" bytes given but %"PRIuSIZE" bytes max)",
+                 (size_t)RSTRING_LEN(v), sizeof(uaddr.sun_path));
++#endif
+         memcpy(uaddr.sun_path, RSTRING_PTR(v), RSTRING_LEN(v));
+         len = (socklen_t)sizeof(uaddr);
+         memcpy(&ss, &uaddr, len);
+@@ -2369,10 +2380,21 @@ addrinfo_unix_path(VALUE self)
+     if (n < 0)
+         rb_raise(rb_eSocket, "too short AF_UNIX address: %"PRIuSIZE" bytes given for minimum %"PRIuSIZE" bytes.",
+                  (size_t)rai->sockaddr_len, offsetof(struct sockaddr_un, sun_path));
++#ifdef __FreeBSD_kernel__
++       /* sys/un.h defines struct sockaddr_un as:
++          char sun_path[104];
++          char __sun_user_compat[4];
++       */
++    if ((long)sizeof(addr->sun_path) + 4 < n)
++        rb_raise(rb_eSocket,
++            "too long AF_UNIX path (%"PRIuSIZE" bytes given but %"PRIuSIZE" bytes max)",
++            (size_t)n, sizeof(addr->sun_path) + 4);
++#else
+     if ((long)sizeof(addr->sun_path) < n)
+         rb_raise(rb_eSocket,
+             "too long AF_UNIX path (%"PRIuSIZE" bytes given but %"PRIuSIZE" bytes max)",
+             (size_t)n, sizeof(addr->sun_path));
++#endif
+     return rb_str_new(addr->sun_path, n);
+ }
+ #endif
+--- a/io.c	1675828940.000000000
++++ b/io.c	1679042985.500708005
+@@ -2207,7 +2207,11 @@ io_writev(int argc, const VALUE *argv, V
+ 
+     for (i = 0; i < argc; i += cnt) {
+ #ifdef HAVE_WRITEV
+-        if ((fptr->mode & (FMODE_SYNC|FMODE_TTY)) && iovcnt_ok(cnt = argc - i)) {
++        if ((fptr->mode & (FMODE_SYNC|FMODE_TTY))
++# ifdef IOV_MAX
++		&& iovcnt_ok(cnt = argc - i)
++# endif
++		) {
+             n = io_fwritev(cnt, &argv[i], fptr);
+         }
+         else
+--- a/lib/cgi/cookie.rb	1675828940.000000000
++++ b/lib/cgi/cookie.rb	1679042819.220735084
+@@ -44,6 +44,14 @@ class CGI
+     PATH_VALUE_RE = %r"\A[[ -~]&&[^;]]*\z"
+     DOMAIN_VALUE_RE = %r"\A\.?(?<label>(?!-)[-A-Za-z0-9]+(?<!-))(?:\.\g<label>)*\z"
+ 
++    TOKEN_RE = %r"\A[[!-~]&&[^()<>@,;:\\\"/?=\[\]{}]]+\z"
++    PATH_VALUE_RE = %r"\A[[ -~]&&[^;]]*\z"
++    DOMAIN_VALUE_RE = %r"\A(?<label>(?!-)[-A-Za-z0-9]+(?<!-))(?:\.\g<label>)*\z"
++
++    TOKEN_RE = %r"\A[[!-~]&&[^()<>@,;:\\\"/?=\[\]{}]]+\z"
++    PATH_VALUE_RE = %r"\A[[ -~]&&[^;]]*\z"
++    DOMAIN_VALUE_RE = %r"\A(?<label>(?!-)[-A-Za-z0-9]+(?<!-))(?:\.\g<label>)*\z"
++
+     # Create a new CGI::Cookie object.
+     #
+     # :call-seq:
+--- a/lib/ipaddr.gemspec	1675828940.000000000
++++ b/lib/ipaddr.gemspec	1679042558.818638207
+@@ -18,6 +18,7 @@ end
+ Gem::Specification.new do |spec|
+   spec.name          = "ipaddr"
+   spec.version       = version
++  spec.date          = RUBY_RELEASE_DATE
+   spec.authors       = ["Akinori MUSHA", "Hajimu UMEMOTO"]
+   spec.email         = ["knu@idaemons.org", "ume@mahoroba.org"]
+ 
+--- a/lib/mkmf.rb	1675828940.000000000
++++ b/lib/mkmf.rb	1679042558.640225439
+@@ -2362,7 +2362,7 @@ LOCAL_LIBS = #{$LOCAL_LIBS}
+ LIBS = #{$LIBRUBYARG} #{$libs} #{$LIBS}
+ ORIG_SRCS = #{orig_srcs.collect(&File.method(:basename)).join(' ')}
+ SRCS = $(ORIG_SRCS) #{(srcs - orig_srcs).collect(&File.method(:basename)).join(' ')}
+-OBJS = #{$objs.join(" ")}
++OBJS = #{$objs.sort.join(" ")}
+ HDRS = #{hdrs.map{|h| '$(srcdir)/' + File.basename(h)}.join(' ')}
+ LOCAL_HDRS = #{$headers.join(' ')}
+ TARGET = #{target}
+--- a/lib/rdoc/generator/json_index.rb	1675828940.000000000
++++ b/lib/rdoc/generator/json_index.rb	1679042558.580594017
+@@ -178,7 +178,7 @@ class RDoc::Generator::JsonIndex
+     debug_msg "Writing gzipped search index to %s" % outfile
+ 
+     Zlib::GzipWriter.open(outfile) do |gz|
+-      gz.mtime = File.mtime(search_index_file)
++      gz.mtime = -1
+       gz.orig_name = search_index_file.basename.to_s
+       gz.write search_index
+       gz.close
+@@ -196,7 +196,7 @@ class RDoc::Generator::JsonIndex
+         debug_msg "Writing gzipped file to %s" % outfile
+ 
+         Zlib::GzipWriter.open(outfile) do |gz|
+-          gz.mtime = File.mtime(dest)
++          gz.mtime = -1
+           gz.orig_name = dest.basename.to_s
+           gz.write data
+           gz.close
+--- a/lib/rdoc/rdoc.gemspec	1675828940.000000000
++++ b/lib/rdoc/rdoc.gemspec	1679042558.819173743
+@@ -7,6 +7,7 @@ end
+ 
+ Gem::Specification.new do |s|
+   s.name = "rdoc"
++  s.date = RUBY_RELEASE_DATE
+   s.version = RDoc::VERSION
+ 
+   s.authors = [
+--- a/lib/rubygems/specification.rb	1675828940.000000000
++++ b/lib/rubygems/specification.rb	1679042558.700269272
+@@ -1742,7 +1742,9 @@ class Gem::Specification < Gem::BasicSpe
+         raise(Gem::InvalidSpecificationException,
+               "invalid date format in specification: #{date.inspect}")
+       end
+-    when Time, DateLike then
++    when Time then
++      Time.utc(date.utc.year, date.utc.month, date.utc.day)
++    when DateLike then
+       Time.utc(date.year, date.month, date.day)
+     else
+       TODAY
+--- a/test/cgi/test_cgi_cookie.rb	1675828940.000000000
++++ b/test/cgi/test_cgi_cookie.rb	1679042820.449940332
+@@ -81,6 +81,42 @@ class CGICookieTest < Test::Unit::TestCa
+   end
+ 
+ 
++  def test_cgi_cookie_new_with_domain
++    h = {'name'=>'name1', 'value'=>'value1'}
++    cookie = CGI::Cookie.new('domain'=>'a.example.com', **h)
++    assert_equal('a.example.com', cookie.domain)
++
++    cookie = CGI::Cookie.new('domain'=>'1.example.com', **h)
++    assert_equal('1.example.com', cookie.domain, 'enhanced by RFC 1123')
++
++    assert_raise(ArgumentError) {
++      CGI::Cookie.new('domain'=>'-a.example.com', **h)
++    }
++
++    assert_raise(ArgumentError) {
++      CGI::Cookie.new('domain'=>'a-.example.com', **h)
++    }
++  end
++
++
++  def test_cgi_cookie_new_with_domain
++    h = {'name'=>'name1', 'value'=>'value1'}
++    cookie = CGI::Cookie.new('domain'=>'a.example.com', **h)
++    assert_equal('a.example.com', cookie.domain)
++
++    cookie = CGI::Cookie.new('domain'=>'1.example.com', **h)
++    assert_equal('1.example.com', cookie.domain, 'enhanced by RFC 1123')
++
++    assert_raise(ArgumentError) {
++      CGI::Cookie.new('domain'=>'-a.example.com', **h)
++    }
++
++    assert_raise(ArgumentError) {
++      CGI::Cookie.new('domain'=>'a-.example.com', **h)
++    }
++  end
++
++
+   def test_cgi_cookie_scriptname
+     cookie = CGI::Cookie.new('name1', 'value1')
+     assert_equal('', cookie.path)
+@@ -138,6 +174,134 @@ class CGICookieTest < Test::Unit::TestCa
+     assert_equal(['A', 'B', 'C'], cookie.collect{|e| e.upcase})
+   end
+ 
++  def test_cgi_cookie_domain_injection_into_name
++    name = "a=b; domain=example.com;"
++    path = "/"
++    domain = "example.jp"
++    assert_raise(ArgumentError) do
++      CGI::Cookie.new('name' => name,
++                      'value' => "value",
++                      'domain' => domain,
++                      'path' => path)
++    end
++  end
++
++  def test_cgi_cookie_domain_injection_into_name
++    name = "a=b; domain=example.com;"
++    path = "/"
++    domain = "example.jp"
++    assert_raise(ArgumentError) do
++      CGI::Cookie.new('name' => name,
++                      'value' => "value",
++                      'domain' => domain,
++                      'path' => path)
++    end
++  end
++
++
++  def test_cgi_cookie_newline_injection_into_name
++    name = "a=b;\r\nLocation: http://example.com#"
++    path = "/"
++    domain = "example.jp"
++    assert_raise(ArgumentError) do
++      CGI::Cookie.new('name' => name,
++                      'value' => "value",
++                      'domain' => domain,
++                      'path' => path)
++    end
++  end
++
++
++  def test_cgi_cookie_multibyte_injection_into_name
++    name = "a=b;\u3042"
++    path = "/"
++    domain = "example.jp"
++    assert_raise(ArgumentError) do
++      CGI::Cookie.new('name' => name,
++                      'value' => "value",
++                      'domain' => domain,
++                      'path' => path)
++    end
++  end
++
++
++  def test_cgi_cookie_injection_into_path
++    name = "name"
++    path = "/; samesite=none"
++    domain = "example.jp"
++    assert_raise(ArgumentError) do
++      CGI::Cookie.new('name' => name,
++                      'value' => "value",
++                      'domain' => domain,
++                      'path' => path)
++    end
++  end
++
++
++  def test_cgi_cookie_injection_into_domain
++    name = "name"
++    path = "/"
++    domain = "example.jp; samesite=none"
++    assert_raise(ArgumentError) do
++      CGI::Cookie.new('name' => name,
++                      'value' => "value",
++                      'domain' => domain,
++                      'path' => path)
++    end
++  end
++
++
++  def test_cgi_cookie_newline_injection_into_name
++    name = "a=b;\r\nLocation: http://example.com#"
++    path = "/"
++    domain = "example.jp"
++    assert_raise(ArgumentError) do
++      CGI::Cookie.new('name' => name,
++                      'value' => "value",
++                      'domain' => domain,
++                      'path' => path)
++    end
++  end
++
++
++  def test_cgi_cookie_multibyte_injection_into_name
++    name = "a=b;\u3042"
++    path = "/"
++    domain = "example.jp"
++    assert_raise(ArgumentError) do
++      CGI::Cookie.new('name' => name,
++                      'value' => "value",
++                      'domain' => domain,
++                      'path' => path)
++    end
++  end
++
++
++  def test_cgi_cookie_injection_into_path
++    name = "name"
++    path = "/; samesite=none"
++    domain = "example.jp"
++    assert_raise(ArgumentError) do
++      CGI::Cookie.new('name' => name,
++                      'value' => "value",
++                      'domain' => domain,
++                      'path' => path)
++    end
++  end
++
++
++  def test_cgi_cookie_injection_into_domain
++    name = "name"
++    path = "/"
++    domain = "example.jp; samesite=none"
++    assert_raise(ArgumentError) do
++      CGI::Cookie.new('name' => name,
++                      'value' => "value",
++                      'domain' => domain,
++                      'path' => path)
++    end
++  end
++
+ 
+   def test_cgi_cookie_domain_injection_into_name
+     name = "a=b; domain=example.com;"
+--- a/test/fiddle/test_handle.rb	1675828940.000000000
++++ b/test/fiddle/test_handle.rb	1679042558.946231999
+@@ -178,6 +178,7 @@ module Fiddle
+     end unless /mswin|mingw/ =~ RUBY_PLATFORM
+ 
+     def test_dlerror
++      return if /kfreebsd/ =~ RUBY_PLATFORM
+       # FreeBSD (at least 7.2 to 7.2) calls nsdispatch(3) when it calls
+       # getaddrinfo(3). And nsdispatch(3) doesn't call dlerror(3) even if
+       # it calls _nss_cache_cycle_prevention_function with dlsym(3).
+@@ -186,7 +187,7 @@ module Fiddle
+       require 'socket'
+       Socket.gethostbyname("localhost")
+       Fiddle.dlopen("/lib/libc.so.7").sym('strcpy')
+-    end if /freebsd/=~ RUBY_PLATFORM
++    end if /freebsd/ =~ RUBY_PLATFORM
+ 
+     def test_no_memory_leak
+       # https://github.com/ruby/fiddle/actions/runs/3202406059/jobs/5231356410
+--- a/test/openssl/test_pkey_dsa.rb	1675828940.000000000
++++ b/test/openssl/test_pkey_dsa.rb	1679042825.735829174
+@@ -47,6 +47,44 @@ class OpenSSL::TestPKeyDSA < OpenSSL::PK
+     end
+   end
+ 
++  def test_generate
++    # DSA.generate used to call DSA_generate_parameters_ex(), which adjusts the
++    # size of q according to the size of p
++    key1024 = OpenSSL::PKey::DSA.generate(1024)
++    assert_predicate key1024, :private?
++    assert_equal 1024, key1024.p.num_bits
++    assert_equal 160, key1024.q.num_bits
++
++    key2048 = OpenSSL::PKey::DSA.generate(2048)
++    assert_equal 2048, key2048.p.num_bits
++    assert_equal 256, key2048.q.num_bits
++
++    if ENV["OSSL_TEST_ALL"] == "1" # slow
++      key3072 = OpenSSL::PKey::DSA.generate(3072)
++      assert_equal 3072, key3072.p.num_bits
++      assert_equal 256, key3072.q.num_bits
++    end
++  end
++
++  def test_generate
++    # DSA.generate used to call DSA_generate_parameters_ex(), which adjusts the
++    # size of q according to the size of p
++    key1024 = OpenSSL::PKey::DSA.generate(1024)
++    assert_predicate key1024, :private?
++    assert_equal 1024, key1024.p.num_bits
++    assert_equal 160, key1024.q.num_bits
++
++    key2048 = OpenSSL::PKey::DSA.generate(2048)
++    assert_equal 2048, key2048.p.num_bits
++    assert_equal 256, key2048.q.num_bits
++
++    if ENV["OSSL_TEST_ALL"] == "1" # slow
++      key3072 = OpenSSL::PKey::DSA.generate(3072)
++      assert_equal 3072, key3072.p.num_bits
++      assert_equal 256, key3072.q.num_bits
++    end
++  end
++
+   def test_sign_verify
+     dsa512 = Fixtures.pkey("dsa512")
+     data = "Sign me!"
+--- a/test/socket/test_socket.rb	1675828940.000000000
++++ b/test/socket/test_socket.rb	1679042558.946699910
+@@ -541,7 +541,7 @@ class TestSocket < Test::Unit::TestCase
+   end
+ 
+   def test_bintime
+-    return if /freebsd/ !~ RUBY_PLATFORM
++    return if /freebsd/ !~ RUBY_PLATFORM || /kfreebsd/ =~ RUBY_PLATFORM
+     t1 = Time.now.strftime("%Y-%m-%d")
+     stamp = nil
+     Addrinfo.udp("127.0.0.1", 0).bind {|s1|
+--- a/tool/m4/ruby_default_arch.m4	1675828940.000000000
++++ b/tool/m4/ruby_default_arch.m4	1679043257.900505380
+@@ -6,7 +6,7 @@ AS_CASE([$1],
+ 	[*64],        [ARCH_FLAG=-m64],
+ 	[[i[3-6]86]], [ARCH_FLAG=-m32],
+ 	[ppc],        [ARCH_FLAG=-m32],
+-	[AC_MSG_ERROR(unknown target architecture: $target_archs)]
++	[*],          []
+ 	)
+ AC_MSG_RESULT([$ARCH_FLAG])
+ ])dnl
+--- /dev/null	1679043825.542702000
++++ b/test/excludes/TestFileUtils.rb	1679042558.757533303
+@@ -0,0 +1 @@
++exclude :test_chown, "fails on Launchpad builders"
+--- /dev/null	1679043830.559450000
++++ b/test/excludes/TestProcess.rb	1679042558.757998422
+@@ -0,0 +1 @@
++exclude :test_execopts_gid, "fails on Launchpad builders"

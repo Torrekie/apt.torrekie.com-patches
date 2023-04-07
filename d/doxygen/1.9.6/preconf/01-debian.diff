@@ -1,0 +1,189 @@
+--- a/doc/CMakeLists.txt	1660248872.000000000
++++ b/doc/CMakeLists.txt	1680770827.234923082
+@@ -12,7 +12,7 @@
+ # input used in their production; they are not affected by this license.
+ 
+ include (${TOP}/cmake/version.cmake)
+-string(TIMESTAMP DATE "%d-%m-%Y")
++string(TIMESTAMP DATE "%d-%m-%Y" UTC)
+ string(TIMESTAMP YEAR "%Y")
+ 
+ find_package(PythonInterp REQUIRED)
+@@ -201,9 +201,9 @@ add_custom_target(doxygen_pdf
+         COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/doc/doxygen_manual.tex  .
+         COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/doc/manual.sty  .
+         COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/doc/doxygen_logo.pdf  .
+-        COMMAND ${PDFLATEX}  -shell-escape doxygen_manual.tex
++        COMMAND faketime @$ENV{SOURCE_DATE_EPOCH} ${PDFLATEX}  -cnf-line="openout_any=r" -shell-escape doxygen_manual.tex
+         COMMAND ${MAKEINDEX} doxygen_manual.idx
+-        COMMAND ${PDFLATEX}  -shell-escape doxygen_manual.tex
++        COMMAND faketime @$ENV{SOURCE_DATE_EPOCH} ${PDFLATEX}  -cnf-line="openout_any=r" -shell-escape doxygen_manual.tex
+         DEPENDS run_doxygen
+         WORKING_DIRECTORY ${PROJECT_BINARY_DIR}/latex
+ )
+--- a/doc/Makefile.latex	1660248872.000000000
++++ b/doc/Makefile.latex	1680770808.730942096
+@@ -16,10 +16,10 @@ all: doxygen_manual.pdf
+ 
+ doxygen_manual.pdf: doxygen_manual.tex doxygen.sty
+ 	echo "Running latex..."
+-	pdflatex doxygen_manual.tex 
++	faketime @$(SOURCE_DATE_EPOCH) pdflatex -cnf-line="openout_any=r" doxygen_manual.tex
+ 	echo "Running makeindex..."
+ 	makeindex doxygen_manual.idx
+ 	echo "Rerunning latex...."
+-	pdflatex doxygen_manual.tex
++	faketime @$(SOURCE_DATE_EPOCH) pdflatex -cnf-line="openout_any=r" doxygen_manual.tex
+ clean:
+ 	rm -f *.ps *.dvi *.aux *.toc *.idx *.ind *.ilg *.log doxygen_manual.pdf
+--- a/jquery/Makefile	1660248872.000000000
++++ b/jquery/Makefile	1680770801.328189844
+@@ -28,10 +28,7 @@ doxmenu-min.css: sm-core-css.css \
+                  sass/_round-corners-last-item.scss \
+                  sass/_sm-dox.scss \
+                  sass/_sub-items-indentation.scss
+-	compass compile --css-dir . --force sass/sm-dox.scss
+-	cat sm-core-css.css sm-dox.css > doxmenu.css
+-	java -jar $(MINIFIER).jar doxmenu.css > doxmenu-min.css
+-	rm -f sm-dox.css doxmenu.css
++	cat sm-core-css.css sass/sm-dox.scss | sassc -I sass --style compressed > doxmenu-min.css
+ 
+ clean:
+ 	rm -rf $(RESULTS) doxmenu.css .sass-cache
+--- a/jquery/sass/_round-corners-last-item.scss	1660248872.000000000
++++ b/jquery/sass/_round-corners-last-item.scss	1680770801.329157961
+@@ -8,7 +8,7 @@
+ 		$selector: $selector + ', ' + $chain + ' a, ' + $chain + '*:not(ul) a, ' + $chain + ' ul';
+ 	}
+ 	#{$selector} {
+-		@include border-radius(0 0 $amount $amount);
++		border-radius: 0 0 $amount $amount;
+ 	}
+ 	// highlighted items, don't need rounding since their sub is open
+ 	$chain: $chain_prefix;
+@@ -18,6 +18,6 @@
+ 		$selector: $selector + ', ' + $chain + ' a.highlighted, ' + $chain + '*:not(ul) a.highlighted';
+ 	}
+ 	#{$selector} {
+-		@include border-radius(0);
++		border-radius: 0;
+ 	}
+ }
+--- a/jquery/sass/_sm-dox.scss	1660325837.000000000
++++ b/jquery/sass/_sm-dox.scss	1680770831.968901159
+@@ -1,5 +1,3 @@
+-@import 'compass';
+-
+ // This file is best viewed with Tab size 4 code indentation
+ 
+ 
+@@ -164,7 +162,7 @@ $sm-dox__toggle-spacing: floor($sm-dox__
+ // Main menu box
+ .sm-dox {
+     background-image: $sm-dox__collapsible-bg;
+-    //@include border-radius($sm-dox__collapsible-border-radius);
++    //border-radius: $sm-dox__collapsible-border-radius;
+ 
+     // Main menu items
+     a {
+@@ -215,7 +213,7 @@ $sm-dox__toggle-spacing: floor($sm-dox__
+             text-align: center;
+             text-shadow: none;
+             background: $sm-dox__collapsible-toggle-bg;
+-            @include border-radius($sm-dox__border-radius);
++            border-radius: $sm-dox__border-radius;
+         }
+         & span.sub-arrow:before {
+             display: block;
+@@ -230,7 +228,7 @@ $sm-dox__toggle-spacing: floor($sm-dox__
+ 
+     // round the corners of the first item
+     > li:first-child > a, > li:first-child > :not(ul) a {
+-        @include border-radius($sm-dox__collapsible-border-radius $sm-dox__collapsible-border-radius 0 0);
++        border-radius: $sm-dox__collapsible-border-radius $sm-dox__collapsible-border-radius 0 0;
+     }
+     // round the corners of the last item
+     @include sm-dox__round-corners-last-item($sm-dox__collapsible-border-radius);
+@@ -307,7 +305,7 @@ $sm-dox__toggle-spacing: floor($sm-dox__
+         padding: 0 $sm-dox__desktop-padding-horizontal;
+         background-image: $sm-dox__desktop-bg;
+         line-height: 36px;
+-        //@include border-radius($sm-dox__desktop-border-radius);
++        //border-radius: $sm-dox__desktop-border-radius;
+ 
+         // Main menu items
+         a {
+@@ -322,7 +320,7 @@ $sm-dox__toggle-spacing: floor($sm-dox__
+                 border-style: solid dashed dashed dashed;
+                 border-color: $sm-dox__main-text-color transparent transparent transparent;
+                 background: transparent;
+-                @include border-radius(0);
++                border-radius: 0;
+             }
+ 
+             &,
+@@ -335,7 +333,7 @@ $sm-dox__toggle-spacing: floor($sm-dox__
+                 background-image:var(--nav-separator-image);
+                 background-repeat:no-repeat;
+                 background-position:right;
+-                @include border-radius(0 !important);
++                border-radius: 0 !important;
+             }
+             &:hover {
+               background-image: var(--nav-gradient-active-image);
+@@ -384,8 +382,8 @@ $sm-dox__toggle-spacing: floor($sm-dox__
+             border: $sm-dox__border-width solid $sm-dox__gray-dark;
+             padding: $sm-dox__desktop-sub-padding-vertical $sm-dox__desktop-sub-padding-horizontal;
+             background: $sm-dox__desktop-sub-bg;
+-            @include border-radius($sm-dox__desktop-sub-border-radius !important);
+-            @include box-shadow($sm-dox__desktop-sub-box-shadow);
++            border-radius: $sm-dox__desktop-sub-border-radius !important;
++            box-shadow: $sm-dox__desktop-sub-box-shadow;
+ 
+             // Sub menus items
+             a {
+@@ -457,7 +455,7 @@ $sm-dox__toggle-spacing: floor($sm-dox__
+             border-color: transparent transparent $sm-dox__desktop-sub-item-color transparent;
+         }
+         span.scroll-down-arrow {
+-            @extend span.scroll-up-arrow;
++            @extend .scroll-up-arrow;
+             top: 8px;
+             border-style: solid dashed dashed dashed;
+             border-color: $sm-dox__desktop-sub-item-color transparent transparent transparent;
+@@ -540,7 +538,7 @@ $sm-dox__toggle-spacing: floor($sm-dox__
+         // Main menu box
+         &.sm-vertical {
+             padding: $sm-dox__desktop-vertical-padding-vertical 0;
+-            @include border-radius($sm-dox__desktop-vertical-border-radius);
++            border-radius: $sm-dox__desktop-vertical-border-radius;
+ 
+             // Main menu items
+             a {
+--- a/src/config.xml	1672079023.000000000
++++ b/src/config.xml	1680770757.947928318
+@@ -3637,7 +3637,7 @@ to be found in the default search path.
+ ]]>
+       </docs>
+     </option>
+-    <option type='bool' id='HAVE_DOT' defval='0'>
++    <option type='bool' id='HAVE_DOT' defval='1'>
+       <docs>
+ <![CDATA[
+  If you set the \c HAVE_DOT tag to \c YES then doxygen will assume the \c dot tool is
+@@ -3886,7 +3886,15 @@ UML notation for the relationships.
+       </docs>
+       <value name='png'/>
+       <value name='jpg'/>
++      <value name='jpg:cairo'/>
++      <value name='jpg:cairo:gd'/>
++      <value name='jpg:gd'/>
++      <value name='jpg:gd:gd'/>
+       <value name='gif'/>
++      <value name='gif:cairo'/>
++      <value name='gif:cairo:gd'/>
++      <value name='gif:gd'/>
++      <value name='gif:gd:gd'/>
+       <value name='svg'/>
+       <value name='png:gd'/>
+       <value name='png:gd:gd'/>

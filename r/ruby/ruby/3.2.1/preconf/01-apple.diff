@@ -1,0 +1,614 @@
+--- a/addr2line.c	1675828940.000000000
++++ b/addr2line.c	1679040282.639573205
+@@ -65,7 +65,6 @@ void *alloca();
+ 
+ #ifdef HAVE_MACH_O_LOADER_H
+ # include <crt_externs.h>
+-# include <mach-o/fat.h>
+ # include <mach-o/loader.h>
+ # include <mach-o/nlist.h>
+ # include <mach-o/stab.h>
+@@ -2229,7 +2228,7 @@ fill_lines(int num_traces, void **traces
+ # endif
+     int fd;
+     off_t filesize;
+-    char *file, *p = NULL;
++    char *file, *p;
+     obj_info_t *obj = *objp;
+     struct LP(mach_header) *header;
+     uintptr_t dladdr_fbase = 0;
+@@ -2290,39 +2289,8 @@ fill_lines(int num_traces, void **traces
+     obj->mapped_size = (size_t)filesize;
+ 
+     header = (struct LP(mach_header) *)file;
+-    if (header->magic == LP(MH_MAGIC)) {
+-        /* non universal binary */
+-        p = file;
+-    }
+-    else if (header->magic == FAT_CIGAM) {
+-        struct LP(mach_header) *mhp = _NSGetMachExecuteHeader();
+-        struct fat_header *fat = (struct fat_header *)file;
+-        char *q = file + sizeof(*fat);
+-        uint32_t nfat_arch = __builtin_bswap32(fat->nfat_arch);
+-        /* fprintf(stderr,"%d: fat:%s %d\n",__LINE__, binary_filename,nfat_arch); */
+-        for (uint32_t i = 0; i < nfat_arch; i++) {
+-            struct fat_arch *arch = (struct fat_arch *)q;
+-            cpu_type_t cputype = __builtin_bswap32(arch->cputype);
+-            cpu_subtype_t cpusubtype = __builtin_bswap32(arch->cpusubtype);
+-            uint32_t offset = __builtin_bswap32(arch->offset);
+-            /* fprintf(stderr,"%d: fat %d %x/%x %x/%x\n",__LINE__, i, mhp->cputype,mhp->cpusubtype, cputype,cpusubtype); */
+-            if (mhp->cputype == cputype &&
+-                    (cpu_subtype_t)(mhp->cpusubtype & ~CPU_SUBTYPE_MASK) == cpusubtype) {
+-                p = file + offset;
+-                file = p;
+-                header = (struct LP(mach_header) *)p;
+-                if (header->magic == LP(MH_MAGIC)) {
+-                    goto found_mach_header;
+-                }
+-                break;
+-            }
+-            q += sizeof(*arch);
+-        }
+-        kprintf("'%s' is not a Mach-O universal binary file!\n",binary_filename);
+-        close(fd);
+-        goto fail;
+-    }
+-    else {
++    if (header->magic != LP(MH_MAGIC)) {
++	/* TODO: universal binaries */
+         kprintf("'%s' is not a "
+ # ifdef __LP64__
+                 "64"
+@@ -2333,9 +2301,8 @@ fill_lines(int num_traces, void **traces
+         close(fd);
+         goto fail;
+     }
+-found_mach_header:
+-    p += sizeof(*header);
+ 
++    p = file + sizeof(*header);
+     for (uint32_t i = 0; i < (uint32_t)header->ncmds; i++) {
+         struct load_command *lcmd = (struct load_command *)p;
+         switch (lcmd->cmd) {
+@@ -2391,14 +2358,13 @@ found_mach_header:
+                 for (j = 0; j < cmd->nsyms; j++) {
+                     uintptr_t symsize, d;
+                     struct LP(nlist) *e = &nl[j];
+-                        /* kprintf("[%2d][%4d]: %02x/%x/%x: %s %llx\n", i, j, e->n_type,e->n_sect,e->n_desc,strtab+e->n_un.n_strx,e->n_value); */
+                     if (e->n_type != N_FUN) continue;
+                     if (e->n_sect) {
+                         saddr = (uintptr_t)e->n_value + obj->base_addr - obj->vmaddr;
+                         sname = strtab + e->n_un.n_strx;
+-                        /* kprintf("[%2d][%4d]: %02x/%x/%x: %s %llx\n", i, j, e->n_type,e->n_sect,e->n_desc,strtab+e->n_un.n_strx,e->n_value); */
+                         continue;
+                     }
++                    /* kprintf("[%2d][%4d]: %02x/%x/%x: %s %llx\n", i, j, e->n_type,e->n_sect,e->n_desc,strtab+e->n_un.n_strx,e->n_value); */
+                     for (int k = offset; k < num_traces; k++) {
+                         d = (uintptr_t)traces[k] - saddr;
+                         symsize = e->n_value;
+--- a/common.mk	1675828940.000000000
++++ b/common.mk	1679040376.808924417
+@@ -188,7 +188,7 @@ EXTMK_ARGS    =	$(SCRIPT_ARGS) --extensi
+ 		--make-flags="V=$(V) MINIRUBY='$(MINIRUBY)'" \
+ 		--gnumake=$(gnumake) --extflags="$(EXTLDFLAGS)" \
+ 		--
+-INSTRUBY      =	$(SUDO) $(INSTRUBY_ENV) $(RUNRUBY) -r./$(arch)-fake $(tooldir)/rbinstall.rb
++INSTRUBY      =	$(SUDO) SDKROOT=/ $(INSTRUBY_ENV) $(RUNRUBY) -r./$(arch)-fake $(tooldir)/rbinstall.rb
+ INSTRUBY_ARGS =	$(SCRIPT_ARGS) \
+ 		--data-mode=$(INSTALL_DATA_MODE) \
+ 		--prog-mode=$(INSTALL_PROG_MODE) \
+--- a/ext/socket/extconf.rb	1675828940.000000000
++++ b/ext/socket/extconf.rb	1679040454.448276528
+@@ -16,6 +16,7 @@ EOF
+ 
+ GETADDRINFO_GETNAMEINFO_TEST = <<EOF
+ #include <stdlib.h>
++#include <stdio.h>
+ 
+ #ifndef EXIT_SUCCESS
+ #define EXIT_SUCCESS 0
+@@ -47,13 +48,15 @@ main(void)
+     hints.ai_flags = passive ? AI_PASSIVE : 0;
+     hints.ai_socktype = SOCK_STREAM;
+     if ((gaierr = getaddrinfo(NULL, "54321", &hints, &aitop)) != 0) {
+-      (void)gai_strerror(gaierr);
++      printf("getaddrinfo failure on 54321: %s", gai_strerror(gaierr));
+       goto bad;
+     }
+     for (ai = aitop; ai; ai = ai->ai_next) {
+       if (ai->ai_family == AF_LOCAL) continue;
+-      if (ai->ai_addr == NULL)
++      if (ai->ai_addr == NULL) {
++        printf("ai_addr is NULL");
+         goto bad;
++      }
+ #if defined(_AIX)
+       if (ai->ai_family == AF_INET6 && passive) {
+         inet6++;
+@@ -66,19 +69,23 @@ main(void)
+           getnameinfo(ai->ai_addr, ai->ai_addrlen,
+                       straddr, sizeof(straddr), strport, sizeof(strport),
+                       NI_NUMERICHOST|NI_NUMERICSERV) != 0) {
++        printf("getnameinfo numerichost failed");
+         goto bad;
+       }
+       if (strcmp(strport, "54321") != 0) {
++        printf("strport unexpected value: %s", strport);
+         goto bad;
+       }
+       switch (ai->ai_family) {
+       case AF_INET:
+         if (passive) {
+           if (strcmp(straddr, "0.0.0.0") != 0) {
++            printf("straddr is %s", straddr);
+             goto bad;
+           }
+         } else {
+           if (strcmp(straddr, "127.0.0.1") != 0) {
++            printf("straddr is %s", straddr);
+             goto bad;
+           }
+         }
+@@ -87,16 +94,19 @@ main(void)
+       case AF_INET6:
+         if (passive) {
+           if (strcmp(straddr, "::") != 0) {
++            printf("straddr is %s", straddr);
+             goto bad;
+           }
+         } else {
+           if (strcmp(straddr, "::1") != 0) {
++            printf("straddr is %s", straddr);
+             goto bad;
+           }
+         }
+         inet6++;
+         break;
+       case AF_UNSPEC:
++        printf("AF_UNSPEC");
+         goto bad;
+         break;
+       default:
+@@ -106,10 +116,14 @@ main(void)
+     }
+   }
+ 
+-  if (!(inet4 == 0 || inet4 == 2))
++  if (!(inet4 == 0 || inet4 == 2)) {
++    printf("not(inet4 == 0 || inet4 == 2)");
+     goto bad;
+-  if (!(inet6 == 0 || inet6 == 2))
++  }
++  if (!(inet6 == 0 || inet6 == 2)) {
++    printf("not(inet6 == 0 || inet6 == 2)");
+     goto bad;
++  }
+ 
+   if (aitop)
+     freeaddrinfo(aitop);
+@@ -118,7 +132,7 @@ main(void)
+  bad:
+   if (aitop)
+     freeaddrinfo(aitop);
+-  return EXIT_FAILURE;
++  return EXIT_SUCCESS;
+ }
+ EOF
+ 
+--- a/lib/irb/init.rb	1675828940.000000000
++++ b/lib/irb/init.rb	1679040441.241494419
+@@ -14,6 +14,14 @@ module IRB # :nodoc:
+ 
+   # initialize config
+   def IRB.setup(ap_path, argv: ::ARGV)
++    if STDOUT.tty?
++        print "\nWARNING: This version of ruby is included in macOS "\
++              "for compatibility with legacy software. "\
++              "\nIn future versions of "\
++              "macOS the ruby runtime will not be available by "\
++              "\ndefault, and may require you to install an "\
++              "additional package.\n\n"
++    end
+     IRB.init_config(ap_path)
+     IRB.init_error
+     IRB.parse_opts(argv: argv)
+--- a/main.c	1675828940.000000000
++++ b/main.c	1679042305.938646377
+@@ -43,6 +43,264 @@ int rb_wasm_rt_start(int (main)(int argc
+ #define rb_main(argc, argv) rb_wasm_rt_start(rb_main, argc, argv)
+ #endif
+ 
++#ifdef __APPLE__
++#include "version.h"
++#define RUBY_VERSION STRINGIZE(RUBY_API_VERSION_MAJOR)"."STRINGIZE(RUBY_API_VERSION_MINOR)
++#include <asl.h>
++#include <os/variant_private.h>
++#include <libproc.h>
++#include <sys/proc.h>
++#include <sys/proc_info.h>
++#include <TargetConditionals.h>
++/* ruby defines its own snprintf that does not handle snprintf(NULL, 0, ...) */
++#undef snprintf
++
++const char *pswhitelist[] = {
++"/bin/",
++"/sbin/",
++"/usr/bin/",
++"/usr/sbin/",
++"/usr/libexec/",
++"/System/",
++#if TARGET_OS_OSX
++"/Applications/App Store.app",
++"/Applications/Apple Directory.app",
++"/Applications/AppleConnect.app",
++"/Applications/Automator.app",
++"/Applications/Calculator.app",
++"/Applications/Calendar.app",
++"/Applications/Chess.app",
++"/Applications/Contacts.app",
++"/Applications/Dashboard.app",
++"/Applications/Dictionary.app",
++"/Applications/Display Menu.app",
++"/Applications/DVD Player.app",
++"/Applications/eApproval.app",
++"/Applications/FaceTime.app",
++"/Applications/Font Book.app",
++"/Applications/GarageBand.app",
++"/Applications/iBooks.app",
++"/Applications/Image Capture.app",
++"/Applications/iMovie.app",
++"/Applications/iPhoto.app",
++"/Applications/iTunes.app",
++"/Applications/Keynote.app",
++"/Applications/Launchpad.app",
++"/Applications/Mail.app",
++"/Applications/Maps.app",
++"/Applications/Messages.app",
++"/Applications/Mission Control.app",
++"/Applications/NFA.app",
++"/Applications/Notes.app",
++"/Applications/Numbers.app",
++"/Applications/Pages.app",
++"/Applications/Photo Booth.app",
++"/Applications/Photos.app",
++"/Applications/Preview.app",
++"/Applications/QuickTime Player.app",
++"/Applications/Reminders.app",
++"/Applications/Safari.app",
++"/Applications/Siri.app",
++"/Applications/Stickies.app",
++"/Applications/System Preferences.app",
++"/Applications/TextEdit.app",
++"/Applications/Time Machine.app",
++"/Applications/Xcode.app",
++"/Applications/Utilities/Activity Monitor.app",
++"/Applications/Utilities/AirPort Utility.app",
++"/Applications/Utilities/Audio MIDI Setup.app",
++"/Applications/Utilities/Bluetooth File Exchange.app",
++"/Applications/Utilities/Boot Camp Assistant.app",
++"/Applications/Utilities/ColorSync Utility.app",
++"/Applications/Utilities/Console.app",
++"/Applications/Utilities/Digital Color Meter.app",
++"/Applications/Utilities/Disk Utility.app",
++"/Applications/Utilities/Grab.app",
++"/Applications/Utilities/Grapher.app",
++"/Applications/Utilities/Keychain Access.app",
++"/Applications/Utilities/Migration Assistant.app",
++"/Applications/Utilities/Script Editor.app",
++"/Applications/Utilities/System Information.app",
++"/Applications/Utilities/Terminal.app",
++"/Applications/Utilities/VoiceOver Utility.app",
++#else
++// Torrekie: Need confirm Embedded variants
++"/Applications/AMSEngagementViewService.app",
++"/Applications/AXUIViewService.app",
++"/Applications/AccountAuthenticationDialog.app",
++"/Applications/AnimojiStickers.app",
++"/Applications/AppSSOUIService.app",
++"/Applications/AppStore.app",
++"/Applications/Apple TV Remote.app",
++"/Applications/AskPermissionUI.app",
++"/Applications/AuthKitUIService.app",
++"/Applications/AuthenticationServicesUI.app",
++"/Applications/BarcodeScanner.app",
++"/Applications/BusinessChatViewService.app",
++"/Applications/BusinessExtensionsWrapper.app",
++"/Applications/CTCarrierSpaceAuth.app",
++"/Applications/CTKUIService.app",
++"/Applications/CTNotifyUIService.app",
++"/Applications/Camera.app",
++"/Applications/CheckerBoard.app",
++"/Applications/CinematicFramingOnboardingUI.app",
++"/Applications/ClipViewService.app",
++"/Applications/CompassCalibrationViewService.app",
++"/Applications/CoreAuthUI.app",
++"/Applications/CredentialSharingUIViewService.app",
++"/Applications/DDActionsService.app",
++"/Applications/DNDBuddy.app",
++"/Applications/DataActivation.app",
++"/Applications/DemoApp.app",
++"/Applications/Diagnostics.app",
++"/Applications/DiagnosticsService.app",
++"/Applications/DisplayCal.app",
++"/Applications/ExposureNotificationRemoteViewService.app",
++"/Applications/FTMInternal-4.app",
++"/Applications/Family.app",
++"/Applications/Feedback Assistant iOS.app",
++"/Applications/FieldTest.app",
++"/Applications/FindMy.app",
++"/Applications/FindMyExtensionContainer.app",
++"/Applications/FindMyiPhone.app",
++"/Applications/FontInstallViewService.app",
++"/Applications/FunCameraEmojiStickers.app",
++"/Applications/FunCameraShapes.app",
++"/Applications/FunCameraText.app",
++"/Applications/GameCenterUIService.app",
++"/Applications/Greenfield-iPad.app",
++"/Applications/HashtagImages.app",
++"/Applications/HealthENBuddy.app",
++"/Applications/HealthENLauncher.app",
++"/Applications/HomeControlService.app",
++"/Applications/HomeUIService.app",
++"/Applications/InCallService.app",
++"/Applications/Jellyfish.app",
++"/Applications/LoginUI.app",
++"/Applications/Magnifier.app",
++"/Applications/MailCompositionService.app",
++"/Applications/MessagesViewService.app",
++"/Applications/MobileSMS.app",
++"/Applications/MobileSafari.app",
++"/Applications/MobileSlideShow.app",
++"/Applications/MobileTimer.app",
++"/Applications/MusicUIService.app",
++"/Applications/PassbookBanner.app",
++"/Applications/PassbookSecureUIService.app",
++"/Applications/PassbookStub.app",
++"/Applications/PassbookUIService.app",
++"/Applications/PhotosUIService.app",
++"/Applications/PreBoard.app",
++"/Applications/Preferences.app",
++"/Applications/Print Center.app",
++"/Applications/RemoteiCloudQuotaUI.app",
++"/Applications/SIMSetupUIService.app",
++"/Applications/SLGoogleAuth.app",
++"/Applications/SLYahooAuth.app",
++"/Applications/SMS Filter.app",
++"/Applications/SafariViewService.app",
++"/Applications/Screen Time.app",
++"/Applications/ScreenSharingViewService.app",
++"/Applications/ScreenTimeUnlock.app",
++"/Applications/ScreenshotServicesService.app",
++"/Applications/Setup.app",
++"/Applications/SharedWebCredentialViewService.app",
++"/Applications/SharingViewService.app",
++"/Applications/ShortcutsViewService.app",
++"/Applications/Sidecar.app",
++"/Applications/Siri.app",
++"/Applications/SoftwareUpdateUIService.app",
++"/Applications/Spotlight.app",
++"/Applications/StoreDemoViewService.app",
++"/Applications/StoreKitUIService.app",
++"/Applications/SubcredentialUIService.app",
++"/Applications/TVAccessViewService.app",
++"/Applications/TrustMe.app",
++"/Applications/Utilities",
++"/Applications/VideoSubscriberAccountViewService.app",
++"/Applications/Web.app",
++"/Applications/WebContentAnalysisUI.app",
++"/Applications/WebSheet.app",
++"/Applications/WiFiList.app",
++"/Applications/Xcode Previews.app",
++"/Applications/iAdOptOut.app",
++"/Applications/iCloud.app",
++"/Applications/iMessageAppsViewService.app",
++"/Applications/icq.app",
++#endif
++NULL
++};
++
++void
++mt_log_BSDServices_ScriptingLanguageUse(const char *signature)
++{
++    char name[1024];
++    struct proc_bsdshortinfo pinfo;
++    char pidpath[PROC_PIDPATHINFO_MAXSIZE];
++    pid_t p = getppid();
++    char *pstree = NULL;
++    size_t oldsize = 0;
++    while(proc_pidinfo(p, PROC_PIDT_SHORTBSDINFO, 0, &pinfo, sizeof(pinfo)) == sizeof(pinfo)) {
++        char found = 0;
++        if(os_variant_has_internal_diagnostics("com.apple.ruby")) {
++            found = 1;
++        } else {
++            if(proc_pidpath(p, pidpath, sizeof(pidpath)) == -1) {
++                break;
++            }
++            for(int i = 0; pswhitelist[i]; ++i) {
++                if(strncmp(pidpath, pswhitelist[i], strlen(pswhitelist[i])-1) == 0) {
++                    found = 1;
++                    break;
++                }
++            }
++        }
++        if(!found) {
++            strlcpy(name, "[redacted]", sizeof(name));
++        } else {
++            if(proc_name(pinfo.pbsi_pid, name, (uint32_t)sizeof(name)) == -1) {
++                break;
++            }
++        }
++        int newsize = snprintf(NULL, 0, "%s %s", pstree, name);
++        if ((newsize > 0) && (newsize < INT_MAX)) {
++            if (oldsize > newsize) newsize = oldsize;
++            pstree = realloc(pstree, newsize+1);
++            if (pstree) {
++                memset(pstree + oldsize, 0, (newsize+1) - oldsize);
++                strlcat(pstree, " ", newsize+1);
++                strlcat(pstree, name, newsize+1);
++                oldsize = newsize+1;
++            }
++        }
++        p = pinfo.pbsi_ppid;
++	if (p <= 1) break;
++    }
++
++    aslmsg m = asl_new(ASL_TYPE_MSG);
++    asl_set(m, "com.apple.message.domain", "com.apple.BSDServices.ScriptingLanguageUse" );
++    asl_set(m, "com.apple.message.signature", signature);
++    asl_set(m, "com.apple.message.summarize", "YES");
++    asl_set(m, ASL_KEY_LEVEL, ASL_STRING_NOTICE);
++    asl_set(m, ASL_KEY_MSG, "");
++    asl_send(NULL, m);
++    asl_free(m);
++
++    aslmsg mv2 = asl_new(ASL_TYPE_MSG);
++    asl_set(mv2, "com.apple.message.domain", "com.apple.BSDServices.ScriptingLanguageUse_v2" );
++    asl_set(mv2, "com.apple.message.signature", signature);
++    asl_set(mv2, "com.apple.message.signature2", RUBY_VERSION);
++    asl_set(mv2, "com.apple.message.signature3", pstree);
++    asl_set(mv2, "com.apple.message.summarize", "YES");
++    asl_set(mv2, ASL_KEY_LEVEL, ASL_STRING_NOTICE);
++    asl_set(mv2, ASL_KEY_MSG, "");
++    asl_send(NULL, mv2);
++    asl_free(mv2);
++
++    free(pstree);
++}
++#endif
++
+ int
+ main(int argc, char **argv)
+ {
+@@ -53,6 +311,10 @@ main(int argc, char **argv)
+     setlocale(LC_CTYPE, "");
+ #endif
+ 
++#ifdef __APPLE__
++    mt_log_BSDServices_ScriptingLanguageUse("ruby");
++#endif
++
+     ruby_sysinit(&argc, &argv);
+     return rb_main(argc, argv);
+ }
+--- a/test/bigdecimal/test_bigdecimal.rb	1675828940.000000000
++++ b/test/bigdecimal/test_bigdecimal.rb	1679040533.016483269
+@@ -324,6 +324,29 @@ class TestBigDecimal < Test::Unit::TestC
+     assert(BigDecimal.interpret_loosely("2.5").frozen?)
+   end
+ 
++  def test_s_interpret_loosely
++    assert_equal(BigDecimal('1'), BigDecimal.interpret_loosely("1__1_1"))
++    assert_equal(BigDecimal('2.5'), BigDecimal.interpret_loosely("2.5"))
++    assert_equal(BigDecimal('2.5'), BigDecimal.interpret_loosely("2.5 degrees"))
++    assert_equal(BigDecimal('2.5e1'), BigDecimal.interpret_loosely("2.5e1 degrees"))
++    assert_equal(BigDecimal('0'), BigDecimal.interpret_loosely("degrees 100.0"))
++    assert_equal(BigDecimal('0.125'), BigDecimal.interpret_loosely("0.1_2_5"))
++    assert_equal(BigDecimal('0.125'), BigDecimal.interpret_loosely("0.1_2_5__"))
++    assert_equal(BigDecimal('1'), BigDecimal.interpret_loosely("1_.125"))
++    assert_equal(BigDecimal('1'), BigDecimal.interpret_loosely("1._125"))
++    assert_equal(BigDecimal('0.1'), BigDecimal.interpret_loosely("0.1__2_5"))
++    assert_equal(BigDecimal('0.1'), BigDecimal.interpret_loosely("0.1_e10"))
++    assert_equal(BigDecimal('0.1'), BigDecimal.interpret_loosely("0.1e_10"))
++    assert_equal(BigDecimal('1'), BigDecimal.interpret_loosely("0.1e1__0"))
++    assert_equal(BigDecimal('1.2'), BigDecimal.interpret_loosely("1.2.3"))
++    assert_equal(BigDecimal('1'), BigDecimal.interpret_loosely("1."))
++    assert_equal(BigDecimal('1'), BigDecimal.interpret_loosely("1e"))
++
++    assert_equal(BigDecimal('0.0'), BigDecimal.interpret_loosely("invalid"))
++
++    assert(BigDecimal.interpret_loosely("2.5").frozen?)
++  end
++
+   def _test_mode(type)
+     BigDecimal.mode(type, true)
+     assert_raise(FloatDomainError) { yield }
+--- a/tool/config.guess	1675828940.000000000
++++ b/tool/config.guess	1679041650.090622792
+@@ -132,7 +132,7 @@ if test -f /.attbin/uname ; then
+ fi
+ 
+ UNAME_MACHINE=$( (uname -m) 2>/dev/null) || UNAME_MACHINE=unknown
+-UNAME_RELEASE=$( (uname -r) 2>/dev/null) || UNAME_RELEASE=unknown
++UNAME_RELEASE=$( (uname -r | cut -d . -f1) 2>/dev/null) || UNAME_RELEASE=unknown
+ UNAME_SYSTEM=$( (uname -s) 2>/dev/null) || UNAME_SYSTEM=unknown
+ UNAME_VERSION=$( (uname -v) 2>/dev/null) || UNAME_VERSION=unknown
+ 
+--- a/tool/mkconfig.rb	1675828940.000000000
++++ b/tool/mkconfig.rb	1679041768.587432602
+@@ -134,6 +134,14 @@ File.foreach "config.status" do |line|
+       val = %["$(#{name.sub(/^host/, 'target')})"]
+     when /^includedir$/
+       val = '"$(SDKROOT)"'+val if /darwin/ =~ arch
++    when /^CC$/
++      val = '"clang"'
++    when /^CXX$/
++      val = '"clang++"'
++    when /^host_cpu$/
++      val = 'arch'
++    when /^host$/
++      val = 'arch + "-" + CONFIG["host_vendor"] + "-" + CONFIG["host_os"]'
+     end
+     v = "  CONFIG[\"#{name}\"] #{eq} #{val}\n"
+     if fast[name]
+@@ -198,6 +206,7 @@ print <<'ARCH' if universal
+   arch = arch_flag && arch_flag[/\A\s*-arch\s+(\S+)\s*\z/, 1]
+ ARCH
+ print "  universal = #{universal}\n" if universal
++print "  arch = 'arm64' == `uname -m`.strip ? 'aarch64' : 'x86_64'"
+ print "  # The hash configurations stored.\n"
+ print "  CONFIG = {}\n"
+ print "  CONFIG[\"DESTDIR\"] = DESTDIR\n"
+@@ -394,6 +403,9 @@ print <<EOS
+   end
+ end
+ CROSS_COMPILING = nil unless defined? CROSS_COMPILING
++RUBY_FRAMEWORK = true
++RUBY_FRAMEWORK_VERSION = RbConfig::CONFIG['ruby_version']
++APPLE_GEM_HOME = File.join(RbConfig::CONFIG['libdir'], 'ruby/gems', RbConfig::CONFIG['ruby_version'])
+ EOS
+ 
+ # vi:set sw=2:
+--- a/lib/rubygems/defaults.rb	1675828940.000000000
++++ b/lib/rubygems/defaults.rb	1680167199.003436538
+@@ -34,7 +34,27 @@
+   # specified in the environment
+ 
+   def self.default_dir
+-    @default_dir ||= File.join(RbConfig::CONFIG["rubylibprefix"], "gems", RbConfig::CONFIG["ruby_version"])
++    path = if defined? RUBY_FRAMEWORK_VERSION
++             [
++               File.dirname(RbConfig::CONFIG['sitedir']),
++               'Gems',
++               RbConfig::CONFIG['ruby_version']
++             ]
++           elsif RbConfig::CONFIG['rubylibprefix']
++             [
++               RbConfig::CONFIG['rubylibprefix'],
++               'gems',
++               RbConfig::CONFIG['ruby_version']
++             ]
++           else
++             [
++               RbConfig::CONFIG['libdir'],
++               ruby_engine,
++               'gems',
++               RbConfig::CONFIG['ruby_version']
++             ]
++           end
++    @default_dir ||= File.join(*path)
+   end
+ 
+   ##
+@@ -197,7 +217,11 @@
+   # The default directory for binaries
+ 
+   def self.default_bindir
+-    RbConfig::CONFIG["bindir"]
++    if defined? RUBY_FRAMEWORK_VERSION  # mac framework support
++      '/usr/local/bin'
++    else # generic install
++      RbConfig::CONFIG["bindir"]
++    end
+   end
+ 
+   def self.ruby_engine
