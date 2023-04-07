@@ -1,0 +1,84 @@
+--- a/debian/gem2deb-test-runner.install	1669921604.000000000
++++ b/debian/gem2deb-test-runner.install	1680422474.190076190
+@@ -1,9 +1,9 @@
+ bin/gem2deb-test-runner                    /usr/bin/
+-lib/gem2deb/banner.rb                      /usr/lib/ruby/vendor_ruby/gem2deb
+-lib/gem2deb/metadata.rb                    /usr/lib/ruby/vendor_ruby/gem2deb
+-lib/gem2deb/yaml.rb                        /usr/lib/ruby/vendor_ruby/gem2deb
+-lib/gem2deb/package_name_mapping.rb        /usr/lib/ruby/vendor_ruby/gem2deb
+-lib/gem2deb/rake/spectask.rb               /usr/lib/ruby/vendor_ruby/gem2deb/rake
+-lib/gem2deb/rake/testtask.rb               /usr/lib/ruby/vendor_ruby/gem2deb/rake
+-lib/gem2deb/test_runner.rb                 /usr/lib/ruby/vendor_ruby/gem2deb
+-lib/gem2deb/source.rb                      /usr/lib/ruby/vendor_ruby/gem2deb
++lib/gem2deb/banner.rb                      /Library/Ruby/Vendor/gem2deb
++lib/gem2deb/metadata.rb                    /Library/Ruby/Vendor/gem2deb
++lib/gem2deb/yaml.rb                        /Library/Ruby/Vendor/gem2deb
++lib/gem2deb/package_name_mapping.rb        /Library/Ruby/Vendor/gem2deb
++lib/gem2deb/rake/spectask.rb               /Library/Ruby/Vendor/gem2deb/rake
++lib/gem2deb/rake/testtask.rb               /Library/Ruby/Vendor/gem2deb/rake
++lib/gem2deb/test_runner.rb                 /Library/Ruby/Vendor/gem2deb
++lib/gem2deb/source.rb                      /Library/Ruby/Vendor/gem2deb
+--- a/debian/gem2deb.install	1669921604.000000000
++++ b/debian/gem2deb.install	1680422492.623527341
+@@ -1,3 +1,3 @@
+ bin/* /usr/bin/
+ debhelper/* /usr/share/perl5/
+-lib/* /usr/lib/ruby/vendor_ruby/
++lib/* /Library/Ruby/Vendor/
+--- a/lib/gem2deb/gem_installer.rb	1669921604.000000000
++++ b/lib/gem2deb/gem_installer.rb	1680159651.772274957
+@@ -200,12 +200,13 @@ module Gem2Deb
+     end
+ 
+     def rubygems_integration_target(rubyver)
+-      if metadata.has_native_extensions?
+-        api_version = Gem2Deb::RUBY_API_VERSION[rubyver]
+-        "/usr/lib/#{host_arch}/rubygems-integration/#{api_version}"
+-      else
+-        "/usr/share/rubygems-integration/all"
+-      end
++#      if metadata.has_native_extensions?
++#        api_version = Gem2Deb::RUBY_API_VERSION[rubyver]
++#        "/usr/lib/#{host_arch}/rubygems-integration/#{api_version}"
++#      else
++#        "/usr/share/rubygems-integration/all"
++#      end
++       "/Library/Ruby/Gems/3.2.0"
+     end
+ 
+     def run_gem(ruby, command, *args)
+--- a/lib/gem2deb/installer.rb	1669921604.000000000
++++ b/lib/gem2deb/installer.rb	1680159013.490675761
+@@ -94,7 +94,9 @@ module Gem2Deb
+             ['all']
+           end
+         versions.each do |version|
+-          target = File.join(destdir(:root), "/usr/share/rubygems-integration/#{version}/specifications/#{metadata.name}-#{metadata.version}.gemspec")
++          # Torrekie: Apple scheme
++          target = File.join(destdir(:root), "/Library/Ruby/Gems/3.2.0/specifications/#{metadata.name}-#{metadata.version}.gemspec")
++          #target = File.join(destdir(:root), "/usr/share/rubygems-integration/#{version}/specifications/#{metadata.name}-#{metadata.version}.gemspec")
+           puts "generating gemspec at #{target}"
+           FileUtils.mkdir_p(File.dirname(target))
+           gemspec = metadata.gemspec.dup
+--- a/lib/gem2deb.rb	1669921604.000000000
++++ b/lib/gem2deb.rb	1680422594.887001722
+@@ -43,7 +43,9 @@ module Gem2Deb
+ 
+   BIN_DIR = '/usr/bin'
+ 
+-  RUBY_CODE_DIR = '/usr/lib/ruby/vendor_ruby'
++  # Torrekie: Apple scheme
++  RUBY_CODE_DIR = '/Library/Ruby/Vendor'
++  #RUBY_CODE_DIR = '/usr/lib/ruby/vendor_ruby'
+ 
+   LIBDIR = File.expand_path(File.dirname(__FILE__))
+ 
+@@ -57,7 +59,7 @@ module Gem2Deb
+ 
+   def run_ruby(ruby, *args)
+     cmd = args.dup
+-    if LIBDIR != '/usr/lib/ruby/vendor_ruby'
++    if LIBDIR != '/Library/Ruby/Vendor'
+       # only add LIBDIR to load path is not running the installed copy
+       cmd.unshift("-I", LIBDIR)
+     end
