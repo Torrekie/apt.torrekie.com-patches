@@ -1,0 +1,222 @@
+--- a/darwin.cf	1677032923.000000000
++++ b/darwin.cf	1681116619.998343381
+@@ -36,15 +36,10 @@ XCOMM operating system:  OSName (OSMajor
+ # define HasShm                 YES
+ #endif
+ #define HasNdbm                 YES
+-#if OSMajorVersion >= 6
+-# define HasNCurses             YES
+-# define HasArc4Random          YES
+-# define HasGetIfAddrs          YES
+-# define HasStrlcat             YES
+-#else
+-# define HasBasename            NO
+-# define HasNCurses             NO
+-#endif
++#define HasNCurses             YES
++#define HasArc4Random          YES
++#define HasGetIfAddrs          YES
++#define HasStrlcat             YES
+ #ifndef HasGroff
+ # define HasGroff               YES
+ #endif
+@@ -69,21 +64,15 @@ XCOMM operating system:  OSName (OSMajor
+ /* Thread support */
+ #define HasPosixThreads         YES
+ #define SystemMTDefines         -D_REENTRANT
+-#if OSMajorVersion >= 6
+-# define HasThreadSafeAPI       YES
+-# define MTSafeAPIDefines       -DXUSE_MTSAFE_API -DXNO_MTSAFE_UNISTDAPI
+-#else
+-# define HasThreadSafeAPI       NO
+-# define MTSafeAPIDefines       -DXOS_USE_MTSAFE_NETDBAPI
+-#endif
++#define HasThreadSafeAPI       YES
++#define MTSafeAPIDefines       -DXUSE_MTSAFE_API -DXNO_MTSAFE_UNISTDAPI
+ 
+ /* Libtool on Darwin always uses minor numbers */
+ #define LibtoolMinorVersions    YES
+ 
+ /* The most common file system, HFS+, is not case sensitive. */
+-#ifndef CaseSensitiveFileSystem
+-# define CaseSensitiveFileSystem NO
+-#endif
++/* Torrekie: Embedded OS is case sensitive */
++#define CaseSensitiveFileSystem YES
+ 
+ /*
+  * This enables some settings for developers.
+@@ -97,6 +86,8 @@ XCOMM operating system:  OSName (OSMajor
+  * Turn off to build on raw Darwin systems.
+  */
+ #ifndef DarwinQuartzSupport
++/* Torrekie: iOS does not have Quartz.framework, but have PDFKit and QuartzCore */
++/* keep this for now before any compatibility problems */
+ # define DarwinQuartzSupport    YES
+ #endif
+ 
+@@ -142,7 +133,10 @@ XCOMM operating system:  OSName (OSMajor
+ #  define GlxExtraDefines -DGLX_DIRECT_RENDERING -DGLX_USE_APPLEGL GlxArchDefines
+ # endif
+ 
+-# define BuildRootless          YES
++/* Torrekie: Targeting Darwin19+ rootful
++# ifndef BuildRootless
++#  define BuildRootless          NO
++# endif
+ # define BuildAppleWMLibrary    YES
+ 
+ #endif  /* DarwinQuartzSupport */
+@@ -150,7 +144,7 @@ XCOMM operating system:  OSName (OSMajor
+ /* we don't need -lm */
+ #define MathLibrary             /**/
+ 
+-#define TermcapLibrary          -lcurses
++#define TermcapLibrary          -lcursesw
+ #define SetTtyGroup             YES             /* for xterm */
+ 
+ /* we don't have a dbm library */
+--- a/darwinLib.tmpl	1677032923.000000000
++++ b/darwinLib.tmpl	1681116714.842942329
+@@ -19,7 +19,8 @@ XMULIB = $(XMULIBONLY) $(XTOOLLIB) $(XLI
+ #endif
+ #define SharedXlibi18nReqs $(LDPRELIB) $(XLIBONLY)
+ 
+-#define SharedXfontReqs     $(LDPRELIB) $(FONTSTUBLIB) GzipLibrary $(FREETYPE2LIB) -flat_namespace
++/* Torrekie: Never -flat_namespace */
++#define SharedXfontReqs     $(LDPRELIB) $(FONTSTUBLIB) GzipLibrary $(FREETYPE2LIB)
+ 
+ #define SharedAppleWMReqs   $(LDPRELIB) $(XLIB)
+ #define SharedFontencReqs   $(LDPRELIB) GzipLibrary
+@@ -39,7 +40,8 @@ XMULIB = $(XMULIBONLY) $(XTOOLLIB) $(XLI
+ #define SharedXpmReqs       $(LDPRELIB) $(XLIB)
+ #define SharedXrandrReqs    $(LDPRELIB) $(XRENDERLIB) $(XLIB)
+ #define SharedXrenderReqs   $(LDPRELIB) $(XLIB)
+-#define SharedXtReqs        $(LDPRELIB) $(XONLYLIB) $(SMLIB) $(ICELIB) -flat_namespace
++/* Torrekie: Never -flat_namespace */
++#define SharedXtReqs        $(LDPRELIB) $(XONLYLIB) $(SMLIB) $(ICELIB)
+ #define SharedXtstReqs      $(LDPRELIB) $(XLIB)
+ #define SharedXvReqs        $(LDPRELIB) $(XLIB)
+ #define SharedDPSReqs       $(LDPRELIB) $(SMLIB) $(ICELIB) $(XTOOLLIB) $(XLIB)
+--- a/linux.cf	1681117195.642642430
++++ b/linux.cf	1681115783.750441192
+@@ -706,11 +706,7 @@ InstallNamedTargetNoClobber(install,file
+ #define MkdirHierCmd		mkdir -p
+ 
+ #ifndef HaveLib64
+-# if defined (AMD64Architecture) || defined (s390xArchitecture) || defined (Ppc64Architecture) || defined (AArch64Architecture) || defined (RV64Architecture)
+-#  define HaveLib64	YES
+-# else
+ #  define HaveLib64	NO
+-# endif
+ #endif
+ 
+ #if UseElfFormat
+@@ -855,10 +851,10 @@ InstallNamedTargetNoClobber(install,file
+ #  endif /* HPArchitecture */
+ #  ifdef i386Architecture
+ #   define CcCmd		gcc -b i486-linux
++#   define CplusplusCmd		c++ -b i486-linux
+ #   define AsCmd		CcCmd -c -x assembler
+ #   define LdCmd		CcCmd -nostdlib -Wl,"-m elf_i386"
+ #   define AsmDefines		-D__ELF__
+-#   define CplusplusCmd		c++ -b i486-linux
+ #  endif /* i386Architecture */
+ #  ifdef ia64Architecture
+ #   define CcCmd		gcc
+@@ -1195,26 +1191,6 @@ InstallNamedTargetNoClobber(install,file
+ # define ConnectionFlags	-DUNIXCONN -DTCPCONN
+ #endif
+ 
+-/* Some of these man page defaults are overridden in the above OS sections */
+-#ifndef ManSuffix
+-# define ManSuffix	1x
+-#endif
+-#ifndef ManDir
+-# define ManDir		$(MANSOURCEPATH)1
+-#endif
+-#ifndef LibManSuffix
+-# define LibManSuffix	3x
+-#endif
+-#ifndef LibmanDir
+-# define LibmanDir	$(MANSOURCEPATH)3
+-#endif
+-#ifndef FileManSuffix
+-# define FileManSuffix	5x
+-#endif
+-#ifndef FileManDir
+-# define FileManDir	$(MANSOURCEPATH)5
+-#endif
+-
+ #ifndef StaticLibrary
+ # define StaticLibrary(libpath,libname) -Wl,-Bstatic Concat(-L,libpath) Concat(-l,libname) -Wl,-Bdynamic
+ #endif
+--- a/linux.cf.orig	1681115626.519057689
++++ b/linux.cf.orig	1681115724.387265797
+@@ -706,11 +706,7 @@ InstallNamedTargetNoClobber(install,file
+ #define MkdirHierCmd		mkdir -p
+ 
+ #ifndef HaveLib64
+-# if defined (AMD64Architecture) || defined (s390xArchitecture) || defined (Ppc64Architecture) || defined (AArch64Architecture) || defined (RV64Architecture)
+-#  define HaveLib64	YES
+-# else
+ #  define HaveLib64	NO
+-# endif
+ #endif
+ 
+ #if UseElfFormat
+@@ -855,10 +851,10 @@ InstallNamedTargetNoClobber(install,file
+ #  endif /* HPArchitecture */
+ #  ifdef i386Architecture
+ #   define CcCmd		gcc -b i486-linux
++#   define CplusplusCmd		c++ -b i486-linux
+ #   define AsCmd		CcCmd -c -x assembler
+ #   define LdCmd		CcCmd -nostdlib -Wl,"-m elf_i386"
+ #   define AsmDefines		-D__ELF__
+-#   define CplusplusCmd		c++ -b i486-linux
+ #  endif /* i386Architecture */
+ #  ifdef ia64Architecture
+ #   define CcCmd		gcc
+@@ -1195,26 +1191,6 @@ InstallNamedTargetNoClobber(install,file
+ # define ConnectionFlags	-DUNIXCONN -DTCPCONN
+ #endif
+ 
+-/* Some of these man page defaults are overridden in the above OS sections */
+-#ifndef ManSuffix
+-# define ManSuffix	1x
+-#endif
+-#ifndef ManDir
+-# define ManDir		$(MANSOURCEPATH)1
+-#endif
+-#ifndef LibManSuffix
+-# define LibManSuffix	3x
+-#endif
+-#ifndef LibmanDir
+-# define LibmanDir	$(MANSOURCEPATH)3
+-#endif
+-#ifndef FileManSuffix
+-# define FileManSuffix	5x
+-#endif
+-#ifndef FileManDir
+-# define FileManDir	$(MANSOURCEPATH)5
+-#endif
+-
+ #ifndef StaticLibrary
+ # define StaticLibrary(libpath,libname) -Wl,-Bstatic Concat(-L,libpath) Concat(-l,libname) -Wl,-Bdynamic
+ #endif
+--- a/site.def	1677032927.000000000
++++ b/site.def	1681116799.392355868
+@@ -72,11 +72,11 @@ XCOMM site:  $XFree86: xc/config/cf/site
+ #ifdef AfterVendorCF
+ 
+ #ifndef ProjectRoot
+-#define ProjectRoot /usr/local
++#define ProjectRoot /usr
+ #endif
+ 
+ #ifndef FontDir
+-#define FontDir /usr/X11R7/share/fonts/X11
++#define FontDir ${datarootdir}/fonts/X11
+ #endif
+ 
+ #ifndef FontEncDir

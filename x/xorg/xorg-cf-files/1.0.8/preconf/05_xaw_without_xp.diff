@@ -1,0 +1,57 @@
+--- a/linux.cf
++++ b/linux.cf
+@@ -1158,6 +1158,16 @@ InstallNamedTargetNoClobber(install,file
+ #define TtClientLibs $(TTLIB) $(XTOOLLIB) $(XLIB)
+ #define TtClientDepLibs $(DEPTTLIB) $(DEPXTOOLLIB) $(DEPXLIB)
+ 
++#ifndef ExtraXawClientLibs
++# define ExtraXawClientLibs /**/
++#endif
++#ifndef ExtraXawClientDepLibs
++# define ExtraXawClientDepLibs /**/
++#endif
++#ifndef ExtraXawReqs
++# define ExtraXawReqs /**/
++#endif
++
+ #if HaveLib64
+ # ifndef LibDirName
+ #  define LibDirName		lib64
+--- a/gnu.cf
++++ b/gnu.cf
+@@ -541,6 +541,16 @@ InstallNamedTargetNoClobber(install,file
+ #define TtClientLibs $(TTLIB) $(XTOOLLIB) $(XLIB)
+ #define TtClientDepLibs $(DEPTTLIB) $(DEPXTOOLLIB) $(DEPXLIB)
+ 
++#ifndef ExtraXawClientLibs
++# define ExtraXawClientLibs /**/
++#endif
++#ifndef ExtraXawClientDepLibs
++# define ExtraXawClientDepLibs /**/
++#endif
++#ifndef ExtraXawReqs
++# define ExtraXawReqs /**/
++#endif
++
+ #ifndef BuildDmx
+ #define BuildDmx	YES
+ #endif
+--- a/FreeBSD.cf
++++ b/FreeBSD.cf
+@@ -570,6 +570,16 @@ XCOMM operating system:  OSName (OSMajor
+ #endif
+ #endif
+ 
++#ifndef ExtraXawClientLibs
++# define ExtraXawClientLibs /**/
++#endif
++#ifndef ExtraXawClientDepLibs
++# define ExtraXawClientDepLibs /**/
++#endif
++#ifndef ExtraXawReqs
++# define ExtraXawReqs /**/
++#endif
++
+ /*
+  * A hack to work around an optimization problem with gcc 2.95.2 - 2.95.4
+  */

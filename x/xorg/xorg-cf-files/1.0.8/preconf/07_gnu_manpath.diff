@@ -1,0 +1,18 @@
+This patch is Debian-specific, see bugs.debian.org/638016
+
+--- a/gnu.cf	2011-08-16 16:06:57.000000000 +0200
++++ b/gnu.cf	2011-08-16 16:09:58.000000000 +0200
+@@ -29,6 +29,13 @@
+ # define GnuBinUtilsMajorVersion	DefaultGnuBinUtilsMajorVersion
+ #endif
+ 
++#ifndef ProjectRoot
++# define ProjectRoot   /usr
++#endif
++#ifndef ManDirectoryRoot
++# define ManDirectoryRoot      /usr/share/man
++#endif
++
+ XCOMM operating system:  OSName (OSMajorVersion./**/OSMinorVersion./**/OSTeenyVersion)
+ XCOMM libc:	(GnuCLibMajorVersion./**/GnuCLibMinorVersion./**/GnuCLibTeenyVersion)
+ XCOMM binutils:	(GnuBinUtilsMajorVersion)
