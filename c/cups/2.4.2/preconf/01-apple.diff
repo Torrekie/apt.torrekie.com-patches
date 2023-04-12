@@ -1,0 +1,4911 @@
+--- a/CHANGES.md	1653545841.000000000
++++ b/CHANGES.md	1676894321.083876543
+@@ -242,3 +242,9 @@ CUPS v2.3.3op1 (November 27, 2020)
+ - Fixed systemd status reporting by adopting the notify interface (Issue #51)
+ - Fixed crash in rastertopwg (Apple issue #5773)
+ - Fixed cupsManualCopies values in IPP Everywhere PPDs (Apple issue #5807)
++
++Changes in CUPS v2.3.4
++----------------------
++
++- CVE-20XX-YYYY: TODO rdar://61415567 embargo
++
+--- a/backend/ipp.c	1653545841.000000000
++++ b/backend/ipp.c	1676894559.484025338
+@@ -103,6 +103,7 @@ static const char * const pattrs[] =	/*
+   "cups-version",
+   "document-format-supported",
+   "job-password-encryption-supported",
++  "job-presets-supported",
+   "marker-colors",
+   "marker-high-levels",
+   "marker-levels",
+@@ -165,7 +166,11 @@ static ipp_t		*new_request(ipp_op_t op,
+ 				     ppd_file_t *ppd,
+ 				     ipp_attribute_t *media_col_sup,
+ 				     ipp_attribute_t *doc_handling_sup,
+-				     ipp_attribute_t *print_color_mode_sup);
++				     ipp_attribute_t *print_color_mode_sup,
++                                     ipp_attribute_t *presets_sup);
++static void          applyPreset(ipp_t *request,
++                                 ipp_attribute_t *supported,
++                                 const char *jobPresetName);
+ static const char	*password_cb(const char *prompt, http_t *http,
+ 			             const char *method, const char *resource,
+ 			             int *user_data);
+@@ -250,6 +255,7 @@ main(int  argc,				/* I - Number of comm
+   ipp_attribute_t *media_col_sup;	/* media-col-supported */
+   ipp_attribute_t *operations_sup;	/* operations-supported */
+   ipp_attribute_t *doc_handling_sup;	/* multiple-document-handling-supported */
++  ipp_attribute_t *presets_sup;         /* job-presets-supported */
+   ipp_attribute_t *printer_state;	/* printer-state attribute */
+   ipp_attribute_t *printer_accepting;	/* printer-is-accepting-jobs */
+   ipp_attribute_t *print_color_mode_sup;/* Does printer support print-color-mode? */
+@@ -895,7 +901,8 @@ main(int  argc,				/* I - Number of comm
+   operations_sup       = NULL;
+   doc_handling_sup     = NULL;
+   print_color_mode_sup = NULL;
+-
++  presets_sup          = NULL;
++  
+   do
+   {
+    /*
+@@ -1004,8 +1011,10 @@ main(int  argc,				/* I - Number of comm
+         const char *www_auth = httpGetField(http, HTTP_FIELD_WWW_AUTHENTICATE);
+         				/* WWW-Authenticate field value */
+ 
+-	if (!strncmp(www_auth, "Negotiate", 9))
+-	  auth_info_required = "negotiate";
++        if (!strncmp(www_auth, "Negotiate", 9))
++          auth_info_required = "negotiate";
++        else if (!strncmp(www_auth, "Bearer", 6))
++          auth_info_required = "oauth";
+         else if (www_auth[0])
+           auth_info_required = "username,password";
+ 
+@@ -1240,6 +1249,8 @@ main(int  argc,				/* I - Number of comm
+ 					"multiple-document-handling-supported",
+ 					IPP_TAG_KEYWORD);
+ 
++    presets_sup = ippFindAttribute(supported, "job-presets-supported", IPP_TAG_BEGIN_COLLECTION);
++    
+     report_printer_state(supported);
+   }
+   while (!job_canceled && ipp_status > IPP_STATUS_OK_CONFLICTING);
+@@ -1475,7 +1486,8 @@ main(int  argc,				/* I - Number of comm
+     request = new_request(IPP_OP_VALIDATE_JOB, version, uri, argv[2],
+                           monitor.job_name, num_options, options, compression,
+ 			  copies_sup ? copies : 1, document_format, pc, ppd,
+-			  media_col_sup, doc_handling_sup, print_color_mode_sup);
++			  media_col_sup, doc_handling_sup, print_color_mode_sup,
++                          presets_sup);
+ 
+     response = cupsDoRequest(http, request, resource);
+ 
+@@ -1539,7 +1551,9 @@ main(int  argc,				/* I - Number of comm
+ 					/* WWW-Authenticate field value */
+ 
+       if (!strncmp(www_auth, "Negotiate", 9))
+-	auth_info_required = "negotiate";
++        auth_info_required = "negotiate";
++      else if (!strncmp(www_auth, "Bearer", 6))
++        auth_info_required = "oauth";
+       else if (www_auth[0])
+ 	auth_info_required = "username,password";
+ 
+@@ -1598,7 +1612,7 @@ main(int  argc,				/* I - Number of comm
+ 			  version, uri, argv[2], monitor.job_name, num_options,
+ 			  options, compression, copies_sup ? copies : 1,
+ 			  document_format, pc, ppd, media_col_sup,
+-			  doc_handling_sup, print_color_mode_sup);
++			  doc_handling_sup, print_color_mode_sup, presets_sup);
+ 
+    /*
+     * Do the request...
+@@ -1739,6 +1753,8 @@ main(int  argc,				/* I - Number of comm
+ 
+ 	  if (!strncmp(www_auth, "Negotiate", 9))
+ 	    auth_info_required = "negotiate";
++          else if (!strncmp(www_auth, "Bearer", 6))
++            auth_info_required = "oauth";
+ 	  else if (www_auth[0])
+ 	    auth_info_required = "username,password";
+ 	}
+@@ -2430,6 +2446,82 @@ debug_attributes(ipp_t *ipp)		/* I - Req
+   fprintf(stderr, "DEBUG: ---- %s ----\n", ippTagString(IPP_TAG_END));
+ }
+ 
++static void
++update_monitor_job_state_from_get_job_attributes(
++			 _cups_monitor_t* monitor,
++			 ipp_t* response)
++{
++  ipp_attribute_t* attr;
++
++  if ((attr = ippFindAttribute(response, "job-state-reasons",
++			       IPP_TAG_KEYWORD)) != NULL)
++  {
++    int	i, new_reasons = 0;	/* Looping var, new reasons */
++
++    for (i = 0; i < attr->num_values; i ++)
++    {
++      if (!strcmp(attr->values[i].string.text, "account-authorization-failed"))
++	new_reasons |= _CUPS_JSR_ACCOUNT_AUTHORIZATION_FAILED;
++      else if (!strcmp(attr->values[i].string.text, "account-closed"))
++	new_reasons |= _CUPS_JSR_ACCOUNT_CLOSED;
++      else if (!strcmp(attr->values[i].string.text, "account-info-needed"))
++	new_reasons |= _CUPS_JSR_ACCOUNT_INFO_NEEDED;
++      else if (!strcmp(attr->values[i].string.text, "account-limit-reached"))
++	new_reasons |= _CUPS_JSR_ACCOUNT_LIMIT_REACHED;
++      else if (!strcmp(attr->values[i].string.text, "job-password-wait"))
++	new_reasons |= _CUPS_JSR_JOB_PASSWORD_WAIT;
++      else if (!strcmp(attr->values[i].string.text, "job-release-wait"))
++	new_reasons |= _CUPS_JSR_JOB_RELEASE_WAIT;
++      else if (!strcmp(attr->values[i].string.text, "document-format-error"))
++	new_reasons |= _CUPS_JSR_DOCUMENT_FORMAT_ERROR;
++      else if (!strcmp(attr->values[i].string.text, "document-unprintable"))
++	new_reasons |= _CUPS_JSR_DOCUMENT_UNPRINTABLE;
++
++      if (!job_canceled && (!strncmp(attr->values[i].string.text, "job-canceled-", 13) || !strcmp(attr->values[i].string.text, "aborted-by-system")))
++	job_canceled = 1;
++    }
++
++    if (new_reasons != monitor->job_reasons)
++    {
++      if (new_reasons & _CUPS_JSR_ACCOUNT_AUTHORIZATION_FAILED)
++	fputs("JOBSTATE: account-authorization-failed\n", stderr);
++      else if (new_reasons & _CUPS_JSR_ACCOUNT_CLOSED)
++	fputs("JOBSTATE: account-closed\n", stderr);
++      else if (new_reasons & _CUPS_JSR_ACCOUNT_INFO_NEEDED)
++	fputs("JOBSTATE: account-info-needed\n", stderr);
++      else if (new_reasons & _CUPS_JSR_ACCOUNT_LIMIT_REACHED)
++	fputs("JOBSTATE: account-limit-reached\n", stderr);
++      else if (new_reasons & _CUPS_JSR_JOB_PASSWORD_WAIT)
++	fputs("JOBSTATE: job-password-wait\n", stderr);
++      else if (new_reasons & _CUPS_JSR_JOB_RELEASE_WAIT)
++	fputs("JOBSTATE: job-release-wait\n", stderr);
++      else if (new_reasons & (_CUPS_JSR_DOCUMENT_FORMAT_ERROR | _CUPS_JSR_DOCUMENT_UNPRINTABLE))
++      {
++	if (monitor->retryable)
++	{
++	  /*
++	   * Can't print this, so retry as raster...
++	   */
++
++	  job_canceled = 1;
++	  fputs("JOBSTATE: cups-retry-as-raster\n", stderr);
++	}
++	else if (new_reasons & _CUPS_JSR_DOCUMENT_FORMAT_ERROR)
++	{
++	  fputs("JOBSTATE: document-format-error\n", stderr);
++	}
++	else
++	{
++	  fputs("JOBSTATE: document-unprintable\n", stderr);
++	}
++      }
++      else
++	fputs("JOBSTATE: job-printing\n", stderr);
++
++      monitor->job_reasons = new_reasons;
++    }
++  }
++}
+ 
+ /*
+  * 'monitor_printer()' - Monitor the printer state.
+@@ -2546,6 +2638,9 @@ monitor_printer(
+ 	  monitor->job_state = (ipp_jstate_t)attr->values[0].integer;
+ 	else
+ 	  monitor->job_state = IPP_JSTATE_COMPLETED;
++
++	if (job_canceled == 0)
++	  update_monitor_job_state_from_get_job_attributes(monitor, response);
+       }
+       else if (response)
+       {
+@@ -2605,75 +2700,6 @@ monitor_printer(
+ 	fprintf(stderr, "DEBUG: (monitor) job_canceled = -1\n");
+       }
+ 
+-      if ((attr = ippFindAttribute(response, "job-state-reasons",
+-                                   IPP_TAG_KEYWORD)) != NULL)
+-      {
+-        int	i, new_reasons = 0;	/* Looping var, new reasons */
+-
+-        for (i = 0; i < attr->num_values; i ++)
+-        {
+-          if (!strcmp(attr->values[i].string.text, "account-authorization-failed"))
+-            new_reasons |= _CUPS_JSR_ACCOUNT_AUTHORIZATION_FAILED;
+-          else if (!strcmp(attr->values[i].string.text, "account-closed"))
+-            new_reasons |= _CUPS_JSR_ACCOUNT_CLOSED;
+-          else if (!strcmp(attr->values[i].string.text, "account-info-needed"))
+-            new_reasons |= _CUPS_JSR_ACCOUNT_INFO_NEEDED;
+-          else if (!strcmp(attr->values[i].string.text, "account-limit-reached"))
+-            new_reasons |= _CUPS_JSR_ACCOUNT_LIMIT_REACHED;
+-          else if (!strcmp(attr->values[i].string.text, "job-password-wait"))
+-            new_reasons |= _CUPS_JSR_JOB_PASSWORD_WAIT;
+-          else if (!strcmp(attr->values[i].string.text, "job-release-wait"))
+-            new_reasons |= _CUPS_JSR_JOB_RELEASE_WAIT;
+-          else if (!strcmp(attr->values[i].string.text, "document-format-error"))
+-            new_reasons |= _CUPS_JSR_DOCUMENT_FORMAT_ERROR;
+-          else if (!strcmp(attr->values[i].string.text, "document-unprintable"))
+-            new_reasons |= _CUPS_JSR_DOCUMENT_UNPRINTABLE;
+-
+-	  if (!job_canceled && (!strncmp(attr->values[i].string.text, "job-canceled-", 13) || !strcmp(attr->values[i].string.text, "aborted-by-system")))
+-            job_canceled = 1;
+-        }
+-
+-        if (new_reasons != monitor->job_reasons)
+-        {
+-	  if (new_reasons & _CUPS_JSR_ACCOUNT_AUTHORIZATION_FAILED)
+-	    fputs("JOBSTATE: account-authorization-failed\n", stderr);
+-	  else if (new_reasons & _CUPS_JSR_ACCOUNT_CLOSED)
+-	    fputs("JOBSTATE: account-closed\n", stderr);
+-	  else if (new_reasons & _CUPS_JSR_ACCOUNT_INFO_NEEDED)
+-	    fputs("JOBSTATE: account-info-needed\n", stderr);
+-	  else if (new_reasons & _CUPS_JSR_ACCOUNT_LIMIT_REACHED)
+-	    fputs("JOBSTATE: account-limit-reached\n", stderr);
+-	  else if (new_reasons & _CUPS_JSR_JOB_PASSWORD_WAIT)
+-	    fputs("JOBSTATE: job-password-wait\n", stderr);
+-	  else if (new_reasons & _CUPS_JSR_JOB_RELEASE_WAIT)
+-	    fputs("JOBSTATE: job-release-wait\n", stderr);
+-          else if (new_reasons & (_CUPS_JSR_DOCUMENT_FORMAT_ERROR | _CUPS_JSR_DOCUMENT_UNPRINTABLE))
+-          {
+-            if (monitor->retryable)
+-            {
+-             /*
+-              * Can't print this, so retry as raster...
+-              */
+-
+-              job_canceled = 1;
+-              fputs("JOBSTATE: cups-retry-as-raster\n", stderr);
+-	    }
+-	    else if (new_reasons & _CUPS_JSR_DOCUMENT_FORMAT_ERROR)
+-	    {
+-	      fputs("JOBSTATE: document-format-error\n", stderr);
+-	    }
+-	    else
+-	    {
+-	      fputs("JOBSTATE: document-unprintable\n", stderr);
+-	    }
+-          }
+-	  else
+-	    fputs("JOBSTATE: job-printing\n", stderr);
+-
+-	  monitor->job_reasons = new_reasons;
+-        }
+-      }
+-
+       ippDelete(response);
+ 
+       fprintf(stderr, "DEBUG: (monitor) job-state = %s\n", ippEnumString("job-state", (int)monitor->job_state));
+@@ -2747,12 +2773,13 @@ new_request(
+     ppd_file_t      *ppd,		/* I - PPD file data */
+     ipp_attribute_t *media_col_sup,	/* I - media-col-supported values */
+     ipp_attribute_t *doc_handling_sup,  /* I - multiple-document-handling-supported values */
+-    ipp_attribute_t *print_color_mode_sup)
++    ipp_attribute_t *print_color_mode_sup,
++    ipp_attribute_t *presets_sup)
+ 					/* I - Printer supports print-color-mode */
+ {
+   ipp_t		*request;		/* Request data */
+   const char	*keyword;		/* PWG keyword */
+-
++  const char *jobPresetName;
+ 
+  /*
+   * Create the IPP request...
+@@ -2815,6 +2842,12 @@ new_request(
+ 
+       copies = _cupsConvertOptions(request, ppd, pc, media_col_sup, doc_handling_sup, print_color_mode_sup, user, format, copies, num_options, options);
+ 
++      if ((jobPresetName = cupsGetOption("preset-name", num_options, options)) != NULL)
++      {
++        fprintf(stderr, "DEBUG: Applying preset: %s\n", jobPresetName);
++        applyPreset(request, presets_sup, jobPresetName);
++      }
++      
+      /*
+       * Map FaxOut options...
+       */
+@@ -2913,6 +2946,49 @@ new_request(
+   return (request);
+ }
+ 
++static ipp_t *findPresetByName(ipp_attribute_t *presets, const char *jobPresetName)
++{
++  ipp_t  *foundPreset = NULL;
++  
++  int count = ippGetCount(presets);
++  for (int i = 0; i < count; i++)
++  {
++    ipp_t *aPreset = ippGetCollection(presets, i);
++    const char *preset_name = ippGetString(ippFindAttribute(aPreset, "preset-name", IPP_TAG_ZERO), 0, NULL);
++    if (preset_name && !strcmp(preset_name, jobPresetName)) {
++      foundPreset = aPreset;
++      break;
++    }
++  }
++  
++  return foundPreset;
++}
++
++/*
++ * 'applyPreset()' - If the printer supports the named preset then apply the preset's attributes to the request.
++ */
++static void applyPreset(ipp_t *request, ipp_attribute_t *presets_supported, const char *jobPresetName)
++{
++  ipp_t *presets_col = findPresetByName(presets_supported, jobPresetName);
++  
++  for (ipp_attribute_t *presets_attr = ippFirstAttribute(presets_col); presets_attr; presets_attr = ippNextAttribute(presets_col))
++  {
++    // Don't copy over the preset-name. For the other attributes, copy the attribute into the request
++    // replacing any attribute already there with the same name.
++    const char *attrName = ippGetName(presets_attr);
++    if (attrName && strcmp(attrName, "preset-name"))
++    {
++      fprintf(stderr, "DEBUG: Applying preset attribute: %s\n", attrName);
++      ipp_attribute_t *old_attr = ippFindAttribute(request, attrName, IPP_TAG_ZERO);
++      if (old_attr)
++      {
++        ippDeleteAttribute(request, old_attr);
++      }
++      ippSetGroupTag(presets_col, &presets_attr, IPP_TAG_JOB);
++      ippCopyAttribute(request, presets_attr, 0);
++    }
++  }
++}
+ 
+ /*
+  * 'password_cb()' - Disable the password prompt for cupsDoFileRequest().
+@@ -3116,14 +3192,15 @@ report_printer_state(ipp_t *ipp)	/* I -
+   * Report alerts and messages...
+   */
+ 
+-  if ((pa = ippFindAttribute(ipp, "printer-alert", IPP_TAG_STRING)) != NULL)
++  if ((pa = ippFindAttribute(ipp, "printer-alert", IPP_TAG_STRING)) != NULL && ippGetGroupTag(pa) != IPP_TAG_UNSUPPORTED_GROUP)
+     report_attr(pa);
+ 
++  /*** REMINDSMA: printer-alert-message may be a misnaming of printer-alert-description */
+   if ((pam = ippFindAttribute(ipp, "printer-alert-message",
+-                              IPP_TAG_TEXT)) != NULL)
++                              IPP_TAG_TEXT)) != NULL && ippGetGroupTag(pam) != IPP_TAG_UNSUPPORTED_GROUP)
+     report_attr(pam);
+ 
+-  if ((pmja = ippFindAttribute(ipp, "printer-mandatory-job-attributes", IPP_TAG_KEYWORD)) != NULL)
++  if ((pmja = ippFindAttribute(ipp, "printer-mandatory-job-attributes", IPP_TAG_KEYWORD)) != NULL && ippGetGroupTag(pmja) != IPP_TAG_UNSUPPORTED_GROUP)
+   {
+     int	i,				/* Looping var */
+ 	count = ippGetCount(pmja);	/* Number of values */
+@@ -3144,7 +3221,7 @@ report_printer_state(ipp_t *ipp)	/* I -
+   }
+ 
+   if ((psm = ippFindAttribute(ipp, "printer-state-message",
+-                              IPP_TAG_TEXT)) != NULL)
++                              IPP_TAG_TEXT)) != NULL && ippGetGroupTag(pa) != IPP_TAG_UNSUPPORTED_GROUP)
+   {
+     char	*ptr;			/* Pointer into message */
+ 
+--- a/backend/usb.c	1653545841.000000000
++++ b/backend/usb.c	1677325282.504277459
+@@ -14,7 +14,7 @@
+ 
+ #ifdef __APPLE__
+    /* A header order dependency requires this be first */
+-#  include <ApplicationServices/ApplicationServices.h>
++//#  include <ApplicationServices/ApplicationServices.h>
+ #endif /* __APPLE__ */
+ 
+ #include "backend-private.h"
+--- a/berkeley/lpq.c	1653545841.000000000
++++ b/berkeley/lpq.c	1676894597.027590634
+@@ -319,10 +319,10 @@ show_jobs(const char *command,		/* I - C
+ 		*jobname;		/* Pointer to job-name */
+   ipp_jstate_t	jobstate;		/* job-state */
+   int		jobid,			/* job-id */
+-		jobsize,		/* job-k-octets */
+ 		jobcount,		/* Number of jobs */
+ 		jobcopies,		/* Number of copies */
+-		rank;			/* Rank of job */
++		rank,			/* Rank of job */
++                jobsize;                /* job-k-octets */
+   char		resource[1024];		/* Resource string */
+   char		rankstr[255];		/* Rank string */
+   char		namestr[1024];		/* Job name string */
+--- a/cgi-bin/var.c	1653545841.000000000
++++ b/cgi-bin/var.c	1676894602.848720212
+@@ -1,7 +1,7 @@
+ /*
+  * CGI form variable and array functions for CUPS.
+  *
+- * Copyright © 2007-2019 by Apple Inc.
++ * Copyright © 2007-2020 by Apple Inc.
+  * Copyright © 1997-2005 by Easy Software Products.
+  *
+  * Licensed under Apache License v2.0.  See the file "LICENSE" for more
+--- a/config-scripts/cups-common.m4	1653545841.000000000
++++ b/config-scripts/cups-common.m4	1681271795.456939048
+@@ -233,7 +233,7 @@ AC_SUBST([LIBUSB])
+ AC_SUBST([USBQUIRKS])
+ 
+ AS_IF([test "x$PKGCONFIG" != x], [
+-    AS_IF([test x$enable_libusb != xno -a $host_os_name != darwin], [
++    AS_IF([test x$enable_libusb != xno], [
+ 	AC_MSG_CHECKING([for libusb-1.0])
+ 	AS_IF([$PKGCONFIG --exists libusb-1.0], [
+ 	    AC_MSG_RESULT([yes])
+@@ -324,7 +324,7 @@ AC_ARG_WITH([dbusdir], AS_HELP_STRING([-
+     DBUSDIR="$withval"
+ ])
+ 
+-AS_IF([test "x$enable_dbus" != xno -a "x$PKGCONFIG" != x -a "x$host_os_name" != xdarwin], [
++AS_IF([test "x$enable_dbus" != xno -a "x$PKGCONFIG" != x], [
+     AC_MSG_CHECKING([for DBUS])
+     AS_IF([$PKGCONFIG --exists dbus-1], [
+ 	AC_MSG_RESULT([yes])
+@@ -362,7 +362,7 @@ INSTALLXPC=""
+ 
+ AS_CASE([$host_os_name], [darwin*], [
+     BACKLIBS="$BACKLIBS -framework IOKit"
+-    SERVERLIBS="$SERVERLIBS -framework IOKit -weak_framework ApplicationServices"
++    SERVERLIBS="$SERVERLIBS -framework IOKit"
+     LIBS="-framework CoreFoundation -framework Security $LIBS"
+     PKGCONFIG_LIBS_STATIC="$PKGCONFIG_LIBS_STATIC -framework CoreFoundation -framework Security"
+ 
+@@ -387,7 +387,17 @@ AS_CASE([$host_os_name], [darwin*], [
+     AC_CHECK_HEADER([membership.h], [
+         AC_DEFINE([HAVE_MEMBERSHIP_H], [1], [Have <membership.h>?])
+     ])
+-    AC_CHECK_FUNCS([mbr_uid_to_uuid])
++
++    AC_LINK_IFELSE([
++        AC_LANG_PROGRAM([[#include <membership.h>]], [[
++            uid_t id = 0;
++            uuid_t uu;
++            return mbr_uid_to_uuid(id, uu);
++        ]])
++    ], [
++	AC_CHECK_FUNCS([mbr_uid_to_uuid])
++    ], [])
++
+ 
+     dnl Need <dlfcn.h> header...
+     AC_CHECK_HEADER([dlfcn.h], [
+--- a/config-scripts/cups-defaults.m4	1653545841.000000000
++++ b/config-scripts/cups-defaults.m4	1681272361.932217729
+@@ -134,7 +134,8 @@ AC_ARG_WITH(access_log_level, [  --with-
+ 	CUPS_ACCESS_LOG_LEVEL="$withval",
+ 	CUPS_ACCESS_LOG_LEVEL="none")
+ AC_SUBST(CUPS_ACCESS_LOG_LEVEL)
+-AC_DEFINE_UNQUOTED(CUPS_DEFAULT_ACCESS_LOG_LEVEL, "$CUPS_ACCESS_LOG_LEVEL")
++
++AC_DEFINE(CUPS_DEFAULT_ACCESS_LOG_LEVEL, "$CUPS_ACCESS_LOG_LEVEL")
+ 
+ dnl Default PageLogFormat
+ AC_ARG_ENABLE([page_logging], AS_HELP_STRING([--enable-page-logging], [enable page_log by default]))
+@@ -413,8 +414,8 @@ AS_CASE(["x$enable_webif"], [xno], [
+     CUPS_DEFAULT_WEBIF=1
+ ], [*], [
+     AS_IF([test $host_os_name = darwin], [
+-	CUPS_WEBIF=No
+-	CUPS_DEFAULT_WEBIF=0
++	CUPS_WEBIF=Yes
++	CUPS_DEFAULT_WEBIF=1
+     ], [
+ 	CUPS_WEBIF=Yes
+ 	CUPS_DEFAULT_WEBIF=1
+--- a/config-scripts/cups-pam.m4	1653545841.000000000
++++ b/config-scripts/cups-pam.m4	1681272166.758247008
+@@ -59,8 +59,8 @@ AS_IF([test x$enable_pam != xno], [
+ 	# Darwin/macOS
+ 	AS_IF([test "x$with_pam_module" != x], [
+ 	    PAMFILE="pam.$with_pam_module"
+-	], [test -f /usr/lib/pam/pam_opendirectory.so.2], [
+-	    PAMFILE="pam.opendirectory"
++	], [test -f /usr/lib/pam/pam_unix.so], [
++	    PAMFILE="pam.unix"
+ 	], [
+ 	    PAMFILE="pam.securityserver"
+ 	])
+--- a/config-scripts/cups-sharedlibs.m4	1653545841.000000000
++++ b/config-scripts/cups-sharedlibs.m4	1681272284.312869306
+@@ -43,7 +43,7 @@ AS_IF([test x$enable_shared != xno], [
+ 	])
+ 	DSO="\$(CC)"
+ 	DSOXX="\$(CXX)"
+-	DSOFLAGS="$DSOFLAGS -Wl,-no_warn_inits -dynamiclib -single_module -lc"
++	DSOFLAGS="$DSOFLAGS -Wl,-no_warn_inits -Wl,-dead_strip_dylibs -dynamiclib -single_module -lc"
+     ], [aix*], [
+ 	LIBCUPS="lib$cupsbase.so.2"
+ 	AS_IF([test "x$cupsimagebase" != x], [
+--- a/cups/auth.c	1653545841.000000000
++++ b/cups/auth.c	1676894630.903910916
+@@ -176,6 +176,31 @@ cupsDoAuthentication(
+ 
+     DEBUG_printf(("2cupsDoAuthentication: Trying scheme \"%s\"...", scheme));
+ 
++    if (!_cups_strcasecmp(scheme, "Bearer"))
++    {
++      char* token = NULL;
++
++      if (http->bearer_tries < 3 && http->bearer_callback) {
++        token = http->bearer_callback(http, resource, http->bearer_data);
++      }
++
++      // This is used to prevent looping forever,
++      // but also used (when > 0) to flush the token
++      // cache in PrintUITool (so it should be incremented after we invoke
++      // the token callback)
++      http->bearer_tries++;
++
++      if (token != NULL) {
++        httpSetAuthString(http, "Bearer", token);
++        free(token);
++        break;
++      } else {
++        DEBUG_printf(("2cupsDoAuthentication: Can't get Bearer token"));
++        http->status = HTTP_STATUS_CUPS_AUTHORIZATION_CANCELED;
++        return (-1);
++      }
++    }
++    else
+ #ifdef HAVE_GSSAPI
+     if (!_cups_strcasecmp(scheme, "Negotiate") && !cups_is_local_connection(http))
+     {
+--- a/cups/backend.c	1653545841.000000000
++++ b/cups/backend.c	1676894635.209209638
+@@ -55,7 +55,7 @@ cupsBackendDeviceURI(char **argv)	/* I -
+ 
+   options = _HTTP_RESOLVE_STDERR;
+   if ((auth_info_required = getenv("AUTH_INFO_REQUIRED")) != NULL &&
+-      !strcmp(auth_info_required, "negotiate"))
++      (!strcmp(auth_info_required, "negotiate") || !strcmp(auth_info_required, "oauth")))
+     options |= _HTTP_RESOLVE_FQDN;
+ 
+   if ((ppd = ppdOpenFile(getenv("PPD"))) != NULL)
+--- a/cups/cups.h	1653545841.000000000
++++ b/cups/cups.h	1676894639.415912356
+@@ -323,6 +322,11 @@ typedef const char *(*cups_password_cb2_
+ 					/* New password callback
+ 					 * @since CUPS 1.4/macOS 10.6@ */
+ 
++typedef char* (*bearer_token_callback_t)(http_t* http,
++                                            const char* resource,
++                                               void* user_data);
++
++
+ typedef int (*cups_server_cert_cb_t)(http_t *http, void *tls,
+ 				     cups_array_t *certs, void *user_data);
+ 					/* Server credentials callback
+@@ -612,6 +616,8 @@ extern ipp_attribute_t	*cupsEncodeOption
+ extern void		cupsSetOAuthCB(cups_oauth_cb_t cb, void *data) _CUPS_API_2_4;
+ 
+ 
++extern void             cupsSetBearerTokenCB(http_t *http, bearer_token_callback_t cb, void* user_data) _CUPS_API_2_3;
++
+ #  ifdef __cplusplus
+ }
+ #  endif /* __cplusplus */
+--- a/cups/http-addr.c	1653545841.000000000
++++ b/cups/http-addr.c	1676894733.002814882
+@@ -145,6 +145,63 @@ httpAddrLength(const http_addr_t *addr)
+ 
+ }
+ 
++#ifdef AF_LOCAL
++
++static int
++af_local_bind(int fd, http_addr_t* addr)
++{
++  int result = 0;
++  struct stat sb;
++
++  if (result == 0 && stat(addr->un.sun_path, &sb) == 0 && S_ISDIR(sb.st_mode)) {
++    DEBUG_printf(("httpAddrListen(AF_LOCAL path \"%s\" is a directory", addr->un.sun_path));
++    result = -1;
++  }
++
++  /*
++   * Try to remove any existing domain socket file...
++   */
++  if (result == 0 && unlink(addr->un.sun_path) != 0 && errno != ENOENT) {
++    DEBUG_printf(("httpAddrListen(AF_LOCAL path \"%s\" not unlinked (%s)", addr->un.sun_path, strerror(errno)));
++    result = -1;
++  }
++
++  if (result == 0) {
++    /*
++     * Save the current umask and set it to 0 so that all users can access
++     * the domain socket...
++     */
++    mode_t oldmask = umask(0);
++
++    /*
++     * Bind the domain socket...
++     */
++    if (bind(fd, (struct sockaddr *)addr, (socklen_t)httpAddrLength(addr)) != 0) {
++      DEBUG_printf(("httpAddrListen(AF_LOCAL path \"%s\" bind failed (%s)", addr->un.sun_path, strerror(errno)));
++      result = -1;
++    }
++
++    /*
++     * Restore the umask no matter what
++     */
++    umask(oldmask);
++  }
++
++  /*
++   * REMINDSMA: This chmod may be a holdover for other platforms.  On Darwin, after bind:
++   * $ stat -r /tmp/cupsdtest.run
++   * 16777221 175369779 0140777 1 501 0 0 0 1623436313 1623436313 1623436313 1623436313 4096 0 0 /tmp/cupsdtest.run
++   * so the subsequent chmod doesn't seem necessary.
++   */
++
++  if (result == 0) {
++    (void) chmod(addr->un.sun_path, 0140777);
++  }
++
++  return result;
++}
++
++#endif /* AF_LOCAL */
+ 
+ /*
+  * 'httpAddrListen()' - Create a listening socket bound to the specified
+@@ -200,33 +257,7 @@ httpAddrListen(http_addr_t *addr,	/* I -
+ #ifdef AF_LOCAL
+   if (addr->addr.sa_family == AF_LOCAL)
+   {
+-    mode_t	mask;			/* Umask setting */
+-
+-   /*
+-    * Remove any existing domain socket file...
+-    */
+-
+-    unlink(addr->un.sun_path);
+-
+-   /*
+-    * Save the current umask and set it to 0 so that all users can access
+-    * the domain socket...
+-    */
+-
+-    mask = umask(0);
+-
+-   /*
+-    * Bind the domain socket...
+-    */
+-
+-    status = bind(fd, (struct sockaddr *)addr, (socklen_t)httpAddrLength(addr));
+-
+-   /*
+-    * Restore the umask and fix permissions...
+-    */
+-
+-    umask(mask);
+-    chmod(addr->un.sun_path, 0140777);
++    status = af_local_bind(fd, addr);
+   }
+   else
+ #endif /* AF_LOCAL */
+--- a/cups/http-private.h	1653545841.000000000
++++ b/cups/http-private.h	1676894742.983301616
+@@ -306,6 +306,27 @@ struct _http_s				/**** HTTP connection
+ 					/* Allocated field values */
+   			*default_fields[HTTP_FIELD_MAX];
+ 					/* Default field values, if any */
++#if __BLOCKS__
++  CFMutableDictionaryRef	_telemetryCallbacks;
++#endif
++
++  cups_array_t*			extra_headers; /* Other headers not seen above; captured for future auth use */
++  
++  /****Added for bearer token ****/
++  bearer_token_callback_t 	bearer_callback;   /* Bearer token callback */
++  void                  	*bearer_data;      /* Bearer authentication user data */
++
++  /* How many times did this http connection try bearer - used to invalidate PrintUITool cache */
++  int                       bearer_tries;
++
++  /* The Bearer token may specify a different requesting-user-name and we must adopt it */
++  char*                     rewriteRequestingUser;
++
++  /* token for telemetry daemon for debugging all the http streams (if present when building, debug only) */
++  const char*		telemetryConnection;
++
++  /* when setting up the tls context, if this is set we disable dh */
++  bool                      disableDH;
+ };
+ #  endif /* !_HTTP_NO_PRIVATE */
+ 
+@@ -349,6 +370,21 @@ extern int		_httpTLSWrite(http_t *http,
+ extern int		_httpUpdate(http_t *http, http_status_t *status) _CUPS_PRIVATE;
+ extern int		_httpWait(http_t *http, int msec, int usessl) _CUPS_PRIVATE;
+ 
++#if __BLOCKS__
++// CFSTR("SSLHandshakeSuccess") -> SSLContextRef
++// CFSTR("SSLHandshakeFailure") -> SSLContextRef
++// CFSTR("HTTPWrite") 		-> CFDataRef
++// CFSTR("HTTPRead") 		-> CFDataRef
++
++typedef void			(^_http_telemetry_block_t)(http_t* http, CFStringRef key, CFTypeRef msg);
++extern void			_httpSetTelemetryBlockForKey(http_t* http, CFStringRef key, _http_telemetry_block_t telemetry) _CUPS_PRIVATE;
++extern _http_telemetry_block_t 	_httpGetTelemetryBlock(http_t* http, CFStringRef key) _CUPS_PRIVATE;
++
++/* Registers for SSLHandshake, used in ios PrintKit today, but should be phased out */
++extern void			_httpSetTelemetryBlock(http_t* http, _http_telemetry_block_t telemetry) _CUPS_PRIVATE;
++#endif
++
++extern char*            httpCopyFieldValue(http_t* http, const char *name) _CUPS_PRIVATE;
+ 
+ /*
+  * C++ magic...
+--- a/cups/http.c	1653545841.000000000
++++ b/cups/http.c	1677323453.883983263
+@@ -20,6 +20,7 @@
+ #include "debug-internal.h"
+ #include <fcntl.h>
+ #include <math.h>
++#include <pwd.h>
+ #ifdef _WIN32
+ #  include <tchar.h>
+ #else
+@@ -33,7 +34,11 @@
+ #  ifdef HAVE_LIBZ
+ #    include <zlib.h>
+ #  endif /* HAVE_LIBZ */
+-
++#include <Security/Security.h>
++#if __has_include("/usr/local/include/traken_client.h")
++#define __IMPLEMENT_TRAKEN__
++#include "/usr/local/include/traken_client.h"
++#endif
+ 
+ /*
+  * Local functions...
+@@ -70,6 +75,39 @@ static void		http_set_wait(http_t *http)
+ static int		http_tls_upgrade(http_t *http);
+ #endif /* HAVE_TLS */
+ 
++struct _http_header_extra_s {
++  const char* key;
++  const char* val;
++};
++typedef struct _http_header_extra_s http_header_extra_t;
++
++static int _http_header_comp(void *first, void *second, void *data)
++{
++  (void) data;
++  http_header_extra_t* a = (http_header_extra_t*) first;
++  http_header_extra_t* b = (http_header_extra_t*) second;
++  if (a == b) return 0;
++  return _cups_strcasecmp(a->key, b->key);
++}
++
++static void* _http_header_copy(void* element, void* data)
++{
++  (void) data;
++  http_header_extra_t* a = (http_header_extra_t*) element;
++  http_header_extra_t* cpy = (http_header_extra_t*) malloc(sizeof(http_header_extra_t));
++  cpy->key = strdup(a->key);
++  cpy->val = strdup(a->val);
++  return cpy;
++}
++
++static void _http_header_free(void* element, void* data)
++{
++  (void) data;
++  http_header_extra_t* a = (http_header_extra_t*) element;
++  free((char*) a->key);
++  free((char*) a->val);
++  free((char*) a);
++}
+ 
+ /*
+  * Local globals...
+@@ -385,6 +423,33 @@ httpClose(http_t *http)			/* I - HTTP co
+   if (http->authstring && http->authstring != http->_authstring)
+     free(http->authstring);
+ 
++#if __BLOCKS__
++  if (http->_telemetryCallbacks) {
++    CFRelease(http->_telemetryCallbacks);
++    http->_telemetryCallbacks = NULL;
++  }
++#endif
++
++  if (http->extra_headers) {
++    cupsArrayDelete(http->extra_headers);
++    http->extra_headers = NULL;
++  }
++
++  http->bearer_callback = NULL;
++  http->bearer_data = NULL;
++
++  if (http->rewriteRequestingUser) {
++    free(http->rewriteRequestingUser);
++    http->rewriteRequestingUser = NULL;
++  }
++
++#if defined(__IMPLEMENT_TRAKEN__)
++  if (http->telemetryConnection) {
++    traken_token_free(http->telemetryConnection);
++    http->telemetryConnection = NULL;
++  }
++#endif
++
+   free(http);
+ }
+ 
+@@ -2326,12 +2391,13 @@ httpReconnect(http_t *http)		/* I - HTTP
+ 
+ 
+ /*
+- * 'httpReconnect2()' - Reconnect to a HTTP server with timeout and optional
+- *                      cancel.
++ * '_httpReconnect2_inner()' - Reconnect to a HTTP server with timeout and optional
++ *                              cancel.  Called by a real httpReconnect2 that retries under
++ *                              some circumstances.
+  */
+ 
+-int					/* O - 0 on success, non-zero on failure */
+-httpReconnect2(http_t *http,		/* I - HTTP connection */
++static int				/* O - 0 on success, non-zero on failure */
++_httpReconnect2_inner(http_t *http,	/* I - HTTP connection */
+ 	       int    msec,		/* I - Timeout in milliseconds */
+ 	       int    *cancel)		/* I - Pointer to "cancel" variable */
+ {
+@@ -2450,6 +2516,25 @@ httpReconnect2(http_t *http,		/* I - HTT
+   return (0);
+ }
+ 
++/*
++ * 'httpReconnect2()' - Reconnect to a HTTP server with timeout and optional
++ *                              cancel.  If a a TLS handshake fails, we make
++ *                              one additional attempt with Diffie-Helman disabled.
++ */
++
++int        /* O - 0 on success, non-zero on failure */
++httpReconnect2(http_t *http,  /* I - HTTP connection */
++                      int    msec,    /* I - Timeout in milliseconds */
++                      int    *cancel)    /* I - Pointer to "cancel" variable */
++{
++  int result = _httpReconnect2_inner(http, msec, cancel);
++  if (result != 0 && http != NULL && http->error == errSSLWeakPeerEphemeralDHKey && http->status == HTTP_STATUS_ERROR) {
++      // try again with disableDH
++      http->disableDH = true;
++      result = _httpReconnect2_inner(http, msec, cancel);
++  }
++  return result;
++}
+ 
+ /*
+  * 'httpSetAuthString()' - Set the current authorization string.
+@@ -2908,10 +2993,14 @@ _httpUpdate(http_t        *http,	/* I -
+       if (field == HTTP_FIELD_AUTHENTICATION_INFO)
+         httpGetSubField2(http, HTTP_FIELD_AUTHENTICATION_INFO, "nextnonce", http->nextnonce, (int)sizeof(http->nextnonce));
+     }
+-#ifdef DEBUG
+-    else
++    else {
+       DEBUG_printf(("1_httpUpdate: unknown field %s seen!", line));
+-#endif /* DEBUG */
++      if (http->extra_headers == nil) {
++        http->extra_headers = cupsArrayNew3(_http_header_comp, NULL, NULL, 0, _http_header_copy, _http_header_free);
++      }
++      http_header_extra_t hh = { line, value };
++      cupsArrayAdd(http->extra_headers, &hh);
++    }
+   }
+   else
+   {
+@@ -4014,6 +4103,24 @@ http_create(
+ 
+   http_set_wait(http);
+ 
++  /* initialize this with a default */
++  cupsSetBearerTokenCB(http, NULL, NULL);
++
++#if defined(__IMPLEMENT_TRAKEN__)
++  /* See if we've got a telemetry daemon */
++  http->telemetryConnection = traken_token_create();
++  if (http->telemetryConnection) {
++    _httpSetTelemetryBlockForKey(http, CFSTR("HTTPWrite"), ^(http_t* h, CFStringRef key, CFTypeRef payload) {
++      (void) key;
++      traken_send_data(http->telemetryConnection, h->tls? "TLS-SEND" : "RAW-SEND", (const char*) CFDataGetBytePtr(payload), (size_t) CFDataGetLength(payload));
++    });
++    _httpSetTelemetryBlockForKey(http, CFSTR("HTTPRead"), ^(http_t* h, CFStringRef key, CFTypeRef payload) {
++      (void) key;
++      traken_send_data(http->telemetryConnection, h->tls? "TLS-READ" : "RAW-READ", (const char*) CFDataGetBytePtr(payload), (size_t) CFDataGetLength(payload));
++    });
++  }
++#endif
++
+  /*
+   * Return the new structure...
+   */
+@@ -4078,6 +4185,49 @@ http_debug_hex(const char *prefix,	/* I
+ }
+ #endif /* DEBUG */
+ 
++static void cupsDumpHex(const char* leader, const char* base, size_t len)
++{
++  const char* p = base;
++  const char* pEnd = &p[len];
++
++  int row = 0;
++
++  fprintf(stderr, "\n%s : <%p> - <%p> (%ld bytes)\n", leader, p, pEnd, len);
++
++  while (p < pEnd) {
++    const char* pEOL = &p[16];
++
++    char hex[256];
++    char txt[256];
++
++    char* hp = hex;
++    char* tp = txt;
++    int sp = 0;
++
++    while (p < pEOL) {
++      if (p >= pEnd) {
++        *hp++ = ' ';
++        *hp++ = ' ';
++        *tp++ = ' ';
++        ++p;
++      } else {
++        char ch = *p++;
++        static const char* kNibbles = "0123456789abcdef";
++        *hp++ = kNibbles[(ch >> 4) & 0x0f];
++        *hp++ = kNibbles[(ch >> 0) & 0x0f];
++        *tp++ = isprint(ch)? ch : '.';
++      }
++
++      if (++sp == 4) {
++        *hp++ = ' ';
++        sp = 0;
++      }
++    }
++
++    fprintf(stderr, "%s : %8.8x  %.*s  %.*s\n", leader, row * 16, (int) (hp - hex), hex, (int) (tp - txt), txt);
++    ++row;
++  }
++}
+ 
+ /*
+  * 'http_read()' - Read a buffer from a HTTP connection.
+@@ -4168,6 +4318,18 @@ http_read(http_t *http,			/* I - HTTP co
+     http_debug_hex("http_read", buffer, (int)bytes);
+   else
+ #endif /* DEBUG */
++  if (bytes > 0) {
++    if (getenv("CUPS_HTTP_TRACE") != NULL) {
++      cupsDumpHex(http->tls? "TLS-READ" : "RAW-READ", buffer, (size_t) bytes);
++    }
++    _http_telemetry_block_t cb = _httpGetTelemetryBlock(http, CFSTR("HTTPRead"));
++    if (cb) {
++      CFDataRef data = CFDataCreate(kCFAllocatorDefault, (const unsigned char*) buffer, (CFIndex) bytes);
++      cb(http, CFSTR("HTTPRead"), data);
++      CFRelease(data);
++    }
++  }
++
+   if (bytes == 0)
+   {
+     http->error = EPIPE;
+@@ -4432,6 +4594,13 @@ http_send(http_t       *http,		/* I - HT
+       return (-1);
+     }
+ 
++#if defined(__IMPLEMENT_TRAKEN__)
++  if (http->telemetryConnection) {
++    httpPrintf(http, "X-traken: %s\r\n", http->telemetryConnection);
++  }
++  httpPrintf(http, "X-PID_UID: %d;%d\r\n", (int) getpid(), (int) getuid());
++#endif
++
+   DEBUG_printf(("5http_send: expect=%d, mode=%d, state=%d", http->expect,
+                 http->mode, http->state));
+ 
+@@ -4457,12 +4626,12 @@ http_send(http_t       *http,		/* I - HT
+   httpClearFields(http);
+ 
+  /*
+-  * The Kerberos and AuthRef authentication strings can only be used once...
++  * The Kerberos and AuthRef and Bearer authentication strings can only be used once...
+   */
+ 
+   if (http->fields[HTTP_FIELD_AUTHORIZATION] && http->authstring &&
+       (!strncmp(http->authstring, "Negotiate", 9) ||
+-       !strncmp(http->authstring, "AuthRef", 7)))
++       !strncmp(http->authstring, "AuthRef", 7) || !strncmp(http->authstring, "Bearer", 6)))
+   {
+     http->_authstring[0] = '\0';
+ 
+@@ -4740,6 +4909,15 @@ http_write(http_t     *http,		/* I - HTT
+       }
+       while (nfds <= 0);
+     }
++    if (getenv("CUPS_HTTP_TRACE") != NULL) {
++      cupsDumpHex(http->tls? "TLS-SEND" : "RAW-SEND", buffer, (size_t) length);
++    }
++    _http_telemetry_block_t cb = _httpGetTelemetryBlock(http, CFSTR("HTTPWrite"));
++    if (cb) {
++      CFDataRef data = CFDataCreate(kCFAllocatorDefault, (const unsigned char*) buffer, (CFIndex) length);
++      cb(http, CFSTR("HTTPWrite"), data);
++      CFRelease(data);
++    }
+ 
+ #ifdef HAVE_TLS
+     if (http->tls)
+@@ -4848,3 +5026,373 @@ http_write_chunk(http_t     *http,	/* I
+ 
+   return (bytes);
+ }
++
++#if __BLOCKS__
++
++static const void*	_block_retain(CFAllocatorRef ref, const void *value)
++{
++  (void) ref;
++  return _Block_copy((dispatch_block_t) value);
++}
++
++static void _block_release(CFAllocatorRef ref, const void *value)
++{
++  (void) ref;
++  _Block_release(value);
++}
++
++static CFStringRef _block_copyDesc(const void *value)
++{
++  return CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("<TelemetryBlock@%p>"), value);
++}
++
++static Boolean _block_equal(const void *value1, const void *value2)
++{
++  return value1 == value2;
++}
++
++void _httpSetTelemetryBlockForKey(http_t* http, CFStringRef key, _http_telemetry_block_t telemetry)
++{
++  if (!http)
++    return;
++	
++  if (http->_telemetryCallbacks == NULL) {
++    static CFDictionaryValueCallBacks blockCallbacks = {
++      .version = 0,
++      .retain = _block_retain,
++      .release = _block_release,
++      .copyDescription = _block_copyDesc,
++      .equal = _block_equal
++    };
++    http->_telemetryCallbacks = CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &blockCallbacks);
++  }
++
++  CFDictionarySetValue(http->_telemetryCallbacks, key, telemetry);
++}
++
++void _httpSetTelemetryBlock(http_t* http, _http_telemetry_block_t telemetry)
++{
++  _httpSetTelemetryBlockForKey(http, CFSTR("SSLHandshakeSuccess"), telemetry);
++  _httpSetTelemetryBlockForKey(http, CFSTR("SSLHandshakeFailure"), telemetry);
++}
++
++_http_telemetry_block_t _httpGetTelemetryBlock(http_t* http, CFStringRef key)
++{
++  if (http->_telemetryCallbacks == NULL)
++    return NULL;
++  return (_http_telemetry_block_t) CFDictionaryGetValue(http->_telemetryCallbacks, key);
++}
++
++#endif
++
++/*
++ * 'httpCopyFieldValue()' - return a copy of a header field value, or NULL
++ */
++
++char*
++httpCopyFieldValue(http_t* http, const char *name)  /* I - String name */
++{
++  const char* found = NULL;
++  http_field_t known = httpFieldValue(name);
++  if (known != HTTP_FIELD_UNKNOWN)
++    found = httpGetField(http, known);
++  else if (http->extra_headers != NULL) {
++    http_header_extra_t search = { name, NULL };
++    http_header_extra_t* extra = cupsArrayFind(http->extra_headers, &search);
++    if (extra != NULL) {
++      found = extra->val;
++    }
++  }
++  if (found == NULL) {
++    DEBUG_printf(("3httpCopyFieldValue: can't find field value for '%s'", name));
++    return NULL;
++  }
++
++  return strdup(found);
++}
++
++/* Ask printUITool to get the bearer token needed for this resource */
++#if defined(HAVE_GSSAPI/*ACTUALLY SHOULD BE HAVE_PRINTUITOOL*/) && defined(HAVE_XPC)
++#  include <xpc/xpc.h>
++#  define kPMPrintUIToolAgent	"com.apple.printuitool.agent"
++#  define kPMGetBearerToken	102
++extern void	xpc_connection_set_target_uid(xpc_connection_t connection,
++					      uid_t uid);
++
++static void httpVisitRequestHeaders(http_t* http, void (^cb)(const char* key, const char* val))
++{
++  // We have to synthesize this because its done during http_send and dropped on the floor.
++  // So these are the headers we were *likely* to have sent.
++
++  if (!http->fields[HTTP_FIELD_USER_AGENT])
++  {
++    if (http->default_fields[HTTP_FIELD_USER_AGENT])
++      cb(http_fields[HTTP_FIELD_USER_AGENT], http->default_fields[HTTP_FIELD_USER_AGENT]);
++    else
++      cb(http_fields[HTTP_FIELD_USER_AGENT], cupsUserAgent());
++  }
++
++  /*
++   * Set the Accept-Encoding field if it isn't already...
++   */
++  if (!http->fields[HTTP_FIELD_ACCEPT_ENCODING]) {
++    const char* defaultAcceptEncoding = http->default_fields[HTTP_FIELD_ACCEPT_ENCODING];
++    if (defaultAcceptEncoding && defaultAcceptEncoding[0] != '\0') {
++      cb(http_fields[HTTP_FIELD_ACCEPT_ENCODING], defaultAcceptEncoding);
++    }
++  }
++
++  for (int i = 0; i < HTTP_FIELD_MAX; i ++) {
++    const char* value = httpGetField(http, i);
++    if (value && value[0] != '\0') {
++      if (i != HTTP_FIELD_HOST) {
++	cb(http_fields[i], value);
++      } else {
++	char hostNameWithPort[HTTP_MAX_HOST];
++	snprintf(hostNameWithPort, sizeof(hostNameWithPort), "%s:%d", value, httpAddrPort(http->hostaddr));
++	cb(http_fields[i], hostNameWithPort);
++      }
++    }
++  }
++
++  if (http->cookie && http->cookie[0] != '\0') {
++    char cookieStringWithVersion[HTTP_MAX_VALUE];
++    snprintf(cookieStringWithVersion, sizeof(cookieStringWithVersion), "$Version=0; %s", http->cookie);
++    cb("Cookie", cookieStringWithVersion);
++  }
++}
++
++static void httpVisitResponseHeaders(http_t* http, void (^cb)(const char* key, const char* val))
++{
++  for (int i = 0; i < HTTP_FIELD_MAX; i ++) {
++    const char* value = httpGetField(http, i);
++
++    if (value != NULL) {
++      cb(http_fields[i], value);
++    }
++  }
++
++  if (http->extra_headers != NULL) {
++    http_header_extra_t* extra = (http_header_extra_t*) cupsArrayFirst(http->extra_headers);
++    while (extra) {
++      cb(extra->key, extra->val);
++      extra = (http_header_extra_t*) cupsArrayNext(http->extra_headers);
++    }
++  }
++}
++
++static xpc_object_t _copyResponseHeaders(http_t* http)
++{
++  __block xpc_object_t headers = nil;
++  httpVisitResponseHeaders(http, ^(const char* key, const char* val) {
++    if (headers == nil)
++      headers = xpc_dictionary_create(NULL, NULL, 0);
++    xpc_dictionary_set_string(headers, key, val);
++  });
++  return headers;
++}
++
++static xpc_object_t _copyRequestHeaders(http_t* http)
++{
++  __block xpc_object_t headers = nil;
++  httpVisitRequestHeaders(http, ^(const char* key, const char* val) {
++    if (headers == nil)
++      headers = xpc_dictionary_create(NULL, NULL, 0);
++    xpc_dictionary_set_string(headers, key, val);
++  });
++  return headers;
++}
++
++static char* _invoke_printUIToolForBearerToken(http_t* http, const char* resource)
++{
++  __block char* result = NULL;
++  __block char* fullUser = NULL;
++
++  xpc_connection_t conn = xpc_connection_create_mach_service(kPMPrintUIToolAgent, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), 0);
++
++  if (conn != NULL) {
++    xpc_connection_set_event_handler(conn, ^(xpc_object_t event) {
++      xpc_type_t messageType = xpc_get_type(event);
++
++      DEBUG_printf(("_invoke_printUIToolForBearerToken: received event type %s", xpc_type_get_name(messageType)));
++
++      if (messageType == XPC_TYPE_ERROR) {
++	if (event == XPC_ERROR_CONNECTION_INTERRUPTED)
++	  fprintf(stderr, "DEBUG: Interrupted connection to service %s.\n", xpc_connection_get_name(conn));
++	else if (event == XPC_ERROR_CONNECTION_INVALID)
++	  fprintf(stderr, "DEBUG: Connection invalid for service %s.\n", xpc_connection_get_name(conn));
++	else
++	  fprintf(stderr, "DEBUG: Unxpected error for service %s: %s\n", xpc_connection_get_name(conn), xpc_dictionary_get_string(event, XPC_ERROR_KEY_DESCRIPTION));
++      }
++    });
++
++    uid_t uid = geteuid();
++    if (uid == 0) {
++      const char* auid = getenv("AUTH_BEARER_UID");
++      if (auid != NULL) {
++        uid = (uid_t) atoi(auid);
++      }
++    }
++    if (uid > 0) {
++      xpc_connection_set_target_uid(conn, uid);
++    }
++    xpc_connection_resume(conn);
++
++    xpc_object_t request = xpc_dictionary_create(NULL, NULL, 0);
++    xpc_dictionary_set_int64(request, "command", kPMGetBearerToken);
++    xpc_dictionary_set_string(request, "resource", resource);
++    xpc_dictionary_set_string(request, "hostname", http->hostname);
++    xpc_dictionary_set_int64(request, "port", httpAddrPort(http->hostaddr));
++    // Unfortunately, we can't rely on tls being true at this point because
++    // we might be re-connecting.  At best this is a hint, but in the end
++    // I think we can always assume that this is going over TLS (used
++    // to create the key to find the extension in PrintUITool)
++    xpc_dictionary_set_int64(request, "tls", (http->tls != NULL));
++    xpc_dictionary_set_int64(request, "auth_tries", http->bearer_tries);
++
++    const char* oauth_uri = getenv("AUTH_OAUTH_URI");
++    if (oauth_uri)
++      xpc_dictionary_set_string(request, "oauth_server_uri", oauth_uri);
++
++    const char* oauth_scp = getenv("AUTH_OAUTH_SCOPE");
++    if (oauth_scp)
++      xpc_dictionary_set_string(request, "oauth_server_scope", oauth_scp);
++
++    const char* app_ident = getenv("APPLE_SOURCE_APP");
++    if (app_ident)
++      xpc_dictionary_set_string(request, "app_extension_ident", app_ident);
++
++    xpc_object_t requestHeaders = _copyRequestHeaders(http);
++    if (requestHeaders != nil) {
++      xpc_dictionary_set_value(request, "request_headers", requestHeaders);
++      xpc_release(requestHeaders);
++    }
++
++    xpc_object_t responseHeaders = _copyResponseHeaders(http);
++    if (responseHeaders != nil) {
++      xpc_dictionary_set_value(request, "response_headers", responseHeaders);
++      xpc_release(responseHeaders);
++    }
++
++    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
++
++    xpc_connection_send_message_with_reply(conn, request, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^(xpc_object_t reply) {
++      xpc_type_t messageType = xpc_get_type(reply);
++
++      DEBUG_printf(("_invoke_printUIToolForBearerToken: received reply type %s", xpc_type_get_name(messageType)));
++
++      if (messageType == XPC_TYPE_DICTIONARY) {
++	const char* token = xpc_dictionary_get_string(reply, "bearer-token");
++	if (token != NULL) {
++	  result = strdup(token);
++	}
++
++	const char* user = xpc_dictionary_get_string(reply, "bearer-token-full-user");
++	if (user != NULL) {
++	  fullUser = strdup(user);
++	}
++      }
++
++      dispatch_semaphore_signal(sem);
++    });
++    xpc_release(request);
++
++    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
++    dispatch_release(sem);
++
++    xpc_connection_cancel(conn);
++    xpc_release(conn);
++  }
++
++  if (http->rewriteRequestingUser != NULL) {
++    free(http->rewriteRequestingUser);
++    http->rewriteRequestingUser = NULL;
++  }
++
++  if (fullUser) {
++    http->rewriteRequestingUser = fullUser;
++  }
++
++  return result;
++}
++#endif
++
++static char* cleanupToken(const char* fromEnv)
++{
++  // trim from start and end of the fromEnv string
++  const char* pStart = fromEnv;
++  const char* pEnd = &fromEnv[strlen(fromEnv)];
++
++  while (pStart < pEnd) {
++    if (isspace(*pStart))
++      ++pStart;
++    else {
++        break;
++    }
++  }
++
++  while (pStart < pEnd) {
++    if (isspace(pEnd[-1])) {
++        --pEnd;
++    } else {
++        break;
++    }
++  }
++
++  if (pStart >= pEnd)
++    return NULL;
++
++  return strndup(pStart, (size_t) (pEnd - pStart));
++}
++
++
++/* Read the bearer token from saved token file, data is a place holder, unused for now */
++static char* _default_bearer_callback(http_t* http, const char* resource, void *data)
++{
++  (void) data;
++
++  const char* fromEnv = getenv("AUTH_BEARER_TOKEN");
++  if (fromEnv != NULL) {
++    char* token = cleanupToken(fromEnv);
++    if (token != NULL) {
++#if defined(__IMPLEMENT_TRAKEN__)
++      if (http->telemetryConnection != NULL) {
++        traken_send_string(http->telemetryConnection, "Got Bearer Token from Environment");
++      }
++#endif
++      DEBUG_puts("Got bearer token from the environment");
++      return token;
++    }
++  }
++
++#if defined(HAVE_GSSAPI/*ACTUALLY SHOULD BE HAVE_PRINTUITOOL*/) && defined(HAVE_XPC)
++  char* printUIToolResult = _invoke_printUIToolForBearerToken(http, resource);
++  if (printUIToolResult != NULL) {
++    return printUIToolResult;
++  }
++#endif
++
++  // Check if the token has setup in http auth
++  const char* token = cupsGetPassword2("GETTOKEN", http, "Bearer", resource);
++  
++  if (token != NULL)
++    return strdup(token);
++
++  return NULL;
++}
++
++/*
++ * 'cupsSetBearerTokenCB()' - set the http bearer token callback and data
++ */
++void cupsSetBearerTokenCB(http_t *http, bearer_token_callback_t cb, void *data)
++{
++  if (http) {
++    if (cb == (bearer_token_callback_t)0) {
++        http->bearer_callback = _default_bearer_callback;
++        http->bearer_data = NULL;
++    } else {
++        http->bearer_callback = cb;
++        http->bearer_data = data;
++    }
++  }
++}
+--- a/cups/ipp-support.c	1653545841.000000000
++++ b/cups/ipp-support.c	1676894950.046098244
+@@ -1382,9 +1382,9 @@ ippCreateRequestedArray(ipp_t *request)
+     "job-account-id",
+     "job-account-id-default",
+     "job-account-id-supported",
+-    "job-accounting-sheets"
+-    "job-accounting-sheets-default"
+-    "job-accounting-sheets-supported"
++    "job-accounting-sheets",
++    "job-accounting-sheets-default",
++    "job-accounting-sheets-supported",
+     "job-accounting-user-id",
+     "job-accounting-user-id-default",
+     "job-accounting-user-id-supported",
+@@ -1699,6 +1699,8 @@ ippCreateRequestedArray(ipp_t *request)
+     "multiple-operation-time-out",
+     "multiple-operation-time-out-action",
+     "natural-language-configured",
++    "oauth-authorization-scope",
++    "oauth-authorization-server-uri",
+     "operations-supported",
+     "pages-per-minute",
+     "pages-per-minute-color",
+@@ -1799,7 +1801,8 @@ ippCreateRequestedArray(ipp_t *request)
+     "which-jobs-supported",
+     "xri-authentication-supported",
+     "xri-security-supported",
+-    "xri-uri-scheme-supported"
++    "xri-uri-scheme-supported",
++    "x-apple-extension-identifier"
+   };
+   static const char * const resource_description[] =
+   {					/* resource-description group - IPP System */
+--- a/cups/ipp.c	1653545841.000000000
++++ b/cups/ipp.c	1676895142.027018835
+@@ -3103,7 +3103,26 @@ ippReadIO(void       *src,		/* I - Data
+               {
+                 DEBUG_printf(("1ippReadIO: Converting %s attribute from %s to %s.",
+                               attr->name, ippTagString(value_tag), ippTagString(tag)));
+-		ippSetValueTag(ipp, &attr, tag);
++
++                  if (ippSetValueTag(ipp, &attr, tag) == 0)
++                  {
++		    // If that failed, and we were converting from IPP_TAG_NAME to IPP_TAG_TEXT, then
++		    // act like we did before and let it slide; other conversions should still be failed
++		    if (value_tag == IPP_TAG_NAME && tag == IPP_TAG_TEXT) {
++		      // this is the epson fax case
++		    } else if (value_tag == IPP_TAG_TEXT && tag == IPP_TAG_NAME) {
++		      // We can allow this as well
++		    } else {
++		      // We'll fail this one
++                      _cupsSetError(IPP_STATUS_ERROR_INTERNAL,
++                                    _("IPP 1setOf attribute with incompatible value "
++                                      "tags."), 1);
++                      DEBUG_printf(("1ippReadIO: Failed to convert %s attribute from %s to %s.",
++                                    attr->name, ippTagString(value_tag), ippTagString(tag)));
++                      _cupsBufferRelease((char *)buffer);
++                      return (IPP_STATE_ERROR);
++		    }
++                  }
+ 	      }
+             }
+ 	    else if (value_tag == IPP_TAG_INTEGER ||
+@@ -3172,6 +3191,13 @@ ippReadIO(void       *src,		/* I - Data
+ 	      DEBUG_puts("1ippReadIO: member attribute outside of collection.");
+ 	      goto rollback;
+ 	    }
++	    else if (!parent)
++	    {
++	      _cupsSetError(IPP_STATUS_ERROR_INTERNAL, _("IPP member attribute outside of collection."), 1);
++	      DEBUG_puts("1ippReadIO: member attribute outside of collection.");
++	      _cupsBufferRelease((char *)buffer);
++	      return (IPP_STATE_ERROR);
++	    }
+ 
+             if (ipp->current)
+ 	      ipp->prev = ipp->current;
+@@ -3600,6 +3626,22 @@ ippReadIO(void       *src,		/* I - Data
+         break; /* anti-compiler-warning-code */
+   }
+ 
++#if 0
++
++  /* REMINDSMA: I'd like to put this in earlier in a cycle; but to
++   * address 78420280 I'll restrict it just to the ipp->ppd path.
++   * Cloned to 80055972 */
++
++  if (ipp->state == IPP_STATE_IDLE || ipp->state == IPP_STATE_DATA)
++  {
++    if (! ippValidateAttributes(ipp))
++    {
++      DEBUG_printf(("1ippReadIO: ipp attributes invalid - %s.", cupsLastErrorString()));
++      ipp->state = IPP_STATE_ERROR;
++    }
++  }
++#endif
++
+   DEBUG_printf(("1ippReadIO: returning ipp->state=%d.", ipp->state));
+   _cupsBufferRelease((char *)buffer);
+ 
+@@ -5230,6 +5272,27 @@ ippWrite(http_t *http,			/* I - HTTP con
+   if (!http)
+     return (IPP_STATE_ERROR);
+ 
++  /*
++   * Serialize the request to the http stream.
++   *
++   * REMINDSMA: The illogic here seems to be that cupsSendRequest will mitigate an immediate 401
++   * and then retransmit the body (so we need to fix up the user name there, maybe)
++   * but a 100 will have cupsSendRequest exit and the subsequent cupsGetResponse have to deal
++   * with the 401, and we don't have a body to rewrite there.
++   * So, if we're looping on sending and the user must change, this is the only
++   * reliable place to rewrite it.
++   *
++   * Oh, and to make all this worse, third party tools (eg, ipptool) expect to be able
++   * to have their own version of the cupsSendRequest/cupsGetResponse loop.
++   */
++
++  if (http->rewriteRequestingUser != NULL) {
++    ipp_attribute_t* req_name = ippFindAttribute(ipp, "requesting-user-name", IPP_TAG_ZERO);
++    if (req_name != NULL && strcmp(ippGetString(req_name, 0, NULL), http->rewriteRequestingUser) != 0) {
++      ippSetString(ipp, &req_name, 0, http->rewriteRequestingUser);
++    }
++  }
++
+   return (ippWriteIO(http, (ipp_iocb_t)httpWrite2, http->blocking, NULL, ipp));
+ }
+ 
+@@ -5587,6 +5650,7 @@ ippWriteIO(void       *dst,		/* I - Dest
+ 
+ 	    case IPP_TAG_TEXT :
+ 	    case IPP_TAG_NAME :
++	    case IPP_TAG_RESERVED_STRING :
+ 	    case IPP_TAG_KEYWORD :
+ 	    case IPP_TAG_URI :
+ 	    case IPP_TAG_URISCHEME :
+--- a/cups/language.c	1653545841.000000000
++++ b/cups/language.c	1677325219.709562331
+@@ -23,6 +23,7 @@
+ #endif /* _WIN32 */
+ #ifdef HAVE_COREFOUNDATION_H
+ #  include <CoreFoundation/CoreFoundation.h>
++#  include <CoreFoundation/CFBundlePriv.h>
+ #endif /* HAVE_COREFOUNDATION_H */
+ 
+ 
+@@ -1409,11 +1410,93 @@ appleLangDefault(void)
+ 
+ #  ifdef CUPS_BUNDLEDIR
+ /*
++static bool getLocaleEncoding(const char* locale, SInt32* languageCode, SInt32* regionCode, SInt32* scriptCode, CFStringEncoding* stringEncoding)
++{
++  CFStringRef localeString = CFStringCreateWithCString(kCFAllocatorDefault, locale, kCFStringEncodingUTF8);
++  bool ok = CFBundleGetLocalizationInfoForLocalization(localeString, languageCode, regionCode, scriptCode, stringEncoding);
++  CFRelease(localeString);
++  DEBUG_printf(("%s: [%s] => %d", __FUNCTION__, locale, ok));
++  return ok;
++}
++
++static CFDictionaryRef _Nullable copyCupsLocaleStringTable(CFBundleRef bundle, SInt32 languageCode, SInt32 regionCode, SInt32 scriptCode, CFStringEncoding stringEncoding)
++{
++  CFDictionaryRef result = NULL;
++  CFStringRef localizationName = CFBundleCopyLocalizationForLocalizationInfo(languageCode, regionCode, scriptCode, stringEncoding);
++  if (localizationName != NULL) {
++    result = CFBundleCopyLocalizedStringTableForLocalization(bundle, CFSTR("cups"), localizationName);
++    int count = 0;
++    if (result != NULL) {
++      count = CFDictionaryGetCount(result);
++      if (count == 0) {
++	CFRelease(result);
++	result = NULL;
++      }
++    }
++#if DEBUG
++    char tmp[256];
++    CFStringGetCString(localizationName, tmp, sizeof(tmp), kCFStringEncodingUTF8);
++    DEBUG_printf(("%s: [%s] => %d", __FUNCTION__, tmp, count));
++#endif
++    CFRelease(localizationName);
++  }
++  return result;
++}
++*/
++/*
++static CFDictionaryRef copyCupsLocalePListFromBundle(const char* locale)
++{
++  static CFBundleRef sLocBundle = NULL;
++  static dispatch_once_t sOnce = 0;
++
++  dispatch_once(&sOnce, ^{
++    CFURLRef bundleURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, CFSTR(CUPS_BUNDLEDIR), 0, true);
++    if (bundleURL) {
++      sLocBundle = CFBundleCreate(kCFAllocatorDefault, bundleURL);
++      CFRelease(bundleURL);
++    }
++  });
++
++  CFDictionaryRef result = NULL;
++
++  if (sLocBundle == NULL) {
++    result = NULL;
++  } else {
++    SInt32 languageCode;
++    SInt32 regionCode;
++    SInt32 scriptCode;
++    CFStringEncoding stringEncoding;
++
++    bool haveLocaleEncoding = getLocaleEncoding(locale, &languageCode, &regionCode, &scriptCode, &stringEncoding);
++
++    // Can't parse XY_AB for some reason - can we just do XY
++    if (! haveLocaleEncoding && strlen(locale) > 2) {
++      char trimmed[3] = { locale[0], locale[1], '\0' };
++      haveLocaleEncoding = getLocaleEncoding(trimmed, &languageCode, &regionCode, &scriptCode, &stringEncoding);
++    }
++
++    if (haveLocaleEncoding) {
++      // Can we get very specific?
++      result = copyCupsLocaleStringTable(sLocBundle, languageCode, regionCode, scriptCode, stringEncoding);
++
++      // OK, how about less specific?
++      if (result == NULL)
++	result = copyCupsLocaleStringTable(sLocBundle, languageCode, -1, -1, 0xffff);
++
++      // Just give us something?
++      if (result == NULL)
++	result = CFBundleCopyLocalizedStringTableForLocalization(sLocBundle, CFSTR("cups"), NULL);
++    }
++  }
++  return result;
++}
++*/
++/*
+  * 'appleMessageLoad()' - Load a message catalog from a localizable bundle.
+  */
+ 
+ static cups_array_t *			/* O - Message catalog */
+-appleMessageLoad(const char *locale)	/* I - Locale ID */
++appleMessageLoad(const char *localePassedIn)	/* I - Locale ID */
+ {
+   char			filename[1024],	/* Path to cups.strings file */
+ 			applelang[256],	/* Apple language ID */
+@@ -1426,6 +1509,7 @@ appleMessageLoad(const char *locale)	/*
+                                         /* Test strings file */
+   CFErrorRef		error = NULL;	/* Error when opening file */
+ #endif /* DEBUG */
++  const char* locale = localePassedIn;	/* otherwise it'll be garbage by the time we need it later */
+ 
+ 
+   DEBUG_printf(("appleMessageLoad(locale=\"%s\")", locale));
+@@ -1470,6 +1554,7 @@ appleMessageLoad(const char *locale)	/*
+     DEBUG_printf(("1appleMessageLoad: \"%s\": %s", filename, strerror(errno)));
+ 
+     strlcpy(baselang, locale, sizeof(baselang));
++    // REMINDSMA: Doesn't matter anymore - but [3] is probably wrong here anyway
+     if (baselang[3] == '-' || baselang[3] == '_')
+       baselang[3] = '\0';
+ 
+@@ -1588,6 +1673,16 @@ appleMessageLoad(const char *locale)	/*
+   DEBUG_printf(("1appleMessageLoad: url=%p, stream=%p, plist=%p", url, stream,
+                 plist));
+ 
++  // Starting in Rome, all the string tables are in one plist
++  // so if we didn't find an explicit one via the above, older code
++  // use the CFBundle SPI to get the strings file.
++  // And we should consider if we can remove all of the mucking about with lproj above
++  // at some point.
++/*
++  if (plist == NULL) {
++    plist = copyCupsLocalePListFromBundle(localePassedIn);
++  }
++*/
+  /*
+   * Create and return an empty array to act as a cache for messages, passing the
+   * plist as the user data.
+--- a/cups/pwg.h	1653545841.000000000
++++ b/cups/pwg.h	1681282692.397081446
+@@ -11,6 +11,24 @@
+ 
+ 
+ /*
++ * Include necessary headers...
++ */
++
++#  include <stddef.h>
++#  include <cups/ipp.h>
++#  include <cups/versioning.h>
++
++
++/*
++ * Include necessary headers...
++ */
++
++#  include <stddef.h>
++#  include <cups/ipp.h>
++#  include <cups/versioning.h>
++
++
++/*
+  * C++ magic...
+  */
+ 
+--- a/cups/request.c	1653545841.000000000
++++ b/cups/request.c	1676895197.072157260
+@@ -196,10 +196,6 @@ cupsDoIORequest(http_t     *http,	/* I -
+   {
+     DEBUG_puts("2cupsDoIORequest: setup...");
+ 
+-   /*
+-    * Send the request...
+-    */
+-
+     status = cupsSendRequest(http, request, resource, length);
+ 
+     DEBUG_printf(("2cupsDoIORequest: status=%d", status));
+@@ -685,7 +681,15 @@ cupsSendRequest(http_t     *http,	/* I -
+     httpSetExpect(http, expect);
+     httpSetField(http, HTTP_FIELD_CONTENT_TYPE, "application/ipp");
+     httpSetField(http, HTTP_FIELD_DATE, httpGetDateString2(time(NULL), date, (int)sizeof(date)));
+-    httpSetLength(http, length);
++
++    // The caller knows nothing about the http being rewritten
++    // at a lower level, if we've had to mangle the payload
++    // to set the user based on the bearer token.
++    if (http->rewriteRequestingUser) {
++      httpSetLength(http, CUPS_LENGTH_VARIABLE);
++    } else {
++      httpSetLength(http, length);
++    }
+ 
+     digest = http->authstring && !strncmp(http->authstring, "Digest ", 7);
+ 
+--- a/cups/tls-darwin.c	1653545841.000000000
++++ b/cups/tls-darwin.c	1676895201.672597880
+@@ -18,6 +18,12 @@
+ #include <spawn.h>
+ #include "tls-darwin.h"
+ 
++#if __has_include(<Security/SecureTransportPriv.h>)
++#include <Security/SecureTransportPriv.h>
++#else
++extern OSStatus SSLSetDHEEnabled(SSLContextRef, Boolean);
++#endif
++
+ /*
+  * Constants, very secure stuff...
+  */
+@@ -253,13 +259,13 @@ cupsMakeServerCredentials(
+   CFNumberRef	usage = CFNumberCreate(kCFAllocatorDefault, kCFNumberCFIndexType, &usageInt);
+   CFIndex	lenInt = 0;
+   CFNumberRef	len = CFNumberCreate(kCFAllocatorDefault, kCFNumberCFIndexType, &lenInt);
+-  CFTypeRef certKeys[] = { kSecCSRBasicContraintsPathLen, kSecSubjectAltName, kSecCertificateKeyUsage };
+-  CFTypeRef certValues[] = { len, cfcommon_name, usage };
++  CFTypeRef certKeys[] = { kSecCSRBasicContraintsPathLen, kSecCertificateKeyUsage };
++  CFTypeRef certValues[] = { len, usage };
+   CFDictionaryRef certParams = CFDictionaryCreate(kCFAllocatorDefault, certKeys, certValues, sizeof(certKeys) / sizeof(certKeys[0]), &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+   CFRelease(usage);
+   CFRelease(len);
+ 
+-  const void	*ca_o[] = { kSecOidOrganization, CFSTR("") };
++  const void	*ca_o[] = { kSecOidOrganization, CFSTR("cups") };
+   const void	*ca_cn[] = { kSecOidCommonName, cfcommon_name };
+   CFArrayRef	ca_o_dn = CFArrayCreate(kCFAllocatorDefault, ca_o, 2, NULL);
+   CFArrayRef	ca_cn_dn = CFArrayCreate(kCFAllocatorDefault, ca_cn, 2, NULL);
+@@ -1463,6 +1469,14 @@ _httpTLSStart(http_t *http)		/* I - HTTP
+     }
+   }
+ 
++  if (! error && http->disableDH)
++  {
++    // We may be reestablishing a connection
++    // after an insecure dh cipher was selected, so this time around
++    // we disable dh completely.
++    (void) SSLSetDHEEnabled(http->tls, false);
++  }
++  
+   if (!error && http->mode == _HTTP_MODE_CLIENT)
+   {
+    /*
+@@ -1628,6 +1642,12 @@ _httpTLSStart(http_t *http)		/* I - HTTP
+       {
+ 	case noErr :
+ 	    done = 1;
++#if __BLOCKS__
++	  _http_telemetry_block_t cb = _httpGetTelemetryBlock(http, CFSTR("SSLHandshakeSuccess"));
++	  if (cb) {
++	      cb(http, CFSTR("SSLHandshakeSuccess"), http->tls);
++	  }
++#endif
+ 	    break;
+ 
+ 	case errSSLWouldBlock :
+@@ -1738,6 +1758,13 @@ _httpTLSStart(http_t *http)		/* I - HTTP
+ 
+   if (error)
+   {
++#if __BLOCKS__
++    _http_telemetry_block_t cb = _httpGetTelemetryBlock(http, CFSTR("SSLHandshakeFailure"));
++    if (cb) {
++      cb(http, CFSTR("SSLHandshakeFailure"), http->tls);
++    }
++#endif
++
+     http->error  = error;
+     http->status = HTTP_STATUS_ERROR;
+     errno        = ECONNREFUSED;
+--- a/cups/tlscheck.c	1653545841.000000000
++++ b/cups/tlscheck.c	1676895442.718720853
+@@ -74,6 +74,7 @@ main(int  argc,				/* I - Number of comm
+     "uri-authentication-supported",
+     "uri-security-supported"
+   };
++  int             get = 0;              /* do an http get not a post */
+ 
+ 
+   for (i = 1; i < argc; i ++)
+@@ -118,6 +119,10 @@ main(int  argc,				/* I - Number of comm
+     {
+       verbose = 1;
+     }
++    else if (!strcmp(argv[i], "--get"))
++    {
++      get = 1;
++    }
+     else if (!strcmp(argv[i], "-4"))
+     {
+       af = AF_INET;
+@@ -764,28 +769,43 @@ main(int  argc,				/* I - Number of comm
+ 
+   if (verbose)
+   {
+-    httpAssembleURI(HTTP_URI_CODING_ALL, uri, sizeof(uri), "ipps", NULL, server, port, resource);
+-    request = ippNewRequest(IPP_OP_GET_PRINTER_ATTRIBUTES);
+-    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", NULL, uri);
+-    ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_NAME, "requesting-user-name", NULL, cupsUser());
+-    ippAddStrings(request, IPP_TAG_OPERATION, IPP_TAG_KEYWORD, "requested-attributes", (int)(sizeof(pattrs) / sizeof(pattrs[0])), NULL, pattrs);
++    if (get)
++    {
++      char tempname[1024]; /* Temporary filename */
++      int fd = cupsTempFd(tempname, sizeof(tempname));
++      if (fd < 0) {
++        printf("Failed to create a local fd for http get: %d/%s\n", errno, strerror(errno));
++      } else {
++        http_status_t status = cupsGetFd(http, "/", fd);
++        printf("GET returned http status %d; temp file at '%s'\n", status, tempname);
++        close(fd);
++      }
++    }
++    else
++    {
++      httpAssembleURI(HTTP_URI_CODING_ALL, uri, sizeof(uri), "ipps", NULL, server, port, resource);
++      request = ippNewRequest(IPP_OP_GET_PRINTER_ATTRIBUTES);
++      ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_URI, "printer-uri", NULL, uri);
++      ippAddString(request, IPP_TAG_OPERATION, IPP_TAG_NAME, "requesting-user-name", NULL, cupsUser());
++      ippAddStrings(request, IPP_TAG_OPERATION, IPP_TAG_KEYWORD, "requested-attributes", (int)(sizeof(pattrs) / sizeof(pattrs[0])), NULL, pattrs);
+ 
+-    response = cupsDoRequest(http, request, resource);
++      response = cupsDoRequest(http, request, resource);
+ 
+-    for (attr = ippFirstAttribute(response); attr; attr = ippNextAttribute(response))
+-    {
+-      if (ippGetGroupTag(attr) != IPP_TAG_PRINTER)
+-        continue;
++      for (attr = ippFirstAttribute(response); attr; attr = ippNextAttribute(response))
++      {
++        if (ippGetGroupTag(attr) != IPP_TAG_PRINTER)
++          continue;
+ 
+-      if ((name = ippGetName(attr)) == NULL)
+-        continue;
++        if ((name = ippGetName(attr)) == NULL)
++          continue;
+ 
+-      ippAttributeString(attr, value, sizeof(value));
+-      printf("    %s=%s\n", name, value);
+-    }
++        ippAttributeString(attr, value, sizeof(value));
++        printf("    %s=%s\n", name, value);
++      }
+ 
+-    ippDelete(response);
+-    puts("");
++      ippDelete(response);
++      puts("");
++    }
+   }
+ 
+   httpClose(http);
+--- a/cups/util.c	1653545841.000000000
++++ b/cups/util.c	1676895451.835444118
+@@ -425,8 +425,8 @@ cupsGetJobs2(http_t     *http,		/* I - C
+   ipp_attribute_t *attr;		/* Current attribute */
+   cups_job_t	*temp;			/* Temporary pointer */
+   int		id,			/* job-id */
+-		priority,		/* job-priority */
+-		size;			/* job-k-octets */
++                priority,		/* job-priority */
++                size;			/* job-k-octets */
+   ipp_jstate_t	state;			/* job-state */
+   time_t	completed_time,		/* time-at-completed */
+ 		creation_time,		/* time-at-creation */
+--- a/examples/testfile.txt	1653545841.000000000
++++ b/examples/testfile.txt	1681282692.397846176
+@@ -1,60 +1,60 @@
+-All work and no play makes Johhny a dull boy.  All work and no
+-play makes Johhny a dull boy.  All work and no play makes Johhny
+-a dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy. All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy. All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy. All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy. All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy. All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy. All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy. All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.
++All work and no play makes Johhny a dull boy.  All work and no
++play makes Johhny a dull boy.  All work and no play makes Johhny
++a dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy. All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy. All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy. All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy. All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy. All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy. All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy. All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.
+--- a/ppdc/ppdc-source.cxx	1653545841.000000000
++++ b/ppdc/ppdc-source.cxx	1676895485.493113527
+@@ -1,7 +1,7 @@
+ //
+ // Source class for the CUPS PPD Compiler.
+ //
+-// Copyright 2007-2018 by Apple Inc.
++// Copyright 2007-2020 by Apple Inc.
+ // Copyright 2002-2007 by Easy Software Products.
+ //
+ // Licensed under Apache License v2.0.  See the file "LICENSE" for more
+--- a/scheduler/cert.c	1653545841.000000000
++++ b/scheduler/cert.c	1676895500.844496666
+@@ -436,7 +436,6 @@ ctcompare(const char *a,		/* I - First s
+ {
+   int	result = 0;			/* Result */
+ 
+-
+   while (*a && *b)
+   {
+     result |= *a ^ *b;
+--- a/scheduler/classes.c	1653545841.000000000
++++ b/scheduler/classes.c	1676895554.908355043
+@@ -364,6 +364,21 @@ cupsdLoadAllClasses(void)
+ 			"Bad AuthInfoRequired on line %d of classes.conf.",
+ 			linenum);
+     }
++    else if (!_cups_strcasecmp(line, "AuthInfo_oauth_uri"))
++    {
++      if (value)
++        cupsdSetString(&p->oauth_uri, value);
++    }
++    else if (!_cups_strcasecmp(line, "AuthInfo_oauth_scope"))
++    {
++      if (value)
++        cupsdSetString(&p->oauth_scope, value);
++    }
++    else if (!_cups_strcasecmp(line, "AuthInfo_extension_ident"))
++    {
++      if (value)
++        cupsdSetString(&p->source_app, value);
++    }
+     else if (!_cups_strcasecmp(line, "Info"))
+     {
+       if (value)
+@@ -740,6 +755,16 @@ cupsdSaveAllClasses(void)
+       cupsFilePutConf(fp, "AuthInfoRequired", value);
+     }
+ 
++    // HEY, is this the same code as in printers.c?  Yes, of course it is.
++    if (pclass->oauth_uri)
++      cupsFilePutConf(fp, "AuthInfo_oauth_uri", pclass->oauth_uri);
++
++    if (pclass->oauth_scope)
++      cupsFilePutConf(fp, "AuthInfo_oauth_scope", pclass->oauth_scope);
++
++    if (pclass->source_app)
++      cupsFilePutConf(fp, "AuthInfo_extension_ident", pclass->source_app);
++
+     if (pclass->info)
+       cupsFilePutConf(fp, "Info", pclass->info);
+ 
+--- a/scheduler/client.c	1653545841.000000000
++++ b/scheduler/client.c	1676896100.431553101
+@@ -27,13 +27,14 @@
+ #  include <tcpd.h>
+ #endif /* HAVE_TCPD_H */
+ 
++#include "mime-private.h"
+ 
+ /*
+  * Local functions...
+  */
+ 
+ static int		check_if_modified(cupsd_client_t *con,
+-			                  struct stat *filestats);
++			                  const struct stat *filestats);
+ static int		compare_clients(cupsd_client_t *a, cupsd_client_t *b,
+ 			                void *data);
+ #ifdef HAVE_TLS
+@@ -46,13 +47,42 @@ static int		is_cgi(cupsd_client_t *con,
+ 		               struct stat *filestats, mime_type_t *type);
+ static int		is_path_absolute(const char *path);
+ static int		pipe_command(cupsd_client_t *con, int infile, int *outfile,
+-			             char *command, char *options, int root);
++			             char *command, char *options, int root, int percent_decode);
+ static int		valid_host(cupsd_client_t *con);
+ static int		write_file(cupsd_client_t *con, http_status_t code,
+ 		        	   char *filename, char *type,
+ 				   struct stat *filestats);
+ static void		write_pipe(cupsd_client_t *con);
+ 
++/* - rooted file
++ * Avoid races by working with paths resolved from well known places.
++ * Prevents open(2) from working with a different file than we first stat'd.
++ * These rf_ things are built on top of a further abstraction that finds
++ * the best match given the original implementation of get_file.
++ * The cleanuup here would be to remove this scaffolding (where it calls through
++ * to the above static routines.)
++ */
++enum _rf_disposition_e {
++  RF_FOUND,       /* file->_fd is valid - you should rf_close_file(&file) */
++  RF_MISSING,     /* we don't have an open file - it might have been a symlink, or just not found */
++  RF_PASS_ON      /* file is zero'd */
++};
++typedef enum _rf_disposition_e rf_disposition_t;
++
++struct _rf_file_t {
++  rf_disposition_t _disposition;
++  int              _fd;           /* if disposition is RF_FOUND, then this will be != -1 and you need to rf_closefile */
++  char             _filename[MAXPATHLEN];
++  struct stat      _filestats;
++};
++typedef struct _rf_file_t rf_file_t;
++
++static void rf_get_file(cupsd_client_t* con, rf_file_t* file);
++static void rf_closefile(rf_file_t* file);
++static mime_type_t *rf_mimeFileType(mime_t *mime, const rf_file_t* file);
++static int rf_is_cgi(cupsd_client_t* con, const rf_file_t* file, mime_type_t *type);
++static int rf_check_if_modified(cupsd_client_t* con, const rf_file_t* file);
++static int rf_write_file(cupsd_client_t* con, http_status_t code, const rf_file_t* file, char* mime_type);
+ 
+ /*
+  * 'cupsdAcceptClient()' - Accept a new client.
+@@ -270,6 +300,17 @@ cupsdAcceptClient(cupsd_listener_t *lis)
+   if (httpAddrFamily(httpGetAddress(con->http)) == AF_LOCAL)
+   {
+ #  ifdef __APPLE__
++    {
++      struct xucred cred = { .cr_version = XUCRED_VERSION };
++      socklen_t credsize = sizeof(cred);
++
++      if (getsockopt(httpGetFd(con->http), SOL_LOCAL, LOCAL_PEERCRED, &cred, &credsize) == 0) {
++        if (cred.cr_version == XUCRED_VERSION) {
++          con->peer_uid = cred.cr_uid;
++        }
++      }
++    }
++
+     socklen_t	peersize;		/* Size of peer credentials */
+     pid_t	peerpid;		/* Peer process ID */
+     char	peername[256];		/* Name of process */
+@@ -554,18 +595,16 @@ cupsdReadClient(cupsd_client_t *con)	/*
+   http_status_t		status;		/* Transfer status */
+   ipp_state_t		ipp_state;	/* State of IPP transfer */
+   int			bytes;		/* Number of bytes to POST */
+-  char			*filename;	/* Name of file for GET/HEAD */
+-  char			buf[1024];	/* Buffer for real filename */
+-  struct stat		filestats;	/* File information */
+   mime_type_t		*type;		/* MIME type of file */
+   static unsigned	request_id = 0;	/* Request ID for temp files */
+-
++  char                  request_uri[HTTP_MAX_URI];  /* uri - percent encoded */
++  char              recv_buf[1];
+ 
+   status = HTTP_STATUS_CONTINUE;
+ 
+   cupsdLogClient(con, CUPSD_LOG_DEBUG2, "cupsdReadClient: error=%d, used=%d, state=%s, data_encoding=HTTP_ENCODING_%s, data_remaining=" CUPS_LLFMT ", request=%p(%s), file=%d", httpError(con->http), (int)httpGetReady(con->http), httpStateString(httpGetState(con->http)), httpIsChunked(con->http) ? "CHUNKED" : "LENGTH", CUPS_LLCAST httpGetRemaining(con->http), con->request, con->request ? ippStateString(ippGetState(con->request)) : "", con->file);
+ 
+-  if (httpError(con->http) == EPIPE && !httpGetReady(con->http) && recv(httpGetFd(con->http), buf, 1, MSG_PEEK) < 1)
++  if (httpError(con->http) == EPIPE && !httpGetReady(con->http) && recv(httpGetFd(con->http), recv_buf, 1, MSG_PEEK) < 1)
+   {
+    /*
+     * Connection closed...
+@@ -599,14 +638,14 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 
+     con->auto_ssl = 0;
+ 
+-    if (recv(httpGetFd(con->http), buf, 1, MSG_PEEK) == 1 &&
+-        (!buf[0] || !strchr("DGHOPT", buf[0])))
++    if (recv(httpGetFd(con->http), recv_buf, 1, MSG_PEEK) == 1 &&
++        (!recv_buf[0] || !strchr("DGHOPT", recv_buf[0])))
+     {
+      /*
+       * Encrypt this connection...
+       */
+ 
+-      cupsdLogClient(con, CUPSD_LOG_DEBUG2, "Saw first byte %02X, auto-negotiating SSL/TLS session.", buf[0] & 255);
++      cupsdLogClient(con, CUPSD_LOG_DEBUG2, "Saw first byte %02X, auto-negotiating SSL/TLS session.", recv_buf[0] & 255);
+ 
+       if (cupsd_start_tls(con, HTTP_ENCRYPTION_ALWAYS))
+         cupsdCloseClient(con);
+@@ -623,7 +662,7 @@ cupsdReadClient(cupsd_client_t *con)	/*
+         * See if we've received a request line...
+ 	*/
+ 
+-        con->operation = httpReadRequest(con->http, con->uri, sizeof(con->uri));
++        con->operation = httpReadRequest(con->http, request_uri, sizeof(request_uri));
+         if (con->operation == HTTP_STATE_ERROR ||
+ 	    con->operation == HTTP_STATE_UNKNOWN_METHOD ||
+ 	    con->operation == HTTP_STATE_UNKNOWN_VERSION)
+@@ -690,7 +729,11 @@ cupsdReadClient(cupsd_client_t *con)	/*
+         * Handle full URLs in the request line...
+ 	*/
+ 
+-        if (strcmp(con->uri, "*"))
++        if (strcmp(request_uri, "*") == 0)
++        {
++          strlcpy(con->uri, request_uri, sizeof(con->uri));
++        }
++        else
+ 	{
+ 	  char	scheme[HTTP_MAX_URI],	/* Method/scheme */
+ 		userpass[HTTP_MAX_URI],	/* Username:password */
+@@ -702,14 +745,14 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 	  * Separate the URI into its components...
+ 	  */
+ 
+-          if (httpSeparateURI(HTTP_URI_CODING_MOST, con->uri,
++          if (httpSeparateURI(HTTP_URI_CODING_MOST, request_uri,
+ 	                      scheme, sizeof(scheme),
+ 	                      userpass, sizeof(userpass),
+ 			      hostname, sizeof(hostname), &port,
+ 			      resource, sizeof(resource)) < HTTP_URI_STATUS_OK)
+           {
+ 	    cupsdLogClient(con, CUPSD_LOG_ERROR, "Bad URI \"%s\" in request.",
+-                           con->uri);
++                           request_uri);
+ 	    cupsdSendError(con, HTTP_STATUS_METHOD_NOT_ALLOWED, CUPSD_AUTH_NONE);
+ 	    cupsdCloseClient(con);
+ 	    return;
+@@ -731,14 +774,14 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 	    */
+ 
+ 	    cupsdLogClient(con, CUPSD_LOG_ERROR, "Bad URI \"%s\" in request.",
+-                           con->uri);
++                           request_uri);
+ 	    cupsdSendError(con, HTTP_STATUS_METHOD_NOT_ALLOWED, CUPSD_AUTH_NONE);
+ 	    cupsdCloseClient(con);
+ 	    return;
+ 	  }
+ 
+          /*
+-	  * Copy the resource portion back into the URI; both resource and
++	  * Copy the percent-decoded resource portion into the URI; both resource and
+ 	  * con->uri are HTTP_MAX_URI bytes in size...
+ 	  */
+ 
+@@ -794,7 +837,7 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 	break;
+ 
+     default :
+-        if (!httpGetReady(con->http) && recv(httpGetFd(con->http), buf, 1, MSG_PEEK) < 1)
++        if (!httpGetReady(con->http) && recv(httpGetFd(con->http), recv_buf, 1, MSG_PEEK) < 1)
+ 	{
+ 	 /*
+ 	  * Connection closed...
+@@ -1047,60 +1090,74 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 
+       switch (httpGetState(con->http))
+       {
+-	case HTTP_STATE_GET_SEND :
+-            cupsdLogClient(con, CUPSD_LOG_DEBUG, "Processing GET %s", con->uri);
++        case HTTP_STATE_GET_SEND : {
++          cupsdLogClient(con, CUPSD_LOG_DEBUG, "Processing GET %s", con->uri);
+ 
+-            if ((filename = get_file(con, &filestats, buf, sizeof(buf))) != NULL)
+-            {
+-	      type = mimeFileType(MimeDatabase, filename, NULL, NULL);
++          rf_file_t getfile;
++          rf_get_file(con, &getfile);
+ 
+-              cupsdLogClient(con, CUPSD_LOG_DEBUG, "filename=\"%s\", type=%s/%s", filename, type ? type->super : "", type ? type->type : "");
++          if (getfile._disposition == RF_FOUND)
++          {
++              type = rf_mimeFileType(MimeDatabase, &getfile);
+ 
+-              if (is_cgi(con, filename, &filestats, type))
+-	      {
+-	       /*
+-	        * Note: con->command and con->options were set by is_cgi()...
+-		*/
++              cupsdLogClient(con, CUPSD_LOG_DEBUG, "filename=\"%s\", type=%s/%s", getfile._filename, type ? type->super : "", type ? type->type : "");
+ 
+-        	if (!cupsdSendCommand(con, con->command, con->options, 0))
+-		{
+-		  if (!cupsdSendError(con, HTTP_STATUS_NOT_FOUND, CUPSD_AUTH_NONE))
+-		  {
+-		    cupsdCloseClient(con);
+-		    return;
+-		  }
+-        	}
+-		else
+-        	  cupsdLogRequest(con, HTTP_STATUS_OK);
++              /** NOTE: rf_is_cgi / old is_cgi mutates con for cgi parameter extraction */
++              if (rf_is_cgi(con, &getfile, type))
++              {
++                rf_closefile(&getfile);
+ 
+-		if (httpGetVersion(con->http) <= HTTP_VERSION_1_0)
+-		  httpSetKeepAlive(con->http, HTTP_KEEPALIVE_OFF);
+-	        break;
+-	      }
++                /*
++                 * Note: con->command and con->options were set by is_cgi()...
++                 */
++
++                  if (!cupsdSendCommand(con, con->command, con->options, 0, 0))
++                  {
++                      if (!cupsdSendError(con, HTTP_STATUS_NOT_FOUND, CUPSD_AUTH_NONE))
++                      {
++                          cupsdCloseClient(con);
++                          return;
++                      }
++                  }
++                  else
++                      cupsdLogRequest(con, HTTP_STATUS_OK);
++
++                if (httpGetVersion(con->http) <= HTTP_VERSION_1_0)
++                    httpSetKeepAlive(con->http, HTTP_KEEPALIVE_OFF);
+ 
+-	      if (!check_if_modified(con, &filestats))
++                break;
++              }
++
++              if (!rf_check_if_modified(con, &getfile))
+               {
+-        	if (!cupsdSendError(con, HTTP_STATUS_NOT_MODIFIED, CUPSD_AUTH_NONE))
+-		{
+-		  cupsdCloseClient(con);
+-		  return;
+-		}
+-	      }
+-	      else
++                rf_closefile(&getfile);
++                if (!cupsdSendError(con, HTTP_STATUS_NOT_MODIFIED, CUPSD_AUTH_NONE))
++                {
++                    cupsdCloseClient(con);
++                    return;
++                }
++              }
++              else
+               {
+-		if (type == NULL)
+-	          strlcpy(line, "text/plain", sizeof(line));
+-		else
+-	          snprintf(line, sizeof(line), "%s/%s", type->super, type->type);
++                char mime_line[256];
+ 
+-        	if (!write_file(con, HTTP_STATUS_OK, filename, line, &filestats))
+-		{
+-		  cupsdCloseClient(con);
+-		  return;
+-		}
+-	      }
++                if (type == NULL)
++                    strlcpy(mime_line, "text/plain", sizeof(mime_line));
++                else
++                    snprintf(mime_line, sizeof(mime_line), "%s/%s", type->super, type->type);
++
++                int did_write = rf_write_file(con, HTTP_STATUS_OK, &getfile, mime_line);
++
++                rf_closefile(&getfile);
++
++                if (!did_write)
++                {
++                    cupsdCloseClient(con);
++                    return;
++                }
++              }
+             }
+-            else if (!buf[0] && (!strncmp(con->uri, "/admin", 6) || !strncmp(con->uri, "/classes", 8) || !strncmp(con->uri, "/help", 5) || !strncmp(con->uri, "/jobs", 5) || !strncmp(con->uri, "/printers", 9)))
++            else if ((getfile._disposition == RF_PASS_ON) && (!strncmp(con->uri, "/admin", 6) || !strncmp(con->uri, "/classes", 8) || !strncmp(con->uri, "/help", 5) || !strncmp(con->uri, "/jobs", 5) || !strncmp(con->uri, "/printers", 9)))
+ 	    {
+ 	      if (!WebInterface)
+ 	      {
+@@ -1159,7 +1216,8 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 		  cupsdSetString(&con->options, NULL);
+ 	      }
+ 
+-              if (!cupsdSendCommand(con, con->command, con->options, 0))
++              // REMINDSMA: At this point con->options has been % expanded - %252f becomes -> %2f
++              if (!cupsdSendCommand(con, con->command, con->options, 0, 0))
+ 	      {
+ 		if (!cupsdSendError(con, HTTP_STATUS_NOT_FOUND, CUPSD_AUTH_NONE))
+ 		{
+@@ -1181,9 +1239,9 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 		return;
+ 	      }
+ 	    }
+-            break;
++        }   break;
+ 
+-	case HTTP_STATE_POST_RECV :
++        case HTTP_STATE_POST_RECV : {
+            /*
+ 	    * See if the POST request includes a Content-Length field, and if
+ 	    * so check the length against any limits that are set...
+@@ -1243,15 +1301,26 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 	      break;
+ 	    }
+ 
+-	    if ((filename = get_file(con, &filestats, buf, sizeof(buf))) != NULL)
++            rf_file_t postfile;
++            rf_get_file(con, &postfile);
++
++	    if (postfile._disposition == RF_FOUND)
+             {
+ 	     /*
+ 	      * POST to a file...
+ 	      */
+ 
+-	      type = mimeFileType(MimeDatabase, filename, NULL, NULL);
++              type = rf_mimeFileType(MimeDatabase, &postfile);
++
++              int is_it_cgi = rf_is_cgi(con, &postfile, type);
++
++              // we don't ever actually use the file
++              rf_closefile(&postfile);
+ 
+-              if (!is_cgi(con, filename, &filestats, type))
++              // so .. based on this logic, if the file exists and is a CGI, then we don't do anything?
++              // REMINDSMA...
++
++              if (!is_it_cgi)
+ 	      {
+ 	       /*
+ 	        * Only POST to CGI's...
+@@ -1319,7 +1388,7 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 		return;
+ 	      }
+ 	    }
+-	    break;
++        }    break;
+ 
+ 	case HTTP_STATE_PUT_RECV :
+ 	   /*
+@@ -1406,10 +1475,13 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 	    cupsdCloseClient(con);
+ 	    return;
+ 
+-	case HTTP_STATE_HEAD :
+-            if ((filename = get_file(con, &filestats, buf, sizeof(buf))) != NULL)
++        case HTTP_STATE_HEAD : {
++          rf_file_t head_file;
++          rf_get_file(con, &head_file);
++
++          if (head_file._disposition == RF_FOUND)
+             {
+-	      if (!check_if_modified(con, &filestats))
++	      if (!rf_check_if_modified(con, &head_file))
+ 	      {
+ 		if (!cupsdSendError(con, HTTP_STATUS_NOT_MODIFIED, CUPSD_AUTH_NONE))
+ 		{
+@@ -1425,7 +1497,7 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 		* Serve a file...
+ 		*/
+ 
+-		type = mimeFileType(MimeDatabase, filename, NULL, NULL);
++                type = rf_mimeFileType(MimeDatabase, &head_file);
+ 		if (type == NULL)
+ 		  strlcpy(line, "text/plain", sizeof(line));
+ 		else
+@@ -1433,8 +1505,10 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 
+ 		httpClearFields(con->http);
+ 
+-		httpSetField(con->http, HTTP_FIELD_LAST_MODIFIED, httpGetDateString(filestats.st_mtime));
+-		httpSetLength(con->http, (size_t)filestats.st_size);
++		httpSetField(con->http, HTTP_FIELD_LAST_MODIFIED, httpGetDateString(head_file._filestats.st_mtime));
++		httpSetLength(con->http, (size_t)head_file._filestats.st_size);
++
++                rf_closefile(&head_file);
+ 
+ 		if (!cupsdSendHeader(con, HTTP_STATUS_OK, line, CUPSD_AUTH_NONE))
+ 		{
+@@ -1459,7 +1533,7 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 	      break;
+ 	    }
+ 
+-	    if (!buf[0] && (!strncmp(con->uri, "/admin", 6) || !strncmp(con->uri, "/classes", 8) || !strncmp(con->uri, "/help", 5) || !strncmp(con->uri, "/jobs", 5) || !strncmp(con->uri, "/printers", 9)))
++	    if ((head_file._disposition == RF_PASS_ON) && (!strncmp(con->uri, "/admin", 6) || !strncmp(con->uri, "/classes", 8) || !strncmp(con->uri, "/help", 5) || !strncmp(con->uri, "/jobs", 5) || !strncmp(con->uri, "/printers", 9)))
+ 	    {
+ 	     /*
+ 	      * CGI output...
+@@ -1487,7 +1561,7 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 
+               cupsdLogRequest(con, HTTP_STATUS_NOT_FOUND);
+ 	    }
+-            break;
++        }    break;
+ 
+ 	default :
+             break; /* Anti-compiler-warning-code */
+@@ -1567,6 +1641,7 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 	  * End of file, see how big it is...
+ 	  */
+ 
++          struct stat    filestats;  /* File information */
+ 	  fstat(con->file, &filestats);
+ 
+ 	  close(con->file);
+@@ -1752,6 +1827,7 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 	{
+ 	  if (con->file >= 0)
+ 	  {
++            struct stat    filestats;  /* File information */
+ 	    if (fstat(con->file, &filestats))
+ 	      filestats.st_size = 0;
+ 
+@@ -1796,7 +1872,7 @@ cupsdReadClient(cupsd_client_t *con)	/*
+ 
+ 	    if (con->command)
+ 	    {
+-	      if (!cupsdSendCommand(con, con->command, con->options, 0))
++	      if (!cupsdSendCommand(con, con->command, con->options, 0, 0))
+ 	      {
+ 		if (!cupsdSendError(con, HTTP_STATUS_NOT_FOUND, CUPSD_AUTH_NONE))
+ 		{
+@@ -1854,7 +1930,8 @@ cupsdSendCommand(
+     cupsd_client_t *con,		/* I - Client connection */
+     char           *command,		/* I - Command to run */
+     char           *options,		/* I - Command-line options */
+-    int            root)		/* I - Run as root? */
++    int            root,		/* I - Run as root? */
++    int            percent_decode)      /* I - Percent decode the optoins string */
+ {
+   int	fd;				/* Standard input file descriptor */
+ 
+@@ -1877,7 +1954,7 @@ cupsdSendCommand(
+   else
+     fd = -1;
+ 
+-  con->pipe_pid    = pipe_command(con, fd, &(con->file), command, options, root);
++  con->pipe_pid    = pipe_command(con, fd, &(con->file), command, options, root, percent_decode);
+   con->pipe_status = HTTP_STATUS_OK;
+ 
+   httpClearFields(con->http);
+@@ -2588,7 +2665,7 @@ cupsdWriteClient(cupsd_client_t *con)	/*
+ static int				/* O - 1 if modified since */
+ check_if_modified(
+     cupsd_client_t *con,		/* I - Client connection */
+-    struct stat    *filestats)		/* I - File information */
++    const struct stat    *filestats)		/* I - File information */
+ {
+   const char	*ptr;			/* Pointer into field */
+   time_t	date;			/* Time/date value */
+@@ -3193,8 +3270,9 @@ pipe_command(cupsd_client_t *con,	/* I -
+              int            infile,	/* I - Standard input for command */
+              int            *outfile,	/* O - Standard output for command */
+ 	     char           *command,	/* I - Command to run */
+-	     char           *options,	/* I - Options for command */
+-	     int            root)	/* I - Run as root? */
++	     char           *options,	/* I - Options for command (already percent decoded) */
++	     int            root,       /* I - Run as root? */
++         int            percent_decode) /* I - Should we percent decode the string after all? */
+ {
+   int		i;			/* Looping var */
+   int		pid;			/* Process ID */
+@@ -3241,6 +3319,8 @@ pipe_command(cupsd_client_t *con,	/* I -
+   *
+   * The string is always parsed out as command-line arguments, to
+   * be consistent with Apache...
++  *
++  * Note that this assumes %xx decoding has already taken place on the options string.
+   */
+ 
+   cupsdLogClient(con, CUPSD_LOG_DEBUG2, "pipe_command: infile=%d, outfile=%p, command=\"%s\", options=\"%s\", root=%d", infile, outfile, command, options ? options : "(null)", root);
+@@ -3310,7 +3390,7 @@ pipe_command(cupsd_client_t *con,	/* I -
+ 	else
+ 	  break;
+       }
+-      else if (*commptr == '%' && isxdigit(commptr[1] & 255) &&
++      else if (percent_decode && *commptr == '%' && isxdigit(commptr[1] & 255) &&
+                isxdigit(commptr[2] & 255))
+       {
+        /*
+@@ -3724,7 +3804,7 @@ write_file(cupsd_client_t *con,		/* I -
+ 	   char           *type,	/* I - File type */
+ 	   struct stat    *filestats)	/* O - File information */
+ {
+-  con->file = open(filename, O_RDONLY);
++  con->file = open(filename, O_RDONLY, 0600);
+ 
+   cupsdLogClient(con, CUPSD_LOG_DEBUG2, "write_file: code=%d, filename=\"%s\" (%d), type=\"%s\", filestats=%p.", code, filename, con->file, type ? type : "(null)", filestats);
+ 
+@@ -3770,3 +3850,698 @@ write_pipe(cupsd_client_t *con)		/* I -
+ 
+   cupsdLogClient(con, CUPSD_LOG_DEBUG, "CGI data ready to be sent.");
+ }
++
++/*
++ * Rooted File -
++ */
++
++static void rf_closefile(rf_file_t* file)
++{
++  if (file->_fd != -1) {
++    close(file->_fd);
++  }
++  bzero(file, sizeof(*file));
++  file->_disposition = RF_MISSING;
++  file->_fd = -1;
++}
++
++static mime_type_t *        /* O - Type of file */
++rf_mimeFileType(mime_t     *mime,    /* I - MIME database */
++             const rf_file_t* file)  /* O - Is the file compressed? */
++{
++  const char* fileName = strrchr(file->_filename, '/');
++  if (fileName == NULL)
++    fileName = file->_filename;
++  else {
++    ++fileName;
++  }
++  return mimeFileTypeFD(mime, file->_fd, fileName);
++}
++
++static int
++rf_is_cgi(cupsd_client_t* con, const rf_file_t* file, mime_type_t *type)
++{
++  const char  *options;    /* Options on URL */
++
++  /*
++   * Get the options, if any...
++   */
++
++  if ((options = strchr(con->uri, '?')) != NULL)
++  {
++    options ++;
++    cupsdSetStringf(&(con->query_string), "QUERY_STRING=%s", options);
++  }
++
++  /*
++   * Check for known types...
++   */
++
++  if (!type || _cups_strcasecmp(type->super, "application"))
++  {
++//    CFLog(kCFLogLevelInfo, CFSTR("is_cgi: filename=\"%s\", type=%s/%s, returning 0."), file->filename, type ? type->super : "unknown", type ? type->type : "unknown");
++    return (0);
++  }
++
++  if (!_cups_strcasecmp(type->type, "x-httpd-cgi") && (file->_filestats.st_mode & 0111))
++  {
++    /*
++     * "application/x-httpd-cgi" is a CGI script.
++     */
++
++    cupsdSetString(&con->command, file->_filename);
++
++    if (options)
++      cupsdSetStringf(&con->options, " %s", options);
++
++//    CFLog(kCFLogLevelInfo, CFSTR("is_cgi: filename=\"%s\", type=%s/%s, returning 1."), file->filename, type->super, type->type);
++    return (1);
++  }
++
++//  CFLog(kCFLogLevelInfo, CFSTR("is_cgi: filename=\"%s\", type=%s/%s, returning 0."), file->filename, type->super, type->type);
++  return (0);
++}
++
++static int
++rf_check_if_modified(cupsd_client_t* con, const rf_file_t* file)
++{
++  return check_if_modified(con, &file->_filestats);
++}
++
++static int
++rf_write_file(cupsd_client_t* con, http_status_t code, const rf_file_t* file, char* type)
++{
++  con->file = dup(file->_fd);
++
++  cupsdLogClient(con, CUPSD_LOG_DEBUG2, "rf_write_file: code=%d, filename=\"%s\", fd=%d from %d, type=\"%s\"", code, file->_filename, con->file, file->_fd, type ? type : "(null)");
++
++  if (con->file < 0)
++    return (0);
++
++  struct stat stat2;
++
++  if (fstat(con->file, &stat2) == 0) {
++    if ((file->_filestats.st_dev != stat2.st_dev) || (file->_filestats.st_ino != stat2.st_ino)) {
++      cupsdLogClient(con, CUPSD_LOG_DEBUG2, "write_file: filestats different (%d %d)", (int) file->_filestats.st_ino, (int) stat2.st_ino);
++      close(con->file);
++      con->file = -1;
++      return (0);
++    }
++  }
++
++
++  fcntl(con->file, F_SETFD, fcntl(con->file, F_GETFD) | FD_CLOEXEC);
++
++  con->pipe_pid    = 0;
++  con->sent_header = 1;
++
++  httpClearFields(con->http);
++
++  httpSetLength(con->http, (size_t)file->_filestats.st_size);
++
++  httpSetField(con->http, HTTP_FIELD_LAST_MODIFIED,
++               httpGetDateString(file->_filestats.st_mtime));
++
++  if (!cupsdSendHeader(con, code, type, CUPSD_AUTH_NONE))
++    return (0);
++
++  cupsdAddSelect(httpGetFd(con->http), NULL, (cupsd_selfunc_t)cupsdWriteClient, con);
++
++  cupsdLogClient(con, CUPSD_LOG_DEBUG, "Sending file.");
++
++  return (1);
++}
++
++//#define ppLog(fmt, ...) fprintf(stderr, fmt "\n",__VA_ARGS__)
++#define ppLog(fmt, ...) do { cupsdLogClient(NULL, CUPSD_LOG_DEBUG, fmt,__VA_ARGS__); } while (0)
++
++/*
++ path to a full file (log or conf)
++ root + partial + filename + suffix
++ root + partial + [ lang ]
++ */
++
++
++enum rooted_path_location {
++  ROOTED_Invalid = 0,
++
++  ROOTED_ServerRoot,
++  ROOTED_DocumentRoot,
++  ROOTED_ConfigurationFile,
++  ROOTED_CacheDir,
++  ROOTED_AccessLog,
++  ROOTED_ErrorLog,
++  ROOTED_PageLog,
++};
++
++enum rooted_path_kind {
++  ROOTED_PATH_INVALID,
++  ROOTED_PATH_ONLY,
++  ROOTED_PATH_FULL,
++  ROOTED_PATH_PARTIAL,
++  ROOTED_PATH_LANG_INDEX,
++  ROOTED_PATH_MULTI
++};
++
++struct _rooted_path_parts {
++  enum rooted_path_location _root_path;
++  char _partial[MAXPATHLEN];
++};
++
++struct _rooted_path_parts_lang {
++  enum rooted_path_location _root_path;
++  char _partial[MAXPATHLEN];
++  char _language[32];
++};
++
++struct _rooted_path_s {
++  enum rooted_path_kind _kind;
++  union {
++    enum rooted_path_location _root;
++    char _full_path[MAXPATHLEN];
++    struct _rooted_path_parts _partialParts;
++    struct _rooted_path_parts_lang _partialPartsLang;
++    cups_array_t* _multiPaths;
++  } _u;
++};
++typedef struct _rooted_path_s rooted_path_t;
++
++static rooted_path_t* pathNew_Full(const char* path);
++static rooted_path_t* pathNew_Rooted(enum rooted_path_location root);
++static rooted_path_t* pathNew_Partial(enum rooted_path_location root, const char* dir, const char* name);
++static rooted_path_t* pathNew_PartialSuffix(enum rooted_path_location root, const char* dir, const char* name, const char* suffix);
++
++static void pathDelete(rooted_path_t*);
++
++static int pathResolveAndOpen(rooted_path_t* p, struct stat* sb, char* dst, size_t dstLen);
++
++static void* _path_copy(void* e, void* ignored)
++{
++  (void) ignored;
++  rooted_path_t* p = (rooted_path_t*) e;
++  rooted_path_t* cpy = (rooted_path_t*) calloc(1, sizeof(rooted_path_t));
++  cpy->_kind = p->_kind;
++
++  if (p->_kind == ROOTED_PATH_MULTI) {
++    cpy->_u._multiPaths = cupsArrayDup(p->_u._multiPaths);
++  } else {
++    memcpy(&cpy->_u, &p->_u, sizeof(p->_u));
++  }
++
++  return (void*) cpy;
++}
++
++static void _path_delete(void* e, void* ignored)
++{
++  (void) ignored;
++  rooted_path_t* p = (rooted_path_t*) e;
++  pathDelete(p);
++}
++
++static rooted_path_t* pathNew(enum rooted_path_kind kind)
++{
++  rooted_path_t* p = (rooted_path_t*) calloc(1, sizeof(rooted_path_t));
++  p->_kind = kind;
++  if (kind == ROOTED_PATH_MULTI) {
++    p->_u._multiPaths = cupsArrayNew3(NULL, NULL, NULL, 0, _path_copy, _path_delete);
++  }
++  return p;
++}
++
++static const char* pathRoot(enum rooted_path_location root)
++{
++  switch (root) {
++    default:
++      return NULL;
++#define XX(yy)  case ROOTED_##yy: return yy
++      XX(ServerRoot);
++      XX(DocumentRoot);
++      XX(ConfigurationFile);
++      XX(CacheDir);
++      XX(AccessLog);
++      XX(ErrorLog);
++      XX(PageLog);
++#undef XX
++  }
++}
++
++#if DEBUG
++static char* pathDebugStr(rooted_path_t* p)
++{
++  if (p == NULL)
++    return strdup("NULL PATH (pass through)");
++  char* s = NULL;
++  switch (p->_kind) {
++    case ROOTED_PATH_INVALID:
++      asprintf(&s, "Path<%p> { Invalid }", p);
++      break;
++    case ROOTED_PATH_ONLY:
++      asprintf(&s, "Path<%p> { Rooted '%s' }", p, pathRoot(p->_u._root));
++      break;
++    case ROOTED_PATH_FULL:
++      asprintf(&s, "Path<%p> { Full '%s' }", p, p->_u._full_path);
++      break;
++    case ROOTED_PATH_PARTIAL:
++      asprintf(&s, "Path<%p> { Partial '%s', '%s' }", p, pathRoot(p->_u._partialParts._root_path), p->_u._partialParts._partial);
++      break;
++    case ROOTED_PATH_LANG_INDEX:
++      asprintf(&s, "Path<%p> { PartialLangIndex '%s', '%s', '%s' }", p, pathRoot(p->_u._partialPartsLang._root_path), p->_u._partialPartsLang._partial, p->_u._partialPartsLang._language);
++      break;
++    case ROOTED_PATH_MULTI:
++      asprintf(&s, "Path<%p> { Multi '%d' }", p, cupsArrayCount(p->_u._multiPaths));
++      break;
++  }
++  return s;
++}
++#endif
++
++static int _full_resolveAndOpen(const char* fullPath, struct stat* sb, char* dst, size_t dstLen)
++{
++  int fd = open(fullPath, O_RDONLY);
++
++  if (fd == -1) {
++    ppLog("FPR: can't open file '%s'", fullPath);
++    return -1;
++  }
++
++  int ok = fstat(fd, sb) == 0;
++
++  if (! ok) {
++    ppLog("FPR: can't stat open file fd %d path %s err %d/%s", fd, fullPath, errno, strerror(errno));
++  }
++
++  if (ok) {
++    ok = S_ISREG(sb->st_mode);
++    if (! ok) {
++      ppLog("FPR: open file fd %d path %s is not a regular file: %x", fd, fullPath, sb->st_mode);
++    }
++  }
++
++  if (! ok) {
++    close(fd);
++    return -1;
++  }
++
++  strlcpy(dst, fullPath, dstLen);
++
++  return fd;
++}
++
++static int _root_resolveAndOpen(enum rooted_path_location root, struct stat* sb, char* dst, size_t dstLen)
++{
++  return _full_resolveAndOpen(pathRoot(root), sb, dst, dstLen);
++}
++
++static int _partial_resolveAndOpen(const struct _rooted_path_parts* pp, struct stat* sb, char* dst, size_t dstLen)
++{
++  int root_fd = open(pathRoot(pp->_root_path), O_RDONLY | O_DIRECTORY);
++  if (root_fd == -1) {
++    ppLog("PPR: Can't open root '%s' %d/%s", pathRoot(pp->_root_path), errno, strerror(errno));
++    return -1;
++  }
++
++  int fd = openat(root_fd, pp->_partial, O_RDONLY | O_NOFOLLOW);
++
++  int serr = errno;
++  close(root_fd);
++  if (fd == -1) {
++    ppLog("PPR: Can't open partial '%s' / '%s' %d/%s", pathRoot(pp->_root_path), pp->_partial, serr, strerror(serr));
++    return -1;
++  }
++  if (fstat(fd, sb) != 0) {
++    ppLog("PPR: Can't fstat partial '%s' / '%s' %d/%s", pathRoot(pp->_root_path), pp->_partial, errno, strerror(errno));
++    close(fd);
++    return -1;
++  }
++  snprintf(dst, dstLen, "%s/%s", pathRoot(pp->_root_path), pp->_partial);
++  return fd;
++}
++
++static int permissions_check_file(const struct stat* sb)
++{
++  if (S_ISDIR(sb->st_mode)) {
++    return 0;
++  }
++
++  if (S_ISLNK(sb->st_mode)) {
++    return 0;
++  }
++
++  if ((sb->st_mode & S_IROTH) == 0) {
++    return 0;
++  }
++
++  return 1;
++}
++
++static int _partial_lang_resolveAndOpen(struct _rooted_path_parts_lang* pp, struct stat* sb, char* dst, size_t dstLen)
++{
++  // start with _root_path
++  // get to _root_path / _partial
++  // -> if its a file, we can return it
++  // -> if a directory, search for lang_loc/index.html, lang/index.html or index.html
++
++  rooted_path_t* pDir = pathNew_Partial(pp->_root_path, NULL, pp->_partial);
++  int fd = pathResolveAndOpen(pDir, sb, dst, dstLen);
++  pathDelete(pDir);
++
++  if (fd != -1) {
++    if (permissions_check_file(sb)) {
++      ppLog("PLR: Found an ok file: %s", dst);
++      return fd;
++    }
++
++    // going to try again
++    close(fd);
++  }
++
++  // If we got here, then we're looking at a directory - so we need to probe around the languages
++  // for index.html.  First XX_YY/index.html, then XX/index.html, finally index.html
++  char lang_dir[MAXPATHLEN];
++  strlcpy(lang_dir, pp->_language, sizeof(lang_dir));
++  for (int i = 0;  i < 3;  i++) {
++    switch (i) {
++      case 0:
++        break;
++      case 1:
++        lang_dir[2] = '\0';
++        break;
++      case 2:
++        lang_dir[0] = '\0';
++        break;
++    }
++
++    char index_name[MAXPATHLEN];
++    if (strlen(lang_dir) == 0)
++      strlcpy(index_name, "index.html", sizeof(index_name));
++    else {
++      snprintf(index_name, sizeof(index_name), "%s/%s", lang_dir, "index.html");
++    }
++
++    rooted_path_t* p = pathNew_Partial(pp->_root_path, pp->_partial, index_name);
++    fd = pathResolveAndOpen(p, sb, dst, dstLen);
++    pathDelete(p);
++
++    if (fd != -1) {
++      ppLog("PLR: Found a file candidate - %s", dst);
++
++      if (permissions_check_file(sb)) {
++        ppLog("PLR: using this file - %s", dst);
++        return fd;
++      }
++
++     ppLog("PLR: File %s is not a regular file!", dst);
++     close(fd);
++    }
++
++    if (strlen(lang_dir) == 0) {
++      break;
++    }
++  }
++
++  return -1;
++}
++
++static int _multi_resolveAndOpen(cups_array_t* arr, struct stat* sb, char* dst, size_t dstLen)
++{
++  for (void* e = cupsArrayFirst(arr);
++       e != NULL;
++       e = cupsArrayNext(arr)) {
++    rooted_path_t* p = (rooted_path_t*) e;
++
++    int fd = pathResolveAndOpen(p, sb, dst, dstLen);
++    if (fd != -1) {
++      ppLog("MPR: found fd %d path %s", fd, dst);
++      return fd;
++    }
++  }
++
++  return -1;
++}
++
++static int pathResolveAndOpen(rooted_path_t* p, struct stat* sb, char* dst, size_t dstLen)
++{
++  switch (p->_kind) {
++    case ROOTED_PATH_INVALID:
++      return -1;
++
++    case ROOTED_PATH_ONLY:
++      return _root_resolveAndOpen(p->_u._root, sb, dst, dstLen);
++
++    case ROOTED_PATH_FULL:
++      return _full_resolveAndOpen(p->_u._full_path, sb, dst, dstLen);
++
++    case ROOTED_PATH_PARTIAL:
++      return _partial_resolveAndOpen(&p->_u._partialParts, sb, dst, dstLen);
++
++    case ROOTED_PATH_LANG_INDEX:
++      return _partial_lang_resolveAndOpen(&p->_u._partialPartsLang, sb, dst, dstLen);
++
++    case ROOTED_PATH_MULTI:
++      return _multi_resolveAndOpen(p->_u._multiPaths, sb, dst, dstLen);
++  }
++
++  return -1;
++}
++
++static void pathDelete(rooted_path_t* p)
++{
++  if (p->_kind == ROOTED_PATH_MULTI) {
++    cupsArrayDelete(p->_u._multiPaths);
++  }
++  free(p);
++}
++
++static rooted_path_t* pathNew_Full(const char* path)
++{
++  rooted_path_t* p = pathNew(ROOTED_PATH_FULL);
++  strlcpy(p->_u._full_path, path, sizeof(p->_u._full_path));
++  return p;
++}
++
++static rooted_path_t* pathNew_Rooted(enum rooted_path_location root)
++{
++  rooted_path_t* p = pathNew(ROOTED_PATH_ONLY);
++  p->_u._root = root;
++  return p;
++}
++
++static rooted_path_t* pathNew_Partial(enum rooted_path_location root, const char* dir, const char* name)
++{
++  rooted_path_t* p = pathNew(ROOTED_PATH_PARTIAL);
++  struct _rooted_path_parts* pu = &p->_u._partialParts;
++
++  pu->_root_path = root;
++
++  if (dir == NULL || dir[0] == '\0')
++    strlcpy(pu->_partial, name, sizeof(pu->_partial));
++  else {
++    snprintf(pu->_partial, sizeof(pu->_partial), "%s/%s", dir, name);
++  }
++
++  return p;
++}
++
++static rooted_path_t* pathNew_PartialSuffix(enum rooted_path_location root, const char* dir, const char* name, const char* suffix)
++{
++  char tmp[MAXPATHLEN];
++  snprintf(tmp, sizeof(tmp), "%s%s", name, suffix);
++  return pathNew_Partial(root, dir, tmp);
++}
++
++static rooted_path_t* pathNew_PartialLang(enum rooted_path_location root, const char* partial, const char* lang)
++{
++  rooted_path_t* p = pathNew(ROOTED_PATH_LANG_INDEX);
++  struct _rooted_path_parts_lang* pu = &p->_u._partialPartsLang;
++
++  pu->_root_path = root;
++  if (partial && partial[0] == '/')
++    ++partial;
++  strlcpy(pu->_partial, partial, sizeof(pu->_partial));
++  if (lang == NULL)
++    pu->_language[0] = 0;
++  else {
++    strlcpy(pu->_language, lang, sizeof(pu->_language));
++  }
++
++  return p;
++}
++
++static void pathAddMulti(rooted_path_t* p, rooted_path_t* e)
++{
++  cupsArrayAdd(p->_u._multiPaths, e);
++}
++
++static rooted_path_t* newPrinterPaths(enum rooted_path_location root, const char* uri, const char* dir, const char* suffix)
++{
++  char dest[1024];
++  strlcpy(dest, strchr(uri + 1, '/') + 1, sizeof(dest));
++  dest[strlen(dest) - strlen(suffix)] = '\0'; /* Strip suffix */
++
++  cupsd_printer_t* found = cupsdFindDest(dest);
++  if (found == NULL) {
++    return NULL;
++  }
++
++  rooted_path_t* multi = pathNew(ROOTED_PATH_MULTI);
++
++  if ((found->type & CUPS_PRINTER_CLASS) == 0) {
++    rooted_path_t* pp = pathNew_PartialSuffix(root, dir, found->name, suffix);
++    pathAddMulti(multi, pp);
++    pathDelete(pp);
++  }  else {
++    for (int i = 0; i < found->num_printers; i ++) {
++      if ((found->printers[i]->type & CUPS_PRINTER_CLASS) == 0) {
++        rooted_path_t* pp = pathNew_PartialSuffix(root, dir, found->printers[i]->name, suffix);
++        pathAddMulti(multi, pp);
++        pathDelete(pp);
++      }
++    }
++  }
++
++  return multi;
++}
++
++/*
++ * basic replacement for the existing get_file
++ */
++static rooted_path_t* get_file_paths(const char* uri, const char* lang)
++{
++  /*
++   * Figure out the real filename...
++   */
++
++  if (!strncmp(uri, "/help", 5) && (uri[5] == '/' || !uri[5])) {
++    /*
++     * All help files are served by the help.cgi program...
++     */
++
++    return (NULL);
++  }
++
++  int is_ppd = 0 == strncmp(uri, "/ppd/", 5);
++  int is_prn = 0 == strncmp(uri, "/printers/", 10);
++  int is_cls = 0 == strncmp(uri, "/classes/", 9);
++  int is_icn = 0 == strncmp(uri, "/icons/", 7);
++  int is_rss = 0 == strncmp(uri, "/rss/", 5);
++  int is_str = 0 == strncmp(uri, "/strings/", 9);
++  int is_cnf = 0 == strncmp(uri, "/admin/conf/", 12);
++  int is_log = 0 == strncmp(uri, "/admin/log/", 11);
++
++  const char* suffix = strchr(uri, '.');
++
++  int is_ppd_suffix = (suffix && 0 == strcmp(suffix, ".ppd"));
++  int is_png_suffix = (suffix && 0 == strcmp(suffix, ".png"));
++  int is_str_suffix = (suffix && 0 == strcmp(suffix, ".strings"));
++
++  if (is_ppd_suffix && (is_ppd || is_prn || is_cls)) {
++    rooted_path_t* multi = newPrinterPaths(ROOTED_ServerRoot, uri, "ppd", ".ppd");
++    if (multi == NULL) {
++      ppLog("No destination found for \"%s\".", uri);
++      return pathNew(ROOTED_PATH_INVALID);
++    }
++    return multi;
++  } else if (is_png_suffix && (is_icn || is_prn || is_cls))  {
++    rooted_path_t* multi = newPrinterPaths(ROOTED_CacheDir, uri, "images", ".png");
++    if (multi == NULL) {
++      ppLog("No destination found for \"%s\".", uri);
++      return pathNew(ROOTED_PATH_INVALID);
++    }
++    rooted_path_t* genericPath = pathNew_Partial(ROOTED_DocumentRoot, "images", "generic.png");
++    pathAddMulti(multi, genericPath);
++    pathDelete(genericPath);
++    return multi;
++  } else if (!strncmp(uri, "/admin", 6) || !strncmp(uri, "/classes", 8) || !strncmp(uri, "/jobs", 5) || !strncmp(uri, "/printers", 9)) {
++    /*
++     * Admin/class/job/printer pages are served by CGI...
++     */
++
++    return NULL;
++  } else if (is_rss && !strchr(uri + 5, '/')) {
++    return pathNew_Partial(ROOTED_CacheDir, "rss", (uri + 5));
++  } else if (is_str && is_str_suffix) {
++    char dest[1024];
++    strlcpy(dest, uri + 9, sizeof(dest));
++    dest[strlen(dest) - 8] = '\0';
++
++    cupsd_printer_t* found = cupsdFindDest(dest);
++
++    if (found == NULL) {
++      ppLog("No destination \"%s\" found.", dest);
++      return pathNew(ROOTED_PATH_INVALID);
++    }
++
++    if ((found->type & CUPS_PRINTER_CLASS) != 0) {
++      ppLog("No strings files for class \"%s\".", dest);
++      return pathNew(ROOTED_PATH_INVALID);
++    }
++
++    if (found->strings == NULL) {
++      ppLog("No strings files for \"%s\".", dest);
++      return pathNew(ROOTED_PATH_INVALID);
++    }
++
++    return pathNew_Full(found->strings);
++  }
++  else if (is_cnf && (0 == strcmp(uri, "/admin/conf/cupsd.conf"))) {
++    // based on the existing get_file, this case never gets hit - consumed bin /admin going to CGI above...
++    // so kept here for consistency...
++    return pathNew_Rooted(ROOTED_ConfigurationFile);
++  }  else if (is_log) {
++    enum rooted_path_location where = ROOTED_Invalid;
++
++    if (!strncmp(uri + 11, "access_log", 10) && AccessLog[0] == '/')
++      where = ROOTED_AccessLog;
++    else if (!strncmp(uri + 11, "error_log", 9) && ErrorLog[0] == '/')
++      where = ROOTED_ErrorLog;
++    else if (!strncmp(uri + 11, "page_log", 8) && PageLog[0] == '/')
++      where = ROOTED_PageLog;
++
++    if (where == ROOTED_Invalid)
++      return pathNew(ROOTED_PATH_INVALID);
++    else {
++      return pathNew_Rooted(where);
++    }
++  }  else {
++    return pathNew_PartialLang(ROOTED_DocumentRoot, uri, lang);
++  }
++
++  return NULL;
++}
++
++static void
++rf_get_file(cupsd_client_t* con, rf_file_t* file)
++{
++  bzero(file, sizeof(*file));
++  file->_disposition = RF_MISSING;
++  file->_fd = -1;
++
++  rooted_path_t* p = get_file_paths(con->uri, con->language == NULL? NULL : con->language->language);
++
++  if (p == NULL) {
++    // file should be handled as a cgi
++    file->_disposition = RF_PASS_ON;
++    return;
++  }
++
++  file->_fd = pathResolveAndOpen(p, &file->_filestats, file->_filename, sizeof(file->_filename));
++
++#if DEBUG
++  {
++    char* s = pathDebugStr(p);
++    ppLog("rf_get_file: fd %d for %s", file->_fd, s);
++    free(s);
++  }
++#endif
++
++  pathDelete(p);
++
++  if (file->_fd == -1) {
++    // file should have been there,
++    // or it was there, but we don't want to use it (its a symlink or something)
++    file->_disposition = RF_MISSING;
++    return;
++  }
++
++  file->_disposition = RF_FOUND;
++}
+--- a/scheduler/client.h	1653545841.000000000
++++ b/scheduler/client.h	1676896123.541166462
+@@ -38,7 +38,7 @@ struct cupsd_client_s
+ 					/* Localized URL/URI for GET/PUT */
+ 			*filename,	/* Filename of output file */
+ 			*command,	/* Command to run */
+-			*options,	/* Options for command */
++			*options,	/* Options for command (already percent decoded) */
+ 			*query_string;	/* QUERY_STRING environment variable */
+   int			file;		/* Input/output file */
+   int			file_ready;	/* Input ready on file/pipe? */
+@@ -64,6 +64,8 @@ struct cupsd_client_s
+ #ifdef HAVE_AUTHORIZATION_H
+   AuthorizationRef	authref;	/* Authorization ref */
+ #endif /* HAVE_AUTHORIZATION_H */
++
++  uid_t                 peer_uid;       /* if non-zero, this is the uid of peer; it may be useful when we xpc back to get auth */
+ };
+ 
+ #define HTTP(con) ((con)->http)
+@@ -125,7 +127,7 @@ extern int	cupsdProcessIPPRequest(cupsd_
+ extern void	cupsdReadClient(cupsd_client_t *con);
+ extern void	cupsdResumeListening(void);
+ extern int	cupsdSendCommand(cupsd_client_t *con, char *command,
+-		                 char *options, int root);
++		                 char *options, int root, int percent_decode);
+ extern int	cupsdSendError(cupsd_client_t *con, http_status_t code,
+ 		               int auth_type);
+ extern int	cupsdSendHeader(cupsd_client_t *con, http_status_t code,
+--- a/scheduler/colorman.c	1653545841.000000000
++++ b/scheduler/colorman.c	1681269345.422822311
+@@ -43,6 +43,9 @@
+ #include <cups/ppd-private.h>
+ 
+ #ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
++#if TARGET_OS_OSX
+ #  include <ApplicationServices/ApplicationServices.h>
+ extern CFUUIDRef ColorSyncCreateUUIDFromUInt32(unsigned id);
+ #  include <CoreFoundation/CoreFoundation.h>
+@@ -90,17 +93,17 @@ extern CFUUIDRef ColorSyncCreateUUIDFrom
+  * Local globals...
+  */
+ 
+-#if !defined(__APPLE__) && defined(HAVE_DBUS)
++#if !TARGET_OS_OSX && defined(HAVE_DBUS)
+ static DBusConnection *colord_con = NULL;
+ 					/* DBUS connection for colord */
+-#endif /* !__APPLE__ && HAVE_DBUS */
++#endif /* !TARGET_OS_OSX && HAVE_DBUS */
+ 
+ 
+ /*
+  * Local functions...
+  */
+ 
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+ static void	apple_init_profile(ppd_file_t *ppd, cups_array_t *languages,
+                                    CFMutableDictionaryRef profile,
+ 				   unsigned id, const char *name,
+@@ -139,7 +142,7 @@ static void	colord_unregister_printer(cu
+ void
+ cupsdRegisterColor(cupsd_printer_t *p)	/* I - Printer */
+ {
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+   if (!RunUser)
+   {
+     apple_unregister_profiles(p);
+@@ -163,7 +166,7 @@ cupsdRegisterColor(cupsd_printer_t *p)	/
+ void
+ cupsdStartColor(void)
+ {
+-#if !defined(__APPLE__) && defined(HAVE_DBUS)
++#if !TARGET_OS_OSX && defined(HAVE_DBUS)
+   cupsd_printer_t	*p;		/* Current printer */
+ 
+ 
+@@ -184,7 +187,7 @@ cupsdStartColor(void)
+ void
+ cupsdStopColor(void)
+ {
+-#if !defined(__APPLE__) && defined(HAVE_DBUS)
++#if !TARGET_OS_OSX && defined(HAVE_DBUS)
+   if (colord_con)
+     dbus_connection_unref(colord_con);
+   colord_con = NULL;
+@@ -199,7 +202,7 @@ cupsdStopColor(void)
+ void
+ cupsdUnregisterColor(cupsd_printer_t *p)/* I - Printer */
+ {
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+   if (!RunUser)
+     apple_unregister_profiles(p);
+ 
+@@ -210,7 +213,7 @@ cupsdUnregisterColor(cupsd_printer_t *p)
+ }
+ 
+ 
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+ /*
+  * 'apple_init_profile()' - Initialize a color profile.
+  */
+--- a/scheduler/conf.c	1653545841.000000000
++++ b/scheduler/conf.c	1681282692.401452501
+@@ -3451,6 +3451,8 @@ read_cups_files_conf(cups_file_t *fp)	/*
+   static const char * const prohibited_env[] =
+   {					/* Prohibited environment variables */
+     "APPLE_LANGUAGE",
++    "AUTH_BEARER_UID",
++    "AUTH_BEARER_TOKEN",
+     "AUTH_DOMAIN",
+     "AUTH_INFO_REQUIRED",
+     "AUTH_NEGOTIATE",
+--- a/scheduler/cups-driverd.cxx	1653545841.000000000
++++ b/scheduler/cups-driverd.cxx	1681282692.402801092
+@@ -225,7 +225,7 @@ main(int  argc,				/* I - Number of comm
+  * 'add_ppd()' - Add a PPD file.
+  */
+ 
+-static ppd_info_t *			/* O - PPD */
++static ppd_info_t *			/* O - PPD, or NULL to avoid duplicates */
+ add_ppd(const char *filename,		/* I - PPD filename */
+         const char *name,		/* I - PPD name */
+         const char *language,		/* I - LanguageVersion */
+@@ -291,12 +291,24 @@ add_ppd(const char *filename,		/* I - PP
+  /*
+   * Add the PPD to the PPD arrays...
+   */
++  {
++    ppd_info_t* foundByName = (ppd_info_t*) cupsArrayFind(PPDsByName, ppd);
++    ppd_info_t* foundByMakeModel = (ppd_info_t*) cupsArrayFind(PPDsByMakeModel, ppd);
++    if (foundByName || foundByMakeModel) {
++      fprintf(stderr, "DEBUG2: [cups-driverd] %s already added (%p, %p)\n", ppd->record.filename, foundByName, foundByMakeModel);
++      free(ppd);
++      ppd = NULL;
++    }
++  }
+ 
+-  cupsArrayAdd(PPDsByName, ppd);
+-  cupsArrayAdd(PPDsByMakeModel, ppd);
++  if (ppd != NULL) {
++    cupsArrayAdd(PPDsByName, ppd);
++    cupsArrayAdd(PPDsByMakeModel, ppd);
++  }
+ 
+  /*
+   * Return the new PPD pointer...
++  * or NULL if we didn't add another one
+   */
+ 
+   return (ppd);
+@@ -1684,15 +1696,19 @@ load_drv(const char  *filename,		/* I -
+ 	 product = (ppdcAttr *)d->attrs->next())
+       if (!strcmp(product->name->value, "Product"))
+       {
+-        if (!products_found)
+-	  ppd = add_ppd(name, uri, "en", d->manufacturer->value, make_model, device_id ? device_id->value->value : "", product->value->value,
+-		        ps_version ? ps_version->value->value : "(3010) 0", mtime, (size_t)size, d->model_number, type, "drv");
+-	else if (products_found < PPD_MAX_PROD)
+-	  strlcpy(ppd->record.products[products_found], product->value->value, sizeof(ppd->record.products[0]));
+-	else
+-	  break;
+-
+-	products_found ++;
++        if (products_found == 0) {
++          ppd = add_ppd(name, uri, "en", d->manufacturer->value, make_model, device_id ? device_id->value->value : "", product->value->value,
++            ps_version ? ps_version->value->value : "(3010) 0", mtime, (size_t)size, d->model_number, type, "drv");
++          if (ppd != NULL) {
++            products_found ++;
++          }
++        }
++        else if (products_found < PPD_MAX_PROD) {
++          strlcpy(ppd->record.products[products_found], product->value->value, sizeof(ppd->record.products[0]));
++          products_found ++;
++        } else {
++          break;
++        }
+       }
+ 
+     if (!products_found)
+--- a/scheduler/cups-lpd.c	1653545841.000000000
++++ b/scheduler/cups-lpd.c	1676896150.719750015
+@@ -1311,10 +1311,10 @@ send_state(const char *queue,		/* I - De
+ 		*jobname;		/* Pointer to job-name */
+   ipp_jstate_t	jobstate;		/* job-state */
+   int		jobid,			/* job-id */
+-		jobsize,		/* job-k-octets */
+ 		jobcount,		/* Number of jobs */
+ 		jobcopies,		/* Number of copies */
+-		rank;			/* Rank of job */
++		rank,			/* Rank of job */
++                jobsize;                /* job-k-octets */
+   char		rankstr[255];		/* Rank string */
+   char		namestr[1024];		/* Job name string */
+   char		uri[HTTP_MAX_URI];	/* Printer URI */
+--- a/scheduler/ipp.c	1653545841.000000000
++++ b/scheduler/ipp.c	1676896159.800096886
+@@ -2492,7 +2492,7 @@ add_printer(cupsd_client_t  *con,	/* I -
+   }
+ 
+   if ((attr = ippFindAttribute(con->request, "printer-is-shared", IPP_TAG_BOOLEAN)) != NULL)
+-  {
++  { // REMINDSMA: num_auth_info_required isn't set yet, so I don't think this is working as expected.
+     if (ippGetBoolean(attr, 0) &&
+         printer->num_auth_info_required == 1 &&
+ 	!strcmp(printer->auth_info_required[0], "negotiate"))
+@@ -2624,6 +2624,35 @@ add_printer(cupsd_client_t  *con,	/* I -
+                                IPP_TAG_KEYWORD)) != NULL)
+     cupsdSetAuthInfoRequired(printer, NULL, attr);
+ 
++  {
++    struct PerStringAttr {
++      const char* attrName;
++      ipp_tag_t   stringTag;
++      char**      pString;
++    } perAttr[] = {
++      { "oauth-authorization-scope",      IPP_TAG_NAME,    &printer->oauth_scope },
++      { "oauth-authorization-server-uri", IPP_TAG_URI,     &printer->oauth_uri },
++      { "x-apple-extension-identifier",   IPP_TAG_NAME,    &printer->source_app  }
++    };
++    struct PerStringAttr* per = perAttr;
++    struct PerStringAttr* perEnd = &perAttr[sizeof(perAttr) / sizeof(perAttr[0])];
++    while (per < perEnd) {
++      attr = ippFindAttribute(con->request, per->attrName, per->stringTag);
++
++      if (attr == NULL) {
++	    char with_default[IPP_MAX_NAME];
++        snprintf(with_default, sizeof(with_default), "%s-default", per->attrName);
++        attr = ippFindAttribute(con->request, with_default, 0);
++      }
++
++      if (attr != NULL) {
++        cupsdSetString(per->pString, ippGetString(attr, 0, NULL));
++      }
++
++      ++per;
++    }
++  }
++
+  /*
+   * See if we have all required attributes...
+   */
+@@ -6218,7 +6247,7 @@ get_devices(cupsd_client_t *con)	/* I -
+ 	   exclude_str[0] ? "%20" : "", exclude_str,
+ 	   include_str[0] ? "%20" : "", include_str);
+ 
+-  if (cupsdSendCommand(con, command, options, 1))
++  if (cupsdSendCommand(con, command, options, 1, 1))
+   {
+    /*
+     * Command started successfully, don't send an IPP response here...
+@@ -7106,7 +7135,7 @@ get_ppd(cupsd_client_t  *con,		/* I - Cl
+     url_encode_string(ppd_name, oppd_name, sizeof(oppd_name));
+     snprintf(options, sizeof(options), "get+%d+%s", ippGetRequestId(con->request), oppd_name);
+ 
+-    if (cupsdSendCommand(con, command, options, 0))
++    if (cupsdSendCommand(con, command, options, 0, 1))
+     {
+      /*
+       * Command started successfully, don't send an IPP response here...
+@@ -7344,7 +7373,7 @@ get_ppds(cupsd_client_t *con)		/* I - Cl
+ 	   exclude_str[0] ? "%20" : "", exclude_str,
+ 	   include_str[0] ? "%20" : "", include_str);
+ 
+-  if (cupsdSendCommand(con, command, options, 0))
++  if (cupsdSendCommand(con, command, options, 0, 1))
+   {
+    /*
+     * Command started successfully, don't send an IPP response here...
+@@ -9526,7 +9555,10 @@ save_auth_info(
+ 	                auth_info->values[i].string.text);
+       else if (!strcmp(dest->auth_info_required[i], "negotiate"))
+         cupsdSetStringf(job->auth_env + i, "AUTH_NEGOTIATE=%s",
+-	                auth_info->values[i].string.text);
++                        auth_info->values[i].string.text);
++      else if (!strcmp(dest->auth_info_required[i], "oauth"))
++        cupsdSetStringf(job->auth_env + i, "AUTH_BEARER_TOKEN=%s",
++                        auth_info->values[i].string.text);
+       else
+         i --;
+     }
+@@ -9580,6 +9612,17 @@ save_auth_info(
+   }
+ #endif /* HAVE_GSSAPI */
+ 
++  // This is for if we need to xpc back for auth in the non kerberos case
++  // but of course, we can't reuse AUTH_UID because some other random
++  // piece of this mess assumes that AUTH_UID is somehow a trigger
++  // to use kerberos as opposed to a generic statement of intent.  This is
++  // what life is like in this code.
++  if (con->peer_uid > 0)
++  {
++    cupsFilePrintf(fp, "bearer_uid %d\n", (int)con->peer_uid);
++    cupsdSetStringf(&job->auth_bearer_uid, "AUTH_BEARER_UID=%d", (int)con->peer_uid);
++  }
++
+  /*
+   * Write a random number of newlines to the end of the file...
+   */
+--- a/scheduler/job.c	1653545841.000000000
++++ b/scheduler/job.c	1676896196.042180790
+@@ -516,7 +516,7 @@ cupsdContinueJob(cupsd_job_t *job)	/* I
+ 					/* Job title string */
+ 			copies[255],	/* # copies string */
+ 			*options,	/* Options string */
+-			*envp[MAX_ENV + 21],
++			*envp[MAX_ENV + 25],
+ 					/* Environment variables */
+ 			charset[255],	/* CHARSET env variable */
+ 			class_name[255],/* CLASS env variable */
+@@ -898,6 +898,7 @@ cupsdContinueJob(cupsd_job_t *job)	/* I
+ 
+   snprintf(jobid, sizeof(jobid), "%d", job->id);
+ 
++  // REMINDSMA: See my comment below, re: Anger
+   argv[0] = job->printer->name;
+   argv[1] = jobid;
+   argv[2] = job->username;
+@@ -1042,6 +1043,17 @@ cupsdContinueJob(cupsd_job_t *job)	/* I
+     strlcpy(auth_info_required, "AUTH_INFO_REQUIRED=none",
+ 	    sizeof(auth_info_required));
+ 
++  // You know, there's a place up above that carefully defines
++  // envp as being MAX_ENV (100) + (now) 25.
++  // And I bet cupsdLoadEnv doesn't know that.
++  // As a side effect of cupsdLoadEnv's implementation
++  // there may be no more than MAX_ENV, but this invocation
++  // is telling cupsdLoadEnv that there is MAX_ENV + 25 (today!)
++  // and I will bet you a color stylewriter that this is going
++  // to bite someone in the future.  SO I leave this comment here
++  // in the hopes that someone down the line, will search and find that
++  // 25 (was 22!  Up from 21!) is a magic constant that will make
++  // their lives just a little more miserable.
+   envc = cupsdLoadEnv(envp, (int)(sizeof(envp) / sizeof(envp[0])));
+ 
+   envp[envc ++] = charset;
+@@ -1088,6 +1100,30 @@ cupsdContinueJob(cupsd_job_t *job)	/* I
+ 
+   envp[envc ++] = auth_info_required;
+ 
++#define OAUTH_URI_EQUALS    "AUTH_OAUTH_URI="
++#define OAUTH_SCOPE_EQUALS  "AUTH_OAUTH_SCOPE="
++#define SOURCE_APP_EQUALS   "APPLE_SOURCE_APP="
++
++  char oauth_uri[IPP_MAX_URI            + strlen(OAUTH_URI_EQUALS)];
++  char oauth_scope[IPP_MAX_OCTETSTRING  + strlen(OAUTH_SCOPE_EQUALS)];
++  char source_app[IPP_MAX_URI           + strlen(SOURCE_APP_EQUALS)];
++
++  if (strstr(auth_info_required, "oauth") != NULL) {
++    if (job->printer->oauth_uri) {
++      snprintf(oauth_uri, sizeof(oauth_uri), "%s%s", OAUTH_URI_EQUALS, job->printer->oauth_uri);
++      envp[envc ++] = oauth_uri;
++    }
++    if (job->printer->oauth_scope) {
++      snprintf(oauth_scope, sizeof(oauth_scope), "%s%s", OAUTH_SCOPE_EQUALS, job->printer->oauth_scope);
++      envp[envc ++] = oauth_scope;
++    }
++  }
++
++  if (job->printer->source_app) {
++    snprintf(source_app, sizeof(source_app), "%s%s", SOURCE_APP_EQUALS, job->printer->source_app);
++    envp[envc ++] = source_app;
++  }
++
+   for (i = 0;
+        i < (int)(sizeof(job->auth_env) / sizeof(job->auth_env[0]));
+        i ++)
+@@ -1098,6 +1134,8 @@ cupsdContinueJob(cupsd_job_t *job)	/* I
+ 
+   if (job->auth_uid)
+     envp[envc ++] = job->auth_uid;
++  if (job->auth_bearer_uid)
++    envp[envc ++] = job->auth_bearer_uid;
+ 
+   envp[envc] = NULL;
+ 
+@@ -1305,6 +1343,7 @@ cupsdContinueJob(cupsd_job_t *job)	/* I
+ 
+   cupsdClosePipe(filterfds[slot]);
+ 
++  // REMINDSMA: This makes me unreasonably angry
+   for (i = 6; i < argc; i ++)
+     free(argv[i]);
+   free(argv);
+@@ -1402,6 +1441,7 @@ cupsdDeleteJob(cupsd_job_t       *job,	/
+        i ++)
+     cupsdClearString(job->auth_env + i);
+   cupsdClearString(&job->auth_uid);
++  cupsdClearString(&job->auth_bearer_uid);
+ 
+   if (action == CUPSD_JOB_PURGE)
+     remove_job_files(job);
+@@ -1538,6 +1578,188 @@ cupsdGetUserJobCount(
+   return (count);
+ }
+ 
++/*
++ * Purge old files that have become obviously stranded
++ * this is based on the current file name scheme of:
++ * one of a, c or d; 5 decimal digits; optional - and
++ * subsequent characters.
++ */
++
++#define CONTROL_NAME_MIN 6
++#define CONTROL_NAME_MAX 32
++
++enum Kind {
++  eNoKind,
++  eCtrl,
++  eAuth,
++  eData,
++};
++
++struct Entries {
++  char      name[CONTROL_NAME_MAX];
++  enum Kind kind;
++  uint      seen[(int) (1 + eData)];
++};
++
++static void removeRequestFile(const char* name)
++{
++  char path[PATH_MAX];
++  snprintf(path, sizeof(path), "%s/%s", RequestRoot, name);
++
++  cupsdLogMessage(CUPSD_LOG_NOTICE, "Removing orphan request file: '%s'", name);
++
++  cupsdUnlinkOrRemoveFile(path);
++}
++
++static Boolean isEntryInJobArray(struct Entries* e)
++{
++  // this works for [ac]XXXXX and dXXXXX-YYY; atoi stops at the -
++  int num = atoi(&e->name[1]);
++
++  for (cupsd_job_t* job = cupsArrayFirst(Jobs); job != NULL; job = cupsArrayNext(Jobs)) {
++    if (job->id == num) {
++      return true;
++    }
++  }
++
++  return false;
++}
++
++static int handle_orphans(struct Entries* entries, uint count)
++{
++  int ctDeleted = 0;
++
++  for (uint o = 0;  o < (count - 1);  o++) {
++    struct Entries* cursor = &entries[o];
++
++    for (uint i = o + 1; i < count; i++) {
++      struct Entries* now = &entries[i];
++
++      if (memcmp(&cursor->name[1], &now->name[1], 5) == 0) {
++	cursor->seen[now->kind]++;
++	now->seen[cursor->kind]++;
++      }
++    }
++  }
++
++/*
++  for (uint i = 0; i < count; i++) {
++    struct Entries* now = &entries[i];
++    fprintf(stderr, "%.32s %d %d %d %d\n", now->name, now->kind, now->seen[0], now->seen[1], now->seen[2]);
++  }
++*/
++
++  for (uint i = 0; i < count; i++) {
++    struct Entries* now = &entries[i];
++
++    switch (now->kind) {
++      default:
++	continue;
++
++      case eCtrl:
++	// For control files, if we have any data files, we keep it
++	if (now->seen[eData] > 0)
++	  continue;
++	break;
++
++	// For data files, we need a control file
++      case eData:
++	if (now->seen[eCtrl] > 0)
++	  continue;
++	break;
++
++	// For auth, we need to see both the others
++      case eAuth:
++	if (now->seen[eCtrl] > 0 && now->seen[eData] > 0)
++	  continue;
++	break;
++    }
++
++    // remove this orphan if it isn't otherwise referenced by the actively scanned Jobs
++    // array.
++    if (! isEntryInJobArray(now)) {
++      ctDeleted++;
++      removeRequestFile(now->name);
++    }
++  }
++
++  return ctDeleted;
++}
++
++// this always consumes src
++static struct Entries* moreEntries(struct Entries* src, uint oldNum)
++{
++  uint num = oldNum + 10;
++  struct Entries* narray = (struct Entries*) calloc(num, sizeof(struct Entries));
++  if (narray != NULL) {
++    memcpy(narray, src, oldNum * sizeof(struct Entries));
++  }
++  free(src);
++  return narray;
++}
++
++static int purge_orphan_request_data()
++{
++  uint ctEntries = 0;
++  uint allocEntries = 0;
++  struct Entries* entries = NULL;
++
++  cups_dir_t* dir = cupsDirOpen(RequestRoot);
++
++  if (dir != NULL) {
++    cups_dentry_t* p;
++
++    while ((p = cupsDirRead(dir)) != NULL) {
++      if (S_ISREG(p->fileinfo.st_mode)) {
++	size_t nameLen = strlen(p->filename);
++
++	if (nameLen < CONTROL_NAME_MIN || nameLen >= CONTROL_NAME_MAX) {
++	  continue;
++	}
++
++	enum Kind kind = eNoKind;
++
++	char ch = p->filename[0];
++	if (ch == 'a')
++	  kind = eAuth;
++	else if (ch == 'c')
++	  kind = eCtrl;
++	else if (ch == 'd')
++	  kind = eData;
++
++	if (kind != eNoKind) {
++	  if (ctEntries == allocEntries) {
++	    entries = moreEntries(entries, allocEntries);
++	    if (entries == NULL) {
++	      allocEntries = 0;
++	      ctEntries = 0;
++	      break;
++	    }
++	    allocEntries += 10;
++	  }
++	  entries[ctEntries].kind = kind;
++	  strlcpy(entries[ctEntries].name, p->filename, CONTROL_NAME_MAX);
++	  ctEntries++;
++	}
++      }
++    }
++
++    cupsDirClose(dir);
++  }
++
++  int ctDeleted = 0;
++
++  if (entries != NULL) {
++    if (ctEntries > 0) {
++      ctDeleted = handle_orphans(entries, ctEntries);
++    }
++
++    free(entries);
++  }
++
++  return ctDeleted;
++}
++
+ 
+ /*
+  * 'cupsdLoadAllJobs()' - Load all jobs from disk.
+@@ -1634,11 +1856,17 @@ cupsdLoadAllJobs(void)
+     load_next_job_id(filename);
+   }
+ 
+- /*
++  /*
++   * Lose orphan job data after we've done all the scanning,
++   * and force a clean of old jobs if we did remove anything.
++   */
++  int forceClean = (purge_orphan_request_data() > 0);
++
++  /*
+   * Clean out old jobs as needed...
+   */
+ 
+-  if (MaxJobs > 0 && cupsArrayCount(Jobs) >= MaxJobs)
++  if (forceClean || (MaxJobs > 0 && cupsArrayCount(Jobs) >= MaxJobs))
+     cupsdCleanJobs();
+ }
+ 
+@@ -1995,6 +2223,7 @@ cupsdLoadJob(cupsd_job_t *job)		/* I - J
+ 	 i ++)
+       cupsdClearString(job->auth_env + i);
+     cupsdClearString(&job->auth_uid);
++    cupsdClearString(&job->auth_bearer_uid);
+ 
+     if ((fp = cupsFileOpen(jobfile, "r")) != NULL)
+     {
+@@ -2015,7 +2244,7 @@ cupsdLoadJob(cupsd_job_t *job)		/* I - J
+           * Decode value...
+           */
+ 
+-          if (strcmp(line, "negotiate") && strcmp(line, "uid"))
++          if (strcmp(line, "negotiate") && strcmp(line, "uid") && strcmp(line, "bearer_uid"))
+           {
+ 	    bytes = sizeof(data);
+ 	    httpDecode64_2(data, &bytes, value);
+@@ -2030,6 +2259,11 @@ cupsdLoadJob(cupsd_job_t *job)		/* I - J
+             cupsdSetStringf(&job->auth_uid, "AUTH_UID=%s", value);
+             continue;
+           }
++          else if (!strcmp(line, "bearer_uid"))
++          {
++            cupsdSetStringf(&job->auth_bearer_uid, "AUTH_BEARER_UID=%s", value);
++            continue;
++          }
+           else if (i >= (int)(sizeof(job->auth_env) / sizeof(job->auth_env[0])))
+             break;
+ 
+@@ -2041,6 +2275,8 @@ cupsdLoadJob(cupsd_job_t *job)		/* I - J
+ 	    cupsdSetStringf(job->auth_env + i, "AUTH_PASSWORD=%s", data);
+ 	  else if (!strcmp(line, "negotiate"))
+ 	    cupsdSetStringf(job->auth_env + i, "AUTH_NEGOTIATE=%s", value);
++	  else if (!strcmp(line, "oauth"))
++	    cupsdSetStringf(job->auth_env + i, "AUTH_BEARER_TOKEN=%s", value);
+ 	  else
+ 	    continue;
+ 
+@@ -2719,6 +2955,7 @@ cupsdSetJobState(
+ 	  cupsdClearString(job->auth_env + i);
+ 
+ 	cupsdClearString(&job->auth_uid);
++	cupsdClearString(&job->auth_bearer_uid);
+ 
+        /*
+ 	* Remove the print file for good if we aren't preserving jobs or
+@@ -4362,6 +4599,33 @@ load_job_cache(const char *filename)	/*
+     }
+     else if (!_cups_strcasecmp(line, "</Job>"))
+     {
++      if (job->state_value >= IPP_JSTATE_CANCELED && job->completed_time != 0) {
++        // history_time is otherwise not going to be set, and this job will live,
++        // potentially until MaxJobs is reached
++        if (job->history_time == 0)
++        {
++          if (JobHistory < INT_MAX)
++            job->history_time = job->completed_time + JobHistory;
++          else
++            job->history_time = INT_MAX;
++
++          if (job->history_time < JobHistoryUpdate || !JobHistoryUpdate)
++            JobHistoryUpdate = job->history_time;
++        }
++
++        // keeping the files is a separate thing
++        if (job->file_time == 0)
++        {
++          if (JobFiles < INT_MAX)
++            job->file_time = job->completed_time + JobFiles;
++         else
++            job->file_time = INT_MAX;
++
++          if (job->file_time < JobHistoryUpdate || !JobHistoryUpdate)
++            JobHistoryUpdate = job->file_time;
++        }
++      }
++
+       cupsArrayAdd(Jobs, job);
+ 
+       if (job->state_value <= IPP_JOB_STOPPED && cupsdLoadJob(job))
+--- a/scheduler/job.h	1653545841.000000000
++++ b/scheduler/job.h	1676896199.118003604
+@@ -34,7 +34,7 @@ struct cupsd_job_s			/**** Job request *
+   char			*username;	/* Printing user */
+   char			*dest;		/* Destination printer or class */
+   char			*name;		/* Job name/title */
+-  int			koctets;	/* job-k-octets */
++  int    		koctets;	/* job-k-octets */
+   cups_ptype_t		dtype;		/* Destination type */
+   cupsd_printer_t	*printer;	/* Printer this job is assigned to */
+   int			num_files;	/* Number of files in job */
+@@ -77,7 +77,9 @@ struct cupsd_job_s			/**** Job request *
+   int			retry_as_raster;/* Need to retry the job as raster */
+   char			*auth_env[3],	/* AUTH_xxx environment variables,
+                                          * if any */
+-			*auth_uid;	/* AUTH_UID environment variable */
++			    *auth_uid;	/* AUTH_UID environment variable */
++  char          *auth_bearer_uid;
++                            /* AUTH_BEARER_UID environment variable */
+   void			*profile,	/* Security profile for filters */
+ 			*bprofile;	/* Security profile for backend */
+   cups_array_t		*history;	/* Debug log history */
+--- a/scheduler/mime-private.h	1653545841.000000000
++++ b/scheduler/mime-private.h	1676896205.875564864
+@@ -28,6 +28,7 @@ extern "C" {
+ 
+ extern void	_mimeError(mime_t *mime, const char *format, ...) _CUPS_FORMAT(2, 3);
+ 
++extern mime_type_t  *mimeFileTypeFD(mime_t *mime, int fd, const char *filename);
+ 
+ #  ifdef __cplusplus
+ }
+--- a/scheduler/printers.c	1653545841.000000000
++++ b/scheduler/printers.c	1676896211.099196016
+@@ -860,6 +860,10 @@ cupsdDeletePrinter(
+ 
+   cupsFreeOptions(p->num_options, p->options);
+ 
++  cupsdClearString(&p->oauth_uri);
++  cupsdClearString(&p->oauth_scope);
++  cupsdClearString(&p->source_app);
++
+   free(p);
+ 
+  /*
+@@ -1104,6 +1108,21 @@ cupsdLoadAllPrinters(void)
+ 			"Bad AuthInfoRequired on line %d of printers.conf.",
+ 			linenum);
+     }
++    else if (!_cups_strcasecmp(line, "AuthInfo_oauth_uri"))
++    {
++      if (value)
++        cupsdSetString(&p->oauth_uri, value);
++    }
++    else if (!_cups_strcasecmp(line, "AuthInfo_oauth_scope"))
++    {
++      if (value)
++        cupsdSetString(&p->oauth_scope, value);
++    }
++    else if (!_cups_strcasecmp(line, "AuthInfo_extension_ident"))
++    {
++      if (value)
++        cupsdSetString(&p->source_app, value);
++    }
+     else if (!_cups_strcasecmp(line, "Info"))
+     {
+       cupsdSetString(&p->info, value ? value : "");
+@@ -1596,6 +1615,16 @@ cupsdSaveAllPrinters(void)
+       cupsFilePutConf(fp, "AuthInfoRequired", value);
+     }
+ 
++    // HEY, is this the same code as in classes.c?  Yes, of course it is.
++    if (printer->oauth_uri)
++      cupsFilePutConf(fp, "AuthInfo_oauth_uri", printer->oauth_uri);
++
++    if (printer->oauth_scope)
++      cupsFilePutConf(fp, "AuthInfo_oauth_scope", printer->oauth_scope);
++
++    if (printer->source_app)
++      cupsFilePutConf(fp, "AuthInfo_extension_ident", printer->source_app);
++
+     if (printer->info)
+       cupsFilePutConf(fp, "Info", printer->info);
+ 
+@@ -1863,7 +1892,12 @@ cupsdSetAuthInfoRequired(
+       else if ((end - values) == 8 && !strncmp(values, "username", 8))
+       {
+         p->auth_info_required[p->num_auth_info_required] = "username";
+-	p->num_auth_info_required ++;
++        p->num_auth_info_required ++;
++      }
++      else if ((end - values) == 5 && !strncmp(values, "oauth", 5))
++      {
++        p->auth_info_required[p->num_auth_info_required] = "oauth";
++        p->num_auth_info_required ++;
+       }
+       else
+         return (0);
+@@ -1944,6 +1978,11 @@ cupsdSetAuthInfoRequired(
+       p->auth_info_required[p->num_auth_info_required] = "username";
+       p->num_auth_info_required ++;
+     }
++    else if (!strcmp(attr->values[i].string.text, "oauth"))
++    {
++      p->auth_info_required[p->num_auth_info_required] = "oauth";
++      p->num_auth_info_required ++;
++    }
+     else
+       return (0);
+   }
+@@ -2393,6 +2432,16 @@ cupsdSetPrinterAttrs(cupsd_printer_t *p)
+ 		  "auth-info-required", p->num_auth_info_required, NULL,
+ 		  p->auth_info_required);
+ 
++  if (p->oauth_scope) {
++    ippAddString(p->attrs, IPP_TAG_PRINTER, IPP_TAG_NAME, "oauth-authorization-scope", NULL, p->oauth_scope);
++  }
++  if (p->oauth_uri) {
++    ippAddString(p->attrs, IPP_TAG_PRINTER, IPP_TAG_URI, "oauth-authorization-server-uri", NULL, p->oauth_uri);
++  }
++  if (p->source_app) {
++    ippAddString(p->attrs, IPP_TAG_PRINTER, IPP_TAG_NAME, "x-apple-extension-identifier", NULL, p->source_app);
++  }
++
+   if (cupsArrayCount(Banners) > 0)
+   {
+    /*
+--- a/scheduler/printers.h	1653545841.000000000
++++ b/scheduler/printers.h	1677325530.167115471
+@@ -125,6 +125,9 @@ struct cupsd_printer_s
+   cupsd_srv_t	printer_srv;		/* LPD service */
+ #  endif /* HAVE_MDNSRESPONDER */
+ #endif /* HAVE_DNSSD */
++  char		*oauth_uri;             /* these may be needed for auth before get-printer-attributes */
++  char		*oauth_scope;
++  char		*source_app;            /* as an alternative, this is the identifier of an app extension that can provide auth */
+ };
+ 
+ 
+--- a/scheduler/type.c	1653545841.000000000
++++ b/scheduler/type.c	1676896234.877706479
+@@ -16,7 +16,7 @@
+ #include <cups/string-private.h>
+ #include <locale.h>
+ #include "mime.h"
+-
++#include "mime-private.h"
+ 
+ /*
+  * Debug macros that used to be private API...
+@@ -683,6 +683,114 @@ mimeFileType(mime_t     *mime,		/* I - M
+                 best ? best->super : "???", best ? best->type : "???"));
+   return (best);
+ }
++
++/* Variant of mimeFileType that takes an open file */
++mime_type_t *				/* O - Type of file */
++mimeFileTypeFD(mime_t   *mime,	/* I - MIME database */
++             int        fd,             /* I - open file; the position is preserved (but should be at start of file */
++	     const char *filename)	/* I - last segment of the filename */
++{
++  _mime_filebuf_t	fb;		/* File buffer */
++  const char		*base;		/* Base filename of file */
++  mime_type_t		*type,		/* File type */
++			*best;		/* Best match */
++  int                    fd_new;        /* Dup the input fd to this so we can wrap it in a cupsFile */
++  off_t                 save_pos;       /* For restoring our position in the original file... */
++
++  DEBUG_printf(("mimeFileType(mime=%p, filename=\"%s\")", mime, filename));
++
++ /*
++  * Range check input parameters...
++  */
++
++  if (!mime || !filename || (fd == -1))
++  {
++    DEBUG_puts("1mimeFileType: Returning NULL.");
++    return (NULL);
++  }
++
++  /*
++   * Dup the fd so we can wrap it
++   */
++  save_pos = lseek(fd, 0, SEEK_CUR);
++  if (save_pos == -1) {
++    DEBUG_printf(("1mimeFileTypeFD can't seek in fd %d - %s", fd, strerror(errno)));
++    DEBUG_puts("1mimeFileTypeFD: Returning NULL.");
++    return NULL;
++  }
++
++  fd_new = dup(fd);
++  if (fd_new == -1) {
++    DEBUG_printf(("1mimeFileTypeFD can't dup fd %d - %s", fd, strerror(errno)));
++    DEBUG_puts("1mimeFileTypeFD: Returning NULL.");
++    return NULL;
++  }
++
++ /*
++  * Try to open the file...
++  * the cupsFile object will close fd_new
++  */
++
++  if ((fb.fp = cupsFileOpenFd(fd_new, "r")) == NULL)
++  {
++    lseek(fd, save_pos, SEEK_SET);
++
++    DEBUG_puts("1mimeFileTypeFD: Returning NULL.");
++    return (NULL);
++  }
++
++ /*
++  * Then preload the first MIME_MAX_BUFFER bytes of the file into the file
++  * buffer, returning an error if we can't read anything...
++  */
++
++  fb.offset = 0;
++  fb.length = (int)cupsFileRead(fb.fp, (char *)fb.buffer, MIME_MAX_BUFFER);
++
++  if (fb.length <= 0)
++  {
++    DEBUG_puts("1mimeFileTypeFD: Returning NULL.");
++
++    cupsFileClose(fb.fp);
++    lseek(fd, save_pos, SEEK_SET);
++
++    return (NULL);
++  }
++
++ /*
++  * Figure out the base filename (without directory portion)...
++  * (This has likely already been done...)
++  */
++
++  if ((base = strrchr(filename, '/')) != NULL)
++    base ++;
++  else
++    base = filename;
++
++ /*
++  * Then check it against all known types...
++  */
++
++  for (type = (mime_type_t *)cupsArrayFirst(mime->types), best = NULL;
++       type;
++       type = (mime_type_t *)cupsArrayNext(mime->types))
++    if (mime_check_rules(base, &fb, type->rules))
++    {
++      if (!best || type->priority > best->priority)
++        best = type;
++    }
++
++ /*
++  * Finally, close the file and return a match (if any)...
++  */
++
++  cupsFileClose(fb.fp);
++  lseek(fd, save_pos, SEEK_SET);
++
++  DEBUG_printf(("1mimeFileTypeFD: Returning %p(%s/%s).", best,
++                best ? best->super : "???", best ? best->type : "???"));
++  return (best);
++}
+ 
+ 
+ /*
+--- a/systemv/lpstat.c	1653545841.000000000
++++ b/systemv/lpstat.c	1676896239.971673613
+@@ -1317,8 +1317,8 @@ show_jobs(const char *dests,		/* I - Des
+ 		*message,		/* Pointer to job-printer-state-message */
+ 		*time_at;		/* time-at-xxx attribute name to use */
+   int		rank,			/* Rank in queue */
+-		jobid,			/* job-id */
+-		size;			/* job-k-octets */
++                jobid,			/* job-id */
++                size;			/* job-k-octets */
+   time_t	jobtime;		/* time-at-creation */
+   char		temp[255],		/* Temporary buffer */
+ 		date[255];		/* Date buffer */
+--- a/test/run-stp-tests.sh	1653545841.000000000
++++ b/test/run-stp-tests.sh	1676896251.964348701
+@@ -725,6 +725,34 @@ rm -f $strfile
+ cat str-header.html >$strfile
+ 
+ #
++# Other server tests
++#
++echo ""
++echo "Running server security tests..."
++echo "    <h1><a name='COMMAND'>Security related Tests</a></h1>" >>$strfile
++echo "    <p>This section provides the results to the Security tests" >>$strfile
++echo "    <strike>outlined in the CUPS Software Test Plan</strike>. These tests were run on" >>$strfile
++echo "    $date by $user on `hostname`." >>$strfile
++echo "    <pre>" >>$strfile
++
++for file in Sec*.sh; do
++	echo $ac_n "Performing $file: $ac_c"
++	echo "" >>$strfile
++        echo "`date '+[%d/%b/%Y:%H:%M:%S %z]'` \"$file\":" >>$strfile
++
++	sh $file $pjobs $pprinters >> $strfile
++	status=$?
++
++	if test $status != 0; then
++		echo FAIL
++		fail=`expr $fail + 1`
++	else
++		echo PASS
++	fi
++done
++
++
++#
+ # Run the IPP tests...
+ #
+ 
+--- a/xcode/CUPS.xcodeproj/project.pbxproj	1653545841.000000000
++++ b/xcode/CUPS.xcodeproj/project.pbxproj	1676896300.524499202
+@@ -263,20 +263,16 @@
+ 		271286611CC1309000E517C7 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2767FC5D1926750C000F61D3 /* Security.framework */; };
+ 		271286621CC1309000E517C7 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2767FC5E1926750C000F61D3 /* SystemConfiguration.framework */; };
+ 		271286691CC130C700E517C7 /* tlscheck.c in Sources */ = {isa = PBXBuildFile; fileRef = 271286681CC130BD00E517C7 /* tlscheck.c */; };
+-		271286731CC1310E00E517C7 /* libcupsimage_static.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 724FA70F1CC03A490092477B /* libcupsimage_static.a */; };
+-		271286741CC1310E00E517C7 /* libcups_static.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 72A4332F155844CF002E172D /* libcups_static.a */; };
+ 		271286751CC1310E00E517C7 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E5136B64AF00836530 /* CoreFoundation.framework */; };
+ 		271286761CC1310E00E517C7 /* Kerberos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E6136B64B000836530 /* Kerberos.framework */; };
+ 		271286771CC1310E00E517C7 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E7136B64B000836530 /* Security.framework */; };
+ 		271286781CC1310E00E517C7 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E8136B64B000836530 /* SystemConfiguration.framework */; };
+ 		2712867E1CC1311D00E517C7 /* rasterbench.c in Sources */ = {isa = PBXBuildFile; fileRef = 2712866A1CC130FF00E517C7 /* rasterbench.c */; };
+-		2712868D1CC13DC000E517C7 /* libcups_static.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 72A4332F155844CF002E172D /* libcups_static.a */; };
+ 		2712868E1CC13DC000E517C7 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E5136B64AF00836530 /* CoreFoundation.framework */; };
+ 		2712868F1CC13DC000E517C7 /* Kerberos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E6136B64B000836530 /* Kerberos.framework */; };
+ 		271286901CC13DC000E517C7 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E7136B64B000836530 /* Security.framework */; };
+ 		271286911CC13DC000E517C7 /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E8136B64B000836530 /* SystemConfiguration.framework */; };
+ 		271286971CC13DEA00E517C7 /* checkpo.c in Sources */ = {isa = PBXBuildFile; fileRef = 271286831CC13D9600E517C7 /* checkpo.c */; };
+-		2712869E1CC13DF100E517C7 /* libcups_static.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 72A4332F155844CF002E172D /* libcups_static.a */; };
+ 		2712869F1CC13DF100E517C7 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E5136B64AF00836530 /* CoreFoundation.framework */; };
+ 		271286A01CC13DF100E517C7 /* Kerberos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E6136B64B000836530 /* Kerberos.framework */; };
+ 		271286A11CC13DF100E517C7 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E7136B64B000836530 /* Security.framework */; };
+@@ -442,7 +438,6 @@
+ 		276683E21337B29C000D33D0 /* libcups.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 72220EAE1333047D00FCA411 /* libcups.dylib */; };
+ 		276683E51337B2BE000D33D0 /* libcupsimage.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 72F75A611336F9A3004BB496 /* libcupsimage.dylib */; };
+ 		276683FA1337F7A9000D33D0 /* ipptool.c in Sources */ = {isa = PBXBuildFile; fileRef = 276683F91337F7A9000D33D0 /* ipptool.c */; };
+-		276683FD1337F7B8000D33D0 /* libcups.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 72220EAE1333047D00FCA411 /* libcups.dylib */; };
+ 		2767FC5219266A36000F61D3 /* testdest.c in Sources */ = {isa = PBXBuildFile; fileRef = 2767FC5119266A36000F61D3 /* testdest.c */; };
+ 		2767FC57192674C4000F61D3 /* libcups_static.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 72A4332F155844CF002E172D /* libcups_static.a */; };
+ 		2767FC58192674E0000F61D3 /* libcups_static.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 72A4332F155844CF002E172D /* libcups_static.a */; };
+@@ -909,6 +904,26 @@
+ 		72D53A3C15B4930A003F877F /* Kerberos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 278C58E6136B64B000836530 /* Kerberos.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
+ 		72F75A5C1336F988004BB496 /* cupstestppd.c in Sources */ = {isa = PBXBuildFile; fileRef = 72F75A5B1336F988004BB496 /* cupstestppd.c */; };
+ 		72F75A671336FA38004BB496 /* libcups.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 72220EAE1333047D00FCA411 /* libcups.dylib */; };
++		AA08F6E627FF5BA600013FEE /* GSS.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA3880E427063AA4001035DA /* GSS.framework */; };
++		AA08F6E727FF5BAD00013FEE /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = AA3880E027063A66001035DA /* libiconv.tbd */; };
++		AA2A5FA9278F7F8A00663DA7 /* libcups.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 72220EAE1333047D00FCA411 /* libcups.dylib */; };
++		AA2A5FAA278F802A00663DA7 /* libcups.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 72220EAE1333047D00FCA411 /* libcups.dylib */; };
++		AA2A5FAD278F805700663DA7 /* libcups.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 72220EAE1333047D00FCA411 /* libcups.dylib */; };
++		AA3880C8270638DD001035DA /* ipp.c in Sources */ = {isa = PBXBuildFile; fileRef = 7243790A1333E4E3009631B9 /* ipp.c */; };
++		AA3880C9270638DD001035DA /* network.c in Sources */ = {isa = PBXBuildFile; fileRef = 7243790B1333E4E3009631B9 /* network.c */; };
++		AA3880CA270638DD001035DA /* snmp-supplies.c in Sources */ = {isa = PBXBuildFile; fileRef = 7243790C1333E4E3009631B9 /* snmp-supplies.c */; };
++		AA3880CB270638DD001035DA /* runloop.c in Sources */ = {isa = PBXBuildFile; fileRef = 724379121333E516009631B9 /* runloop.c */; };
++		AA3880D627063991001035DA /* libcups_static.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 72A4332F155844CF002E172D /* libcups_static.a */; };
++		AA3880D727063A1E001035DA /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2767FC591926750C000F61D3 /* CoreFoundation.framework */; };
++		AA3880D827063A2A001035DA /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2767FC5D1926750C000F61D3 /* Security.framework */; };
++		AA3880DA27063A3E001035DA /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = AA3880D927063A3E001035DA /* libresolv.tbd */; };
++		AA3880DB27063A48001035DA /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2767FC5E1926750C000F61D3 /* SystemConfiguration.framework */; };
++		AA3880DD27063A58001035DA /* Kerberos.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA3880DC27063A58001035DA /* Kerberos.framework */; };
++		AA3880DF27063A60001035DA /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = AA3880DE27063A60001035DA /* libz.tbd */; };
++		AA3880E127063A66001035DA /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = AA3880E027063A66001035DA /* libiconv.tbd */; };
++		AA3880E327063A70001035DA /* libgssapi_krb5.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = AA3880E227063A6F001035DA /* libgssapi_krb5.tbd */; };
++		AA3880E527063AA4001035DA /* GSS.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA3880E427063AA4001035DA /* GSS.framework */; };
++		AA56E18026FD1867008E2A55 /* libcups.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 72220EAE1333047D00FCA411 /* libcups.dylib */; };
+ /* End PBXBuildFile section */
+ 
+ /* Begin PBXContainerItemProxy section */
+@@ -1479,20 +1494,6 @@
+ 			remoteGlobalIDString = 274FF6891333B1C400317ECB;
+ 			remoteInfo = libcups_static;
+ 		};
+-		2712866F1CC1310E00E517C7 /* PBXContainerItemProxy */ = {
+-			isa = PBXContainerItemProxy;
+-			containerPortal = 72BF96371333042100B1EAD7 /* Project object */;
+-			proxyType = 1;
+-			remoteGlobalIDString = 274FF6891333B1C400317ECB;
+-			remoteInfo = libcups_static;
+-		};
+-		271286891CC13DC000E517C7 /* PBXContainerItemProxy */ = {
+-			isa = PBXContainerItemProxy;
+-			containerPortal = 72BF96371333042100B1EAD7 /* Project object */;
+-			proxyType = 1;
+-			remoteGlobalIDString = 274FF6891333B1C400317ECB;
+-			remoteInfo = libcups_static;
+-		};
+ 		2712869A1CC13DF100E517C7 /* PBXContainerItemProxy */ = {
+ 			isa = PBXContainerItemProxy;
+ 			containerPortal = 72BF96371333042100B1EAD7 /* Project object */;
+@@ -1927,13 +1928,6 @@
+ 			remoteGlobalIDString = 72F75A601336F9A3004BB496;
+ 			remoteInfo = libcupsimage;
+ 		};
+-		276683FB1337F7B3000D33D0 /* PBXContainerItemProxy */ = {
+-			isa = PBXContainerItemProxy;
+-			containerPortal = 72BF96371333042100B1EAD7 /* Project object */;
+-			proxyType = 1;
+-			remoteGlobalIDString = 72220EAD1333047D00FCA411;
+-			remoteInfo = libcups;
+-		};
+ 		276683FE1337F7C5000D33D0 /* PBXContainerItemProxy */ = {
+ 			isa = PBXContainerItemProxy;
+ 			containerPortal = 72BF96371333042100B1EAD7 /* Project object */;
+@@ -2361,6 +2355,41 @@
+ 			remoteGlobalIDString = 72F75A511336F950004BB496;
+ 			remoteInfo = cupstestppd;
+ 		};
++		AA2A5FA5278F7ED300663DA7 /* PBXContainerItemProxy */ = {
++			isa = PBXContainerItemProxy;
++			containerPortal = 72BF96371333042100B1EAD7 /* Project object */;
++			proxyType = 1;
++			remoteGlobalIDString = 724FA7411CC03ACC0092477B;
++			remoteInfo = libcupscgi;
++		};
++		AA2A5FAB278F803100663DA7 /* PBXContainerItemProxy */ = {
++			isa = PBXContainerItemProxy;
++			containerPortal = 72BF96371333042100B1EAD7 /* Project object */;
++			proxyType = 1;
++			remoteGlobalIDString = 72220EAD1333047D00FCA411;
++			remoteInfo = libcups;
++		};
++		AA2A5FAE278F805D00663DA7 /* PBXContainerItemProxy */ = {
++			isa = PBXContainerItemProxy;
++			containerPortal = 72BF96371333042100B1EAD7 /* Project object */;
++			proxyType = 1;
++			remoteGlobalIDString = 72220EAD1333047D00FCA411;
++			remoteInfo = libcups;
++		};
++		AA2A5FB2278F829A00663DA7 /* PBXContainerItemProxy */ = {
++			isa = PBXContainerItemProxy;
++			containerPortal = 72BF96371333042100B1EAD7 /* Project object */;
++			proxyType = 1;
++			remoteGlobalIDString = 724FA7411CC03ACC0092477B;
++			remoteInfo = libcupscgi;
++		};
++		AA56E18226FD1867008E2A55 /* PBXContainerItemProxy */ = {
++			isa = PBXContainerItemProxy;
++			containerPortal = 72BF96371333042100B1EAD7 /* Project object */;
++			proxyType = 1;
++			remoteGlobalIDString = 72220EAD1333047D00FCA411;
++			remoteInfo = libcups;
++		};
+ /* End PBXContainerItemProxy section */
+ 
+ /* Begin PBXCopyFilesBuildPhase section */
+@@ -3165,6 +3194,15 @@
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 1;
+ 		};
++		AA3880CE270638DD001035DA /* CopyFiles */ = {
++			isa = PBXCopyFilesBuildPhase;
++			buildActionMask = 2147483647;
++			dstPath = /usr/share/man/man1/;
++			dstSubfolderSpec = 0;
++			files = (
++			);
++			runOnlyForDeploymentPostprocessing = 1;
++		};
+ /* End PBXCopyFilesBuildPhase section */
+ 
+ /* Begin PBXFileReference section */
+@@ -3615,6 +3653,13 @@
+ 		72F7F1D719D1C0CC00870B09 /* org.cups.usb-quirks */ = {isa = PBXFileReference; lastKnownFileType = text; name = "org.cups.usb-quirks"; path = "../backend/org.cups.usb-quirks"; sourceTree = "<group>"; };
+ 		72FC29CF1A37A1CA00BDF935 /* usb-libusb.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = "usb-libusb.c"; path = "../backend/usb-libusb.c"; sourceTree = "<group>"; };
+ 		72FC29D01A37A1CA00BDF935 /* usb-unix.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = "usb-unix.c"; path = "../backend/usb-unix.c"; sourceTree = "<group>"; };
++		AA3880D2270638DD001035DA /* ipp_static */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = ipp_static; sourceTree = BUILT_PRODUCTS_DIR; };
++		AA3880D927063A3E001035DA /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
++		AA3880DC27063A58001035DA /* Kerberos.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Kerberos.framework; path = System/Library/Frameworks/Kerberos.framework; sourceTree = SDKROOT; };
++		AA3880DE27063A60001035DA /* libz.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libz.tbd; path = usr/lib/libz.tbd; sourceTree = SDKROOT; };
++		AA3880E027063A66001035DA /* libiconv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libiconv.tbd; path = usr/lib/libiconv.tbd; sourceTree = SDKROOT; };
++		AA3880E227063A6F001035DA /* libgssapi_krb5.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libgssapi_krb5.tbd; path = usr/lib/libgssapi_krb5.tbd; sourceTree = SDKROOT; };
++		AA3880E427063AA4001035DA /* GSS.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = GSS.framework; path = System/Library/Frameworks/GSS.framework; sourceTree = SDKROOT; };
+ /* End PBXFileReference section */
+ 
+ /* Begin PBXFrameworksBuildPhase section */
+@@ -3837,6 +3882,8 @@
+ 			isa = PBXFrameworksBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
++				AA08F6E727FF5BAD00013FEE /* libiconv.tbd in Frameworks */,
++				AA08F6E627FF5BA600013FEE /* GSS.framework in Frameworks */,
+ 				2712865D1CC1309000E517C7 /* libcups_static.a in Frameworks */,
+ 				2712865E1CC1309000E517C7 /* CoreFoundation.framework in Frameworks */,
+ 				2712865F1CC1309000E517C7 /* libresolv.dylib in Frameworks */,
+@@ -3850,8 +3897,7 @@
+ 			isa = PBXFrameworksBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
+-				271286731CC1310E00E517C7 /* libcupsimage_static.a in Frameworks */,
+-				271286741CC1310E00E517C7 /* libcups_static.a in Frameworks */,
++				AA2A5FAA278F802A00663DA7 /* libcups.dylib in Frameworks */,
+ 				271286751CC1310E00E517C7 /* CoreFoundation.framework in Frameworks */,
+ 				271286761CC1310E00E517C7 /* Kerberos.framework in Frameworks */,
+ 				271286771CC1310E00E517C7 /* Security.framework in Frameworks */,
+@@ -3863,7 +3909,7 @@
+ 			isa = PBXFrameworksBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
+-				2712868D1CC13DC000E517C7 /* libcups_static.a in Frameworks */,
++				AA2A5FAD278F805700663DA7 /* libcups.dylib in Frameworks */,
+ 				2712868E1CC13DC000E517C7 /* CoreFoundation.framework in Frameworks */,
+ 				2712868F1CC13DC000E517C7 /* Kerberos.framework in Frameworks */,
+ 				271286901CC13DC000E517C7 /* Security.framework in Frameworks */,
+@@ -3875,7 +3921,7 @@
+ 			isa = PBXFrameworksBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
+-				2712869E1CC13DF100E517C7 /* libcups_static.a in Frameworks */,
++				AA2A5FA9278F7F8A00663DA7 /* libcups.dylib in Frameworks */,
+ 				2712869F1CC13DF100E517C7 /* CoreFoundation.framework in Frameworks */,
+ 				271286A01CC13DF100E517C7 /* Kerberos.framework in Frameworks */,
+ 				271286A11CC13DF100E517C7 /* Security.framework in Frameworks */,
+@@ -4136,7 +4182,7 @@
+ 			isa = PBXFrameworksBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
+-				276683FD1337F7B8000D33D0 /* libcups.dylib in Frameworks */,
++				AA56E18026FD1867008E2A55 /* libcups.dylib in Frameworks */,
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 		};
+@@ -4681,6 +4727,23 @@
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 		};
++		AA3880CC270638DD001035DA /* Frameworks */ = {
++			isa = PBXFrameworksBuildPhase;
++			buildActionMask = 2147483647;
++			files = (
++				AA3880E527063AA4001035DA /* GSS.framework in Frameworks */,
++				AA3880E327063A70001035DA /* libgssapi_krb5.tbd in Frameworks */,
++				AA3880E127063A66001035DA /* libiconv.tbd in Frameworks */,
++				AA3880DF27063A60001035DA /* libz.tbd in Frameworks */,
++				AA3880DD27063A58001035DA /* Kerberos.framework in Frameworks */,
++				AA3880DB27063A48001035DA /* SystemConfiguration.framework in Frameworks */,
++				AA3880DA27063A3E001035DA /* libresolv.tbd in Frameworks */,
++				AA3880D827063A2A001035DA /* Security.framework in Frameworks */,
++				AA3880D727063A1E001035DA /* CoreFoundation.framework in Frameworks */,
++				AA3880D627063991001035DA /* libcups_static.a in Frameworks */,
++			);
++			runOnlyForDeploymentPostprocessing = 0;
++		};
+ /* End PBXFrameworksBuildPhase section */
+ 
+ /* Begin PBXGroup section */
+@@ -4931,6 +4994,7 @@
+ 				273B1EAA226B3E4800428143 /* ippevepcl */,
+ 				273B1EBB226B3E5200428143 /* ippeveps */,
+ 				274770E02345342B0089BC31 /* testthreads */,
++				AA3880D2270638DD001035DA /* ipp_static */,
+ 			);
+ 			name = Products;
+ 			sourceTree = "<group>";
+@@ -5122,6 +5186,12 @@
+ 		72220FB113330B4A00FCA411 /* Frameworks */ = {
+ 			isa = PBXGroup;
+ 			children = (
++				AA3880E427063AA4001035DA /* GSS.framework */,
++				AA3880E227063A6F001035DA /* libgssapi_krb5.tbd */,
++				AA3880E027063A66001035DA /* libiconv.tbd */,
++				AA3880DE27063A60001035DA /* libz.tbd */,
++				AA3880DC27063A58001035DA /* Kerberos.framework */,
++				AA3880D927063A3E001035DA /* libresolv.tbd */,
+ 				279AE6F42395B80F004DD600 /* libpam.tbd */,
+ 				2767FC591926750C000F61D3 /* CoreFoundation.framework */,
+ 				2767FC5A1926750C000F61D3 /* libiconv.dylib */,
+@@ -5756,6 +5826,7 @@
+ 			buildRules = (
+ 			);
+ 			dependencies = (
++				AA2A5FB3278F829A00663DA7 /* PBXTargetDependency */,
+ 				271285A41CC12D3A00E517C7 /* PBXTargetDependency */,
+ 			);
+ 			name = classes.cgi;
+@@ -5792,6 +5863,7 @@
+ 			buildRules = (
+ 			);
+ 			dependencies = (
++				AA2A5FA6278F7ED300663DA7 /* PBXTargetDependency */,
+ 				271285C01CC12D5E00E517C7 /* PBXTargetDependency */,
+ 			);
+ 			name = printers.cgi;
+@@ -5936,7 +6008,7 @@
+ 			buildRules = (
+ 			);
+ 			dependencies = (
+-				2712866E1CC1310E00E517C7 /* PBXTargetDependency */,
++				AA2A5FAC278F803100663DA7 /* PBXTargetDependency */,
+ 			);
+ 			name = rasterbench;
+ 			productName = testmime;
+@@ -5954,7 +6026,7 @@
+ 			buildRules = (
+ 			);
+ 			dependencies = (
+-				271286881CC13DC000E517C7 /* PBXTargetDependency */,
++				AA2A5FAF278F805D00663DA7 /* PBXTargetDependency */,
+ 			);
+ 			name = checkpo;
+ 			productName = testmime;
+@@ -6428,7 +6500,7 @@
+ 			buildRules = (
+ 			);
+ 			dependencies = (
+-				276683FC1337F7B3000D33D0 /* PBXTargetDependency */,
++				AA56E18326FD1867008E2A55 /* PBXTargetDependency */,
+ 			);
+ 			name = ipptool;
+ 			productName = ipptool;
+@@ -7282,6 +7354,23 @@
+ 			productReference = 72F75A611336F9A3004BB496 /* libcupsimage.dylib */;
+ 			productType = "com.apple.product-type.library.dynamic";
+ 		};
++		AA3880C4270638DD001035DA /* ipp_static */ = {
++			isa = PBXNativeTarget;
++			buildConfigurationList = AA3880CF270638DD001035DA /* Build configuration list for PBXNativeTarget "ipp_static" */;
++			buildPhases = (
++				AA3880C7270638DD001035DA /* Sources */,
++				AA3880CC270638DD001035DA /* Frameworks */,
++				AA3880CE270638DD001035DA /* CopyFiles */,
++			);
++			buildRules = (
++			);
++			dependencies = (
++			);
++			name = ipp_static;
++			productName = ipp;
++			productReference = AA3880D2270638DD001035DA /* ipp_static */;
++			productType = "com.apple.product-type.tool";
++		};
+ /* End PBXNativeTarget section */
+ 
+ /* Begin PBXProject section */
+@@ -7414,6 +7503,7 @@
+ 				271286571CC1309000E517C7 /* tlscheck */,
+ 				7243795A1333FF1D009631B9 /* usb */,
+ 				274770D12345342B0089BC31 /* testthreads */,
++				AA3880C4270638DD001035DA /* ipp_static */,
+ 			);
+ 		};
+ /* End PBXProject section */
+@@ -8465,6 +8555,17 @@
+ 			);
+ 			runOnlyForDeploymentPostprocessing = 0;
+ 		};
++		AA3880C7270638DD001035DA /* Sources */ = {
++			isa = PBXSourcesBuildPhase;
++			buildActionMask = 2147483647;
++			files = (
++				AA3880C8270638DD001035DA /* ipp.c in Sources */,
++				AA3880C9270638DD001035DA /* network.c in Sources */,
++				AA3880CA270638DD001035DA /* snmp-supplies.c in Sources */,
++				AA3880CB270638DD001035DA /* runloop.c in Sources */,
++			);
++			runOnlyForDeploymentPostprocessing = 0;
++		};
+ /* End PBXSourcesBuildPhase section */
+ 
+ /* Begin PBXTargetDependency section */
+@@ -8873,16 +8974,6 @@
+ 			target = 274FF6891333B1C400317ECB /* libcups_static */;
+ 			targetProxy = 271286591CC1309000E517C7 /* PBXContainerItemProxy */;
+ 		};
+-		2712866E1CC1310E00E517C7 /* PBXTargetDependency */ = {
+-			isa = PBXTargetDependency;
+-			target = 274FF6891333B1C400317ECB /* libcups_static */;
+-			targetProxy = 2712866F1CC1310E00E517C7 /* PBXContainerItemProxy */;
+-		};
+-		271286881CC13DC000E517C7 /* PBXTargetDependency */ = {
+-			isa = PBXTargetDependency;
+-			target = 274FF6891333B1C400317ECB /* libcups_static */;
+-			targetProxy = 271286891CC13DC000E517C7 /* PBXContainerItemProxy */;
+-		};
+ 		271286991CC13DF100E517C7 /* PBXTargetDependency */ = {
+ 			isa = PBXTargetDependency;
+ 			target = 274FF6891333B1C400317ECB /* libcups_static */;
+@@ -9193,11 +9284,6 @@
+ 			target = 72F75A601336F9A3004BB496 /* libcupsimage */;
+ 			targetProxy = 276683E31337B2BA000D33D0 /* PBXContainerItemProxy */;
+ 		};
+-		276683FC1337F7B3000D33D0 /* PBXTargetDependency */ = {
+-			isa = PBXTargetDependency;
+-			target = 72220EAD1333047D00FCA411 /* libcups */;
+-			targetProxy = 276683FB1337F7B3000D33D0 /* PBXContainerItemProxy */;
+-		};
+ 		276683FF1337F7C5000D33D0 /* PBXTargetDependency */ = {
+ 			isa = PBXTargetDependency;
+ 			target = 276683EF1337F78E000D33D0 /* ipptool */;
+@@ -9503,6 +9589,31 @@
+ 			target = 72F75A511336F950004BB496 /* cupstestppd */;
+ 			targetProxy = 72F75A721336FACD004BB496 /* PBXContainerItemProxy */;
+ 		};
++		AA2A5FA6278F7ED300663DA7 /* PBXTargetDependency */ = {
++			isa = PBXTargetDependency;
++			target = 724FA7411CC03ACC0092477B /* libcupscgi */;
++			targetProxy = AA2A5FA5278F7ED300663DA7 /* PBXContainerItemProxy */;
++		};
++		AA2A5FAC278F803100663DA7 /* PBXTargetDependency */ = {
++			isa = PBXTargetDependency;
++			target = 72220EAD1333047D00FCA411 /* libcups */;
++			targetProxy = AA2A5FAB278F803100663DA7 /* PBXContainerItemProxy */;
++		};
++		AA2A5FAF278F805D00663DA7 /* PBXTargetDependency */ = {
++			isa = PBXTargetDependency;
++			target = 72220EAD1333047D00FCA411 /* libcups */;
++			targetProxy = AA2A5FAE278F805D00663DA7 /* PBXContainerItemProxy */;
++		};
++		AA2A5FB3278F829A00663DA7 /* PBXTargetDependency */ = {
++			isa = PBXTargetDependency;
++			target = 724FA7411CC03ACC0092477B /* libcupscgi */;
++			targetProxy = AA2A5FB2278F829A00663DA7 /* PBXContainerItemProxy */;
++		};
++		AA56E18326FD1867008E2A55 /* PBXTargetDependency */ = {
++			isa = PBXTargetDependency;
++			target = 72220EAD1333047D00FCA411 /* libcups */;
++			targetProxy = AA56E18226FD1867008E2A55 /* PBXContainerItemProxy */;
++		};
+ /* End PBXTargetDependency section */
+ 
+ /* Begin XCBuildConfiguration section */
+@@ -10453,7 +10564,9 @@
+ 				COMBINE_HIDPI_IMAGES = YES;
+ 				EXECUTABLE_EXTENSION = a;
+ 				EXECUTABLE_PREFIX = "";
++				GCC_OPTIMIZATION_LEVEL = 0;
+ 				INSTALL_PATH = /usr/local/lib;
++				MACH_O_TYPE = staticlib;
+ 				PRIVATE_HEADERS_FOLDER_PATH = /usr/local/include/cups;
+ 				PRODUCT_NAME = libcups_static;
+ 				PUBLIC_HEADERS_FOLDER_PATH = /usr/include/cups;
+@@ -10468,7 +10581,9 @@
+ 				COMBINE_HIDPI_IMAGES = YES;
+ 				EXECUTABLE_EXTENSION = a;
+ 				EXECUTABLE_PREFIX = "";
++				GCC_OPTIMIZATION_LEVEL = 0;
+ 				INSTALL_PATH = /usr/local/lib;
++				MACH_O_TYPE = staticlib;
+ 				PRIVATE_HEADERS_FOLDER_PATH = /usr/local/include/cups;
+ 				PRODUCT_NAME = libcups_static;
+ 				PUBLIC_HEADERS_FOLDER_PATH = /usr/include/cups;
+@@ -10601,7 +10716,10 @@
+ 			buildSettings = {
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+ 				CODE_SIGN_IDENTITY = "-";
++				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
++				GCC_OPTIMIZATION_LEVEL = 0;
+ 				INSTALL_PATH = /usr/bin;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 			};
+ 			name = Debug;
+@@ -10611,7 +10729,9 @@
+ 			buildSettings = {
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+ 				CODE_SIGN_IDENTITY = "-";
++				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+ 				INSTALL_PATH = /usr/bin;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 			};
+ 			name = Release;
+@@ -10749,13 +10869,17 @@
+ 			buildSettings = {
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+ 				COMBINE_HIDPI_IMAGES = YES;
++				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+ 				DYLIB_COMPATIBILITY_VERSION = 2.0.0;
+ 				DYLIB_CURRENT_VERSION = 2.12.0;
+ 				EXECUTABLE_PREFIX = "";
++				GCC_OPTIMIZATION_LEVEL = 0;
+ 				INSTALL_PATH = /usr/lib;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				PRIVATE_HEADERS_FOLDER_PATH = /usr/local/include/cups;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				PUBLIC_HEADERS_FOLDER_PATH = /usr/include/cups;
++				SDKROOT = macosx.internal;
+ 			};
+ 			name = Debug;
+ 		};
+@@ -10768,9 +10892,11 @@
+ 				DYLIB_CURRENT_VERSION = 2.12.0;
+ 				EXECUTABLE_PREFIX = "";
+ 				INSTALL_PATH = /usr/lib;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				PRIVATE_HEADERS_FOLDER_PATH = /usr/local/include/cups;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 				PUBLIC_HEADERS_FOLDER_PATH = /usr/include/cups;
++				SDKROOT = macosx.internal;
+ 			};
+ 			name = Release;
+ 		};
+@@ -10779,6 +10905,7 @@
+ 			buildSettings = {
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+ 				CODE_SIGN_IDENTITY = "-";
++				GCC_OPTIMIZATION_LEVEL = 0;
+ 				INSTALL_PATH = /usr/sbin;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 			};
+@@ -10789,6 +10916,7 @@
+ 			buildSettings = {
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+ 				CODE_SIGN_IDENTITY = "-";
++				GCC_OPTIMIZATION_LEVEL = 0;
+ 				INSTALL_PATH = /usr/sbin;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 			};
+@@ -10821,6 +10949,7 @@
+ 			buildSettings = {
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+ 				CODE_SIGN_IDENTITY = "-";
++				GCC_OPTIMIZATION_LEVEL = 0;
+ 				INSTALL_MODE_FLAG = "u+rwX,go-rwX";
+ 				INSTALL_PATH = /usr/libexec/cups/backend;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+@@ -10832,6 +10961,7 @@
+ 			buildSettings = {
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+ 				CODE_SIGN_IDENTITY = "-";
++				GCC_OPTIMIZATION_LEVEL = 0;
+ 				INSTALL_MODE_FLAG = "u+rwX,go-rwX";
+ 				INSTALL_PATH = /usr/libexec/cups/backend;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+@@ -11229,6 +11359,7 @@
+ 			buildSettings = {
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+ 				CODE_SIGN_IDENTITY = "-";
++				GCC_OPTIMIZATION_LEVEL = 0;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 			};
+ 			name = Debug;
+@@ -11238,6 +11369,7 @@
+ 			buildSettings = {
+ 				CLANG_ENABLE_OBJC_WEAK = YES;
+ 				CODE_SIGN_IDENTITY = "-";
++				GCC_OPTIMIZATION_LEVEL = 0;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+ 			};
+ 			name = Release;
+@@ -11592,11 +11724,12 @@
+ 					.,
+ 					..,
+ 				);
+-				ONLY_ACTIVE_ARCH = YES;
++				ONLY_ACTIVE_ARCH = NO;
+ 				OTHER_CFLAGS = (
+ 					"-D_CUPS_SOURCE",
+ 					"-Wno-shorten-64-to-32",
+ 				);
++				SDKROOT = macosx.internal;
+ 				USE_HEADERMAP = NO;
+ 				WARNING_CFLAGS = "-Wno-deprecated-declarations";
+ 			};
+@@ -11659,6 +11792,7 @@
+ 					"-D_CUPS_SOURCE",
+ 					"-Wno-shorten-64-to-32",
+ 				);
++				SDKROOT = macosx.internal;
+ 				USE_HEADERMAP = NO;
+ 				WARNING_CFLAGS = "-Wno-deprecated-declarations";
+ 			};
+@@ -11726,6 +11860,28 @@
+ 			};
+ 			name = Release;
+ 		};
++		AA3880D0270638DD001035DA /* Debug */ = {
++			isa = XCBuildConfiguration;
++			buildSettings = {
++				CLANG_ENABLE_OBJC_WEAK = YES;
++				CODE_SIGN_IDENTITY = "-";
++				INSTALL_MODE_FLAG = "u+rwX,go-rwX";
++				INSTALL_PATH = /usr/libexec/cups/backend;
++				PRODUCT_NAME = "$(TARGET_NAME)";
++			};
++			name = Debug;
++		};
++		AA3880D1270638DD001035DA /* Release */ = {
++			isa = XCBuildConfiguration;
++			buildSettings = {
++				CLANG_ENABLE_OBJC_WEAK = YES;
++				CODE_SIGN_IDENTITY = "-";
++				INSTALL_MODE_FLAG = "u+rwX,go-rwX";
++				INSTALL_PATH = /usr/libexec/cups/backend;
++				PRODUCT_NAME = "$(TARGET_NAME)";
++			};
++			name = Release;
++		};
+ /* End XCBuildConfiguration section */
+ 
+ /* Begin XCConfigurationList section */
+@@ -12655,6 +12811,15 @@
+ 			);
+ 			defaultConfigurationIsVisible = 0;
+ 			defaultConfigurationName = Release;
++		};
++		AA3880CF270638DD001035DA /* Build configuration list for PBXNativeTarget "ipp_static" */ = {
++			isa = XCConfigurationList;
++			buildConfigurations = (
++				AA3880D0270638DD001035DA /* Debug */,
++				AA3880D1270638DD001035DA /* Release */,
++			);
++			defaultConfigurationIsVisible = 0;
++			defaultConfigurationName = Release;
+ 		};
+ /* End XCConfigurationList section */
+ 	};

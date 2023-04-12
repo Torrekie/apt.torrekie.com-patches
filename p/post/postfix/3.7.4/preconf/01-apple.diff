@@ -1,0 +1,123 @@
+--- a/makedefs	1673825379.000000000
++++ b/makedefs	1678784473.359880328
+@@ -866,12 +866,12 @@ esac
+ #
+ # Look for the ICU library and enable unicode email if available.
+ #
++# Apple: manually icu flags
++#
+ case "$CCARGS" in
+ *-DNO_EAI*) CCARGS="$CCARGS "'-DDEF_SMTPUTF8_ENABLE=\"no\"';;
+-	 *) icu_cppflags=`((pkg-config --cflags icu-uc icu-i18n) ||
+-		  (icu-config --cppflags)) 2>/dev/null` && {
+-		icu_ldflags=`((pkg-config --libs icu-uc icu-i18n) ||
+-		  (icu-config --ldflags)) 2>/dev/null` && {
++	*) icu_cppflags="-I/usr/local/include" && {
++              icu_ldflags="-lpthread -lm -licucore" && {
+ 		    trap 'rm -f makedefs.test makedefs.test.[co]' 1 2 3 15
+ 		    cat >makedefs.test.c <<'EOF'
+ #include <unicode/uidna.h>
+--- a/postfix-install	1639928585.000000000
++++ b/postfix-install	1678782516.056495869
+@@ -349,22 +349,25 @@ compare_or_symlink() {
+      *) link=$1
+ 	;;
+     esac
+-    (test $link = "`myreadlink $2`" >/dev/null 2>&1 && echo Skipping $2...) || {
+-	echo Updating $2...
+-	# We create the symlink in place instead of using mv because:
+-	# 1) some systems cannot move symlinks between file systems;
+-	# 2) we cannot use mv to replace a symlink-to-directory;
+-	# 3) "ln -n" is not in POSIX, therefore it's not portable.
+-	# rm+ln is less atomic but this affects compatibility symlinks only.
+-	rm -f $2 && ln -sf $link $2 || exit 1
+-    }
++#    APPLE: Work around B&I sym link errors
++#    (test $link = "`myreadlink $2`" >/dev/null 2>&1 && echo Skipping $2...) || {
++#	echo Updating $2...
++#	# We create the symlink in place instead of using mv because:
++#	# 1) some systems cannot move symlinks between file systems;
++#	# 2) we cannot use mv to replace a symlink-to-directory;
++#	# 3) "ln -n" is not in POSIX, therefore it's not portable.
++#	# rm+ln is less atomic but this affects compatibility symlinks only.
++#	rm -f $2 && ln -sf $link $2 || exit 1
++#    }
+ }
+ 
+ compare_or_hardlink() {
+     (cmp $1 $2 >/dev/null 2>&1 && echo Skipping $2...) || {
+ 	echo Updating $2...
+ 	rm -f $2 || exit 1
+-	ln $1 $2 || exit 1
++#	APPLE: Work around B&I link errors
++#	ln $1 $2 || exit 1
++	cp $1 $2
+     }
+ }
+ 
+--- a/src/global/mail_params.c	1634928451.000000000
++++ b/src/global/mail_params.c	1678784486.750696359
+@@ -264,6 +264,7 @@ char   *var_config_dir;
+ char   *var_daemon_dir;
+ char   *var_data_dir;
+ char   *var_command_dir;
++char   *var_server_config_dir; /* Apple */
+ char   *var_meta_dir;
+ char   *var_queue_dir;
+ char   *var_shlib_dir;
+@@ -763,6 +764,7 @@ void    mail_params_init()
+ 	VAR_DAEMON_DIR, DEF_DAEMON_DIR, &var_daemon_dir, 1, 0,
+ 	VAR_DATA_DIR, DEF_DATA_DIR, &var_data_dir, 1, 0,
+ 	VAR_COMMAND_DIR, DEF_COMMAND_DIR, &var_command_dir, 1, 0,
++	VAR_SERVER_CONFIG_DIR, DEF_SERVER_CONFIG_DIR, &var_server_config_dir, 1, 0,
+ 	VAR_META_DIR, DEF_META_DIR, &var_meta_dir, 1, 0,
+ 	VAR_QUEUE_DIR, DEF_QUEUE_DIR, &var_queue_dir, 1, 0,
+ 	VAR_SHLIB_DIR, DEF_SHLIB_DIR, &var_shlib_dir, 1, 0,
+--- a/src/global/mail_params.h	1649455807.000000000
++++ b/src/global/mail_params.h	1678784486.753184095
+@@ -298,6 +298,13 @@ extern int var_smtp_mxaddr_limit;
+ #define DEF_LMTP_MXSESS_LIMIT	2
+ extern int var_smtp_mxsess_limit;
+ 
++/* Apple */
++#define VAR_SERVER_CONFIG_DIR  "server_config_directory"
++#ifndef DEF_SERVER_CONFIG_DIR
++#define DEF_SERVER_CONFIG_DIR  "disabled"
++#endif
++extern char *var_server_config_dir;
++
+  /*
+   * Location of the mail queue directory tree.
+   */
+--- a/src/postfix/Makefile.in	1624817415.000000000
++++ b/src/postfix/Makefile.in	1678782516.055670128
+@@ -5,6 +5,7 @@ HDRS	=
+ TESTSRC	= 
+ DEFS	= -I. -I$(INC_DIR) -D$(SYSTYPE)
+ CFLAGS	= $(DEBUG) $(OPT) $(DEFS)
++LDFLAGS = -sectcreate __TEXT __info_plist  $(SRCROOT)/Postfix.ServerSetup/Info.plist
+ FILES	= Makefile $(SRCS) $(HDRS)
+ INC_DIR	= ../../include
+ TESTPROG=
+--- a/src/sendmail/sendmail.c	1640214390.000000000
++++ b/src/sendmail/sendmail.c	1678784486.754840502
+@@ -1082,6 +1082,19 @@ int     main(int argc, char **argv)
+     for ( /* void */ ; fd < 100; fd++)
+ 	(void) close(fd);
+ 
++    /* Apple: Set CONF_ENV_PATH to server config if Server is installed */
++    mail_conf_read();
++    if ( strcmp(var_server_config_dir, "disabled") != 0 ) {
++       mail_conf_flush();
++
++       VSTRING *buf = vstring_alloc(1);
++       if ( setenv(CONF_ENV_PATH,
++            strcmp(sane_basename(buf, var_server_config_dir), MAIN_CONF_FILE) == 0 ?
++            sane_dirname(buf, var_server_config_dir) : var_server_config_dir, 1) < 0)
++               msg_fatal_status(EX_UNAVAILABLE, "out of memory");
++       vstring_free(buf);
++    }
++
+     /*
+      * Process environment options as early as we can. We might be called
+      * from a set-uid (set-gid) program, so be careful with importing

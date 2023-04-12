@@ -1,0 +1,347 @@
+--- a/Makedefs.in	1653545841.000000000
++++ b/Makedefs.in	1677052503.579247428
+@@ -23,6 +23,7 @@ CUPS_VERSION    =       @CUPS_VERSION@
+ AR		=	@AR@
+ AWK		=	@AWK@
+ CC		=	@LIBTOOL_CC@ @CC@
++CC_FOR_BUILD	=	@CC_FOR_BUILD@
+ CHMOD		=	@CHMOD@
+ CXX		=	@LIBTOOL_CXX@ @CXX@
+ DSO		=	@DSO@
+@@ -263,7 +264,6 @@ USBQUIRKS	=	@USBQUIRKS@
+ # Rules...
+ #
+ 
+-.SILENT:
+ .SUFFIXES:	.a .c .cxx .h .o
+ 
+ .c.o:
+--- a/cgi-bin/admin.c	1653545841.000000000
++++ b/cgi-bin/admin.c	1677052490.383041469
+@@ -1635,6 +1635,7 @@ do_config_server(http_t *http)		/* I - H
+     int		ch;			/* Character from file */
+     char	filename[1024];		/* Filename */
+     const char	*server_root;		/* Location of config files */
++    const char	*data_dir;		/* Location of data files */
+ 
+ 
+    /*
+@@ -1718,7 +1719,10 @@ do_config_server(http_t *http)		/* I - H
+     * well...
+     */
+ 
+-    strlcat(filename, ".default", sizeof(filename));
++    if ((data_dir = getenv("CUPS_DATADIR")) == NULL)
++      data_dir = CUPS_DATADIR;
++
++    snprintf(filename, sizeof(filename), "%s/cupsd.conf.default",data_dir);
+ 
+     if (!stat(filename, &info) && info.st_size < (1024 * 1024) &&
+         (cupsd = cupsFileOpen(filename, "r")) != NULL)
+--- a/conf/Makefile	1653545841.000000000
++++ b/conf/Makefile	1677052490.383681124
+@@ -70,7 +70,7 @@ install-data:
+ 		else \
+ 			$(INSTALL_CONFIG) -g $(CUPS_GROUP) $$file $(SERVERROOT) ; \
+ 		fi ; \
+-		$(INSTALL_CONFIG) -g $(CUPS_GROUP) $$file $(SERVERROOT)/$$file.default; \
++		$(INSTALL_CONFIG) -g $(CUPS_GROUP) $$file $(DATADIR)/$$file.default; \
+ 	done
+ 	$(INSTALL_DIR) -m 755 $(DATADIR)/mime
+ 	for file in $(REPLACE); do \
+@@ -118,9 +118,10 @@ install-libs:
+ #
+ 
+ uninstall:
+-	for file in $(KEEP) $(REPLACE) cupsd.conf.default; do \
++	for file in $(KEEP) $(REPLACE); do \
+ 		$(RM) $(SERVERROOT)/$$file; \
+ 	done
++	$(RM) $(DATADIR)/cupsd.conf.default
+ 	-$(RMDIR) $(SERVERROOT)
+ 	for file in $(REPLACE); do \
+ 		$(RM) $(DATADIR)/mime/$$file; \
+--- a/conf/cups-files.conf.in	1653545841.000000000
++++ b/conf/cups-files.conf.in	1677052487.607533695
+@@ -29,6 +29,10 @@ SystemGroup @CUPS_SYSTEM_GROUPS@
+ #ConfigFilePerm 0@CUPS_CONFIG_FILE_PERM@
+ #LogFilePerm 0@CUPS_LOG_FILE_PERM@
+ 
++# Specifies the group name or ID that will be used for log files.
++# The default group in Darwin is "admin".
++LogFileGroup admin
++
+ # Location of the file logging all access to the scheduler; may be the name
+ # "syslog". If not an absolute path, the value of ServerRoot is used as the
+ # root directory.  Also see the "AccessLogLevel" directive in cupsd.conf.
+--- a/conf/mime.convs.in	1653545841.000000000
++++ b/conf/mime.convs.in	1677052107.251542158
+@@ -44,6 +44,9 @@ application/postscript		application/vnd.
+ application/vnd.cups-raster	image/pwg-raster		100	rastertopwg
+ application/vnd.cups-raster	image/urf			100	rastertopwg
+ 
++# Needed for printing from iOS (AirPrint) clients
++image/urf    	      	       application/pdf			100	-
++
+ ########################################################################
+ #
+ # Raw filter...
+--- a/conf/mime.types	1653545841.000000000
++++ b/conf/mime.types	1677052107.251926440
+@@ -108,6 +108,9 @@ image/x-alias			pix short(8,8) short(8,2
+ image/x-bitmap			bmp string(0,BM) + !printable(2,14)
+ image/x-icon			ico
+ 
++# Needed for printing from iOS (AirPrint) clients
++image/urf			urf string(0,UNIRAST<00>)
++
+ ########################################################################
+ #
+ # Text files...
+--- a/configure.ac	1653545841.000000000
++++ b/configure.ac	1677052503.579847376
+@@ -25,6 +25,16 @@ sinclude(config-scripts/cups-opsys.m4)
+ sinclude(config-scripts/cups-common.m4)
+ sinclude(config-scripts/cups-directories.m4)
+ sinclude(config-scripts/cups-manpages.m4)
++
++AC_MSG_CHECKING([for build system compiler])
++if test "$cross_compiling" = yes; then
++       CC_FOR_BUILD=${CC_FOR_BUILD-cc}
++else
++       CC_FOR_BUILD=${CC}
++fi
++AC_MSG_RESULT(${CC_FOR_BUILD})
++AC_SUBST(CC_FOR_BUILD)
++
+ sinclude(config-scripts/cups-sharedlibs.m4)
+ sinclude(config-scripts/cups-libtool.m4)
+ sinclude(config-scripts/cups-compiler.m4)
+--- a/cups/pwg.h	1677052650.114146104
++++ b/cups/pwg.h	1676895191.206064842
+@@ -20,15 +20,6 @@
+ 
+ 
+ /*
+- * Include necessary headers...
+- */
+-
+-#  include <stddef.h>
+-#  include <cups/ipp.h>
+-#  include <cups/versioning.h>
+-
+-
+-/*
+  * C++ magic...
+  */
+ 
+--- a/examples/testfile.txt	1653545841.000000000
++++ b/examples/testfile.txt	1676895468.291327339
+@@ -1,60 +1,60 @@
+-All work and no play makes Johhny a dull boy.  All work and no
+-play makes Johhny a dull boy.  All work and no play makes Johhny
+-a dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy. All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy. All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy. All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy. All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy. All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy. All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy.  All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.  All
+-work and no play makes Johhny a dull boy. All work and no play
+-makes Johhny a dull boy.  All work and no play makes Johhny a
+-dull boy.  All work and no play makes Johhny a dull boy.
++All work and no play makes Johhny a dull boy.  All work and no
++play makes Johhny a dull boy.  All work and no play makes Johhny
++a dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy. All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy. All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy. All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy. All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy. All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy. All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy.  All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.  All
++work and no play makes Johhny a dull boy. All work and no play
++makes Johhny a dull boy.  All work and no play makes Johhny a
++dull boy.  All work and no play makes Johhny a dull boy.
+--- a/man/Makefile	1653545841.000000000
++++ b/man/Makefile	1677052503.580280784
+@@ -222,6 +222,5 @@ html:	$(MAN1) $(MAN5) $(MAN7) $(MAN8) ma
+ 		./mantohtml $$file >../doc/help/man-`basename $$file .8`.html; \
+ 	done
+ 
+-mantohtml:	mantohtml.o ../cups/$(LIBCUPSSTATIC)
+-	$(LD_CC) $(ARCHFLAGS) $(ALL_LDFLAGS) -o $@ mantohtml.o $(LINKCUPSSTATIC)
+-	$(CODE_SIGN) -s "$(CODE_SIGN_IDENTITY)" $@
++mantohtml:	mantohtml.c
++	$(CC_FOR_BUILD) -o $@ $<
+--- a/man/mantohtml.c	1653545841.000000000
++++ b/man/mantohtml.c	1677052503.580890315
+@@ -11,8 +11,10 @@
+  * Include necessary headers.
+  */
+ 
+-#include <cups/string-private.h>
+-#include <cups/array-private.h>
++#include <ctype.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
+ #include <unistd.h>
+ 
+ 
+@@ -811,7 +813,8 @@ main(int  argc,				/* I - Number of comm
+         * Anchor for HTML output...
+         */
+ 
+-        strlcpy(anchor, line + 4, sizeof(anchor));
++        strncpy(anchor, line + 4, sizeof(anchor) - 1);
++        anchor[sizeof(anchor) - 1] = '\0';
+       }
+       else if (strncmp(line, ".\\\"", 3))
+       {
+@@ -944,7 +947,8 @@ html_alternate(const char *s,		/* I - St
+ 		manfile[1024],		// Man page filename
+ 		manurl[1024];		// Man page URL
+ 
+-        strlcpy(name, s, sizeof(name));
++        strncpy(name, s, sizeof(name) - 1);
++        name[sizeof(name) - 1] = '\0';
+         if ((size_t)(end - s) < sizeof(name))
+           name[end - s] = '\0';
+ 
+--- a/scheduler/conf.c	1677052525.415343126
++++ b/scheduler/conf.c	1677052497.744635299
+@@ -1132,10 +1132,12 @@ cupsdReadConfiguration(void)
+ 			     Group, 1, 1) < 0 ||
+        cupsdCheckPermissions(ServerRoot, "ssl", 0700, RunUser,
+ 			     Group, 1, 0) < 0 ||
++       /* Never alter permissions of central conffile
+        cupsdCheckPermissions(ConfigurationFile, NULL, ConfigFilePerm, RunUser,
+ 			     Group, 0, 0) < 0 ||
+        cupsdCheckPermissions(CupsFilesFile, NULL, ConfigFilePerm, RunUser,
+ 			     Group, 0, 0) < 0 ||
++       */
+        cupsdCheckPermissions(ServerRoot, "classes.conf", 0600, RunUser,
+ 			     Group, 0, 0) < 0 ||
+        cupsdCheckPermissions(ServerRoot, "printers.conf", 0600, RunUser,
+--- a/scheduler/cups-driverd.cxx	1677052525.416679185
++++ b/scheduler/cups-driverd.cxx	1677052114.824473448
+@@ -241,7 +241,6 @@ add_ppd(const char *filename,		/* I - PP
+ 	const char *scheme)		/* I - PPD scheme */
+ {
+   ppd_info_t	*ppd;			/* PPD */
+-  char		*recommended;		/* Foomatic driver string */
+ 
+ 
+  /*
+@@ -280,15 +279,6 @@ add_ppd(const char *filename,		/* I - PP
+   strlcpy(ppd->record.scheme, scheme, sizeof(ppd->record.scheme));
+ 
+  /*
+-  * Strip confusing (and often wrong) "recommended" suffix added by
+-  * Foomatic drivers...
+-  */
+-
+-  if ((recommended = strstr(ppd->record.make_and_model,
+-                            " (recommended)")) != NULL)
+-    *recommended = '\0';
+-
+- /*
+   * Add the PPD to the PPD arrays...
+   */
+   {
