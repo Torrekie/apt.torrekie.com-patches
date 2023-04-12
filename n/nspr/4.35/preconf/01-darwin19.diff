@@ -1,0 +1,109 @@
+--- a/nspr/config/autoconf.mk.in	1662982815.000000000
++++ b/nspr/config/autoconf.mk.in	1681286129.460777849
+@@ -133,11 +133,6 @@ endif
+ VISIBILITY_FLAGS = @VISIBILITY_FLAGS@
+ WRAP_SYSTEM_INCLUDES = @WRAP_SYSTEM_INCLUDES@
+ 
+-MACOSX_DEPLOYMENT_TARGET = @MACOSX_DEPLOYMENT_TARGET@
+-ifdef MACOSX_DEPLOYMENT_TARGET
+-export MACOSX_DEPLOYMENT_TARGET
+-endif
+-
+ MACOS_SDK_DIR	= @MACOS_SDK_DIR@
+ 
+ 
+--- a/nspr/configure.in	1662982815.000000000
++++ b/nspr/configure.in	1681286107.853311222
+@@ -28,7 +28,6 @@ USE_64=
+ USE_CPLUS=
+ USE_IPV6=
+ USE_MDUPDATE=
+-_MACOSX_DEPLOYMENT_TARGET=
+ _OPTIMIZE_FLAGS=-O
+ _DEBUG_FLAGS=-g
+ MOZ_DEBUG=1
+@@ -389,19 +388,6 @@ AC_ARG_WITH(arm-kuser,
+       fi ])
+ 
+ dnl ========================================================
+-dnl = Mac OS X SDK support
+-dnl ========================================================
+-AC_ARG_WITH(macos-sdk,
+-    [  --with-macos-sdk=dir    Location of platform SDK to use (Mac OS X only)],
+-    MACOS_SDK_DIR=$withval)
+-
+-AC_ARG_ENABLE(macos-target,
+-             [  --enable-macos-target=VER
+-                          Set the minimum MacOS version needed at runtime
+-                          [10.3 for ppc, 10.4 for x86]],
+-             [_MACOSX_DEPLOYMENT_TARGET=$enableval])
+-
+-dnl ========================================================
+ dnl =
+ dnl = Set the threading model
+ dnl =
+@@ -1346,7 +1332,7 @@ case "$target" in
+     fi
+     AC_CHECK_HEADER(crt_externs.h, AC_DEFINE(HAVE_CRT_EXTERNS_H))
+     DSO_CFLAGS=-fPIC
+-    DSO_LDOPTS='-dynamiclib -compatibility_version 1 -current_version 1 -all_load -install_name @executable_path/$@ -headerpad_max_install_names'
++    DSO_LDOPTS='-dynamiclib -compatibility_version 1 -current_version 1 -all_load -install_name ${libdir}/$@ -headerpad_max_install_names'
+     _OPTIMIZE_FLAGS=-O2
+     MKSHLIB='$(CC) $(DSO_LDOPTS) -o $@'
+     STRIP="$STRIP -x -S"
+@@ -1356,25 +1342,6 @@ case "$target" in
+     PR_MD_CSRCS=darwin.c
+     PR_MD_ASFILES=os_Darwin.s
+ 
+-    if test -n "$_MACOSX_DEPLOYMENT_TARGET" ; then
+-        dnl Use the specified value
+-        export MACOSX_DEPLOYMENT_TARGET=$_MACOSX_DEPLOYMENT_TARGET
+-    elif test -z "$MACOSX_DEPLOYMENT_TARGET" ; then
+-        dnl No value specified on the command line or in the environment,
+-        dnl use the lesser of the library's minimum or the architecture's
+-        dnl minimum.
+-        case "${target_cpu}" in
+-            powerpc*)
+-                dnl Architecture minimum 10.3
+-                export MACOSX_DEPLOYMENT_TARGET=10.3
+-                ;;
+-            i*86*)
+-                dnl Architecture minimum 10.4
+-                export MACOSX_DEPLOYMENT_TARGET=10.4
+-                ;;
+-        esac
+-    fi
+-
+     dnl MACOS_SDK_DIR will be set to the SDK location whenever one is
+     dnl in use.  NEXT_ROOT will be set and exported if it's needed for
+     dnl ld.
+@@ -2769,7 +2736,6 @@ AC_SUBST(OS_TARGET)
+ AC_SUBST(OS_ARCH)
+ AC_SUBST(OS_RELEASE)
+ AC_SUBST(OS_TEST)
+-AC_SUBST(MACOSX_DEPLOYMENT_TARGET)
+ 
+ AC_SUBST(DEFINES)
+ AC_SUBST(DEFS)
+--- a/nspr/pr/include/md/_darwin.h	1662982815.000000000
++++ b/nspr/pr/include/md/_darwin.h	1681286238.715192094
+@@ -61,19 +61,7 @@
+  */
+ #define _PR_GHBA_DISALLOW_V4MAPPED
+ #ifdef __APPLE__
+-#if !defined(MAC_OS_X_VERSION_10_3) || \
+-    MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_3
+-/*
+- * socket(AF_INET6) fails with EPROTONOSUPPORT on Mac OS X 10.1.
+- * IPv6 under OS X 10.2 and below is not complete (see bug 222031).
+- */
+-#define _PR_INET6_PROBE
+-#endif /* DT < 10.3 */
+-#if defined(MAC_OS_X_VERSION_10_2) && \
+-    MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_2
+-/* Mac OS X 10.2 has inet_ntop and inet_pton. */
+ #define _PR_HAVE_INET_NTOP
+-#endif /* DT >= 10.2 */
+ #endif /* __APPLE__ */
+ #define _PR_IPV6_V6ONLY_PROBE
+ /* The IPV6_V6ONLY socket option is not defined on Mac OS X 10.1. */
