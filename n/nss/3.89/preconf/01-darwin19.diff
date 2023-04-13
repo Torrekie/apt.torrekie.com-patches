@@ -1,0 +1,50 @@
+--- a/nss/lib/freebl/config.mk	1678387110.000000000
++++ b/nss/lib/freebl/config.mk	1681289355.625096597
+@@ -87,7 +87,7 @@ endif
+ endif
+ 
+ ifeq ($(OS_ARCH), Darwin)
+-EXTRA_SHARED_LIBS += -dylib_file @executable_path/libplc4.dylib:$(DIST)/lib/libplc4.dylib -dylib_file @executable_path/libplds4.dylib:$(DIST)/lib/libplds4.dylib
++EXTRA_SHARED_LIBS += -dylib_file $(DIST)/lib/libplc4.dylib -dylib_file $(DIST)/lib/libplds4.dylib
+ endif
+ 
+ endif
+--- a/nss/coreconf/Darwin.mk	1681369001.258572615
++++ b/nss/coreconf/Darwin.mk	1681290447.628011704
+@@ -18,27 +18,6 @@
+ CPU_ARCH	:= $(shell uname -p)
+ endif
+ 
+-ifeq (,$(filter-out i%86,$(CPU_ARCH)))
+-ifdef USE_64
+-CC              += -arch x86_64
+-CCC             += -arch x86_64
+-override CPU_ARCH	= x86_64
+-else
+-OS_REL_CFLAGS	= -Di386
+-CC              += -arch i386
+-CCC             += -arch i386
+-override CPU_ARCH	= x86
+-endif
+-else
+-ifeq (arm,$(CPU_ARCH))
+-# Nothing set for arm currently.
+-else
+-OS_REL_CFLAGS	= -Dppc
+-CC              += -arch ppc
+-CCC             += -arch ppc
+-endif
+-endif
+-
+ ifneq (,$(MACOS_SDK_DIR))
+     GCC_VERSION_FULL := $(shell $(CC) -dumpversion)
+     GCC_VERSION_MAJOR := $(shell echo $(GCC_VERSION_FULL) | awk -F. '{ print $$1 }')
+@@ -108,7 +87,7 @@
+ # May override this with different compatibility and current version numbers.
+ DARWIN_DYLIB_VERSIONS = -compatibility_version 1 -current_version 1
+ # May override this with -bundle to create a loadable module.
+-DSO_LDOPTS	= -dynamiclib $(DARWIN_DYLIB_VERSIONS) -install_name @executable_path/$(notdir $@) -headerpad_max_install_names
++DSO_LDOPTS	= -dynamiclib $(DARWIN_DYLIB_VERSIONS) -install_name /usr/lib/$(notdir $@) -headerpad_max_install_names
+ 
+ ifdef USE_GCOV
+    OS_CFLAGS += --coverage
