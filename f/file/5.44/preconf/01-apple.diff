@@ -1,0 +1,1952 @@
+--- a/doc/file.man	2022-12-03 00:18:41.000000000 +0800
++++ b/doc/file.man	2023-04-21 18:36:34.703795581 +0800
+@@ -7,20 +7,16 @@
+ .Nd determine file type
+ .Sh SYNOPSIS
+ .Nm
+-.Bk -words
+-.Op Fl bcdEhiklLNnprsSvzZ0
+-.Op Fl Fl apple
++.Op Fl bcdDhiIkLnNprsvz
+ .Op Fl Fl exclude-quiet
+ .Op Fl Fl extension
+ .Op Fl Fl mime-encoding
+ .Op Fl Fl mime-type
+-.Op Fl e Ar testname
+-.Op Fl F Ar separator
+ .Op Fl f Ar namefile
+ .Op Fl m Ar magicfiles
+ .Op Fl P Ar name=value
+-.Ar
+-.Ek
++.Op Fl M Ar magicfiles
++.Ar file
+ .Nm
+ .Fl C
+ .Op Fl m Ar magicfiles
+@@ -108,11 +104,6 @@ magic file
+ or the files in the directory
+ .Pa __MAGIC__
+ if the compiled file does not exist.
+-In addition, if
+-.Pa $HOME/.magic.mgc
+-or
+-.Pa $HOME/.magic
+-exists, it will be used in preference to the system magic files.
+ .Pp
+ If a file does not match any of the entries in the magic file,
+ it is examined to see if it seems to be a text file.
+@@ -167,15 +158,6 @@ in any of the character sets listed abov
+ .Dq data .
+ .Sh OPTIONS
+ .Bl -tag -width indent
+-.It Fl Fl apple
+-Causes the
+-.Nm
+-command to output the file type and creator code as
+-used by older MacOS versions.
+-The code consists of eight letters,
+-the first describing the file type, the latter the creator.
+-This option works properly only for file formats that have the
+-apple-style output defined.
+ .It Fl b , Fl Fl brief
+ Do not prepend filenames to output lines (brief mode).
+ .It Fl C , Fl Fl compile
+@@ -188,7 +170,11 @@ This is usually used in conjunction with
+ .Fl m
+ option to debug a new magic file before installing it.
+ .It Fl d
+-Prints internal debugging information to stderr.
++Apply the default system tests; this is the default behavior unless
++.Fl M
++is specified.
++.It Fl D
++Print debugging messages.
+ .It Fl E
+ On filesystem errors (file not found etc), instead of handling the error
+ as regular output as POSIX mandates and keep going, issue an error message
+@@ -225,12 +211,7 @@ Examines JSON (RFC-7159) files by parsin
+ .It soft
+ Consults magic files.
+ .It tar
+-Examines tar files by verifying the checksum of the 512 byte tar header.
+-Excluding this test can provide more detailed content description by using
+-the soft magic method.
+-.It text
+-A synonym for
+-.Sq ascii .
++Examines tar files.
+ .El
+ .It Fl Fl exclude-quiet
+ Like
+@@ -274,10 +255,9 @@ instead of:
+ .It Fl h , Fl Fl no-dereference
+ This option causes symlinks not to be followed
+ (on systems that support symbolic links).
+-This is the default if the environment variable
+-.Dv POSIXLY_CORRECT
+-is not defined.
+-.It Fl i , Fl Fl mime
++.It Fl i
++If the file is a regular file, do not classify its contents.
++.It Fl I , Fl Fl mime
+ Causes the
+ .Nm
+ command to output mime type strings rather than the more
+@@ -288,7 +268,7 @@ rather than
+ .Dq ASCII text .
+ .It Fl Fl mime-type , Fl Fl mime-encoding
+ Like
+-.Fl i ,
++.Fl I ,
+ but print only the specified element(s).
+ .It Fl k , Fl Fl keep-going
+ Don't stop at the first match, keep going.
+@@ -313,16 +293,18 @@ option).
+ This option causes symlinks to be followed, as the like-named option in
+ .Xr ls 1
+ (on systems that support symbolic links).
+-This is the default if the environment variable
+-.Ev POSIXLY_CORRECT
+-is defined.
++This is the default behavior.
+ .It Fl m , Fl Fl magic-file Ar magicfiles
+ Specify an alternate list of files and directories containing magic.
+ This can be a single item, or a colon-separated list.
+ If a compiled magic file is found alongside a file or directory,
+ it will be used instead.
+-.It Fl N , Fl Fl no-pad
+-Don't pad filenames so that they align in the output.
++.It Fl M Ar magicfiles
++Like
++.Fl m ,
++except that the default rules are not applied unless
++.Fl d
++is specified.
+ .It Fl n , Fl Fl no-buffer
+ Force stdout to be flushed after checking each file.
+ This is only useful if checking a list of files.
+@@ -345,14 +327,11 @@ Set various parameter limits.
+ .It Li elf_shnum Ta 32768 Ta max ELF sections processed
+ .It Li encoding Ta 65536 Ta max number of bytes to scan for encoding evaluation
+ .It Li indir Ta 50 Ta recursion limit for indirect magic
+-.It Li name Ta 50 Ta use count limit for name/use magic
++.It Li name Ta 60 Ta use count limit for name/use magic
+ .It Li regex Ta 8192 Ta length limit for regex searches
+ .El
+ .It Fl r , Fl Fl raw
+-Don't translate unprintable characters to \eooo.
+-Normally
+-.Nm
+-translates unprintable characters to their octal representation.
++No operation, included for historical compatibility.
+ .It Fl s , Fl Fl special-files
+ Normally,
+ .Nm
+@@ -373,19 +352,6 @@ This option also causes
+ to disregard the file size as reported by
+ .Xr stat 2
+ since on some systems it reports a zero size for raw disk partitions.
+-.It Fl S , Fl Fl no-sandbox
+-On systems where libseccomp
+-.Pa ( https://github.com/seccomp/libseccomp )
+-is available, the
+-.Fl S
+-option disables sandboxing which is enabled by default.
+-This option is needed for
+-.Nm
+-to execute external decompressing programs,
+-i.e. when the
+-.Fl z
+-option is specified and the built-in decompressors are not available.
+-On systems where sandboxing is not available, this option has no effect.
+ .It Fl v , Fl Fl version
+ Print the version of the program and exit.
+ .It Fl z , Fl Fl uncompress
+@@ -401,107 +367,77 @@ Nice to
+ .Xr cut 1
+ the output.
+ This does not affect the separator, which is still printed.
+-.Pp
+-If this option is repeated more than once, then
+-.Nm
+-prints just the filename followed by a NUL followed by the description
+-(or ERROR: text) followed by a second NUL for each entry.
+ .It Fl -help
+ Print a help message and exit.
+ .El
++.Sh FILES
++.Bl -tag -width __MAGIC__.mgc -compact
++.It Pa __MAGIC__.mgc
++Default compiled list of magic.
++.It Pa __MAGIC__
++Directory containing default magic files.
++.El
+ .Sh ENVIRONMENT
+ The environment variable
+ .Ev MAGIC
+ can be used to set the default magic file name.
+-If that variable is set, then
+-.Nm
+-will not attempt to open
+-.Pa $HOME/.magic .
+ .Nm
+ adds
+ .Dq Pa .mgc
+ to the value of this variable as appropriate.
+-The environment variable
+-.Ev POSIXLY_CORRECT
+-controls (on systems that support symbolic links), whether
+-.Nm
+-will attempt to follow symlinks or not.
+-If set, then
+-.Nm
+-follows symlink, otherwise it does not.
+-This is also controlled by the
+-.Fl L
++However,
++.Pa file
++has to exist in order for
++.Pa file.mime
++to be considered.
++.Sh LEGACY DESCRIPTION
++In legacy mode, the
++.Fl D ,
++.Fl I ,
++and
++.Fl M
++options do not exist.
++.Pp
++The
++.Fl d ,
++.Fl i ,
+ and
++.Fl r
++options behave differently.
++The
++.Fl d
++option provides debugging information (same as
++.Fl D
++in conformance mode).
++The
++.Fl i
++option displays mime type information (same as
++.Fl I
++in conformance mode).
++The
++.Fl r
++option will disable the translation of unprintable characters (by
++default, this translation is already disabled in conformance mode).
++.Pp
++Furthermore, the
+ .Fl h
+-options.
+-.Sh FILES
+-.Bl -tag -width __MAGIC__.mgc -compact
+-.It Pa __MAGIC__.mgc
+-Default compiled list of magic.
+-.It Pa __MAGIC__
+-Directory containing default magic files.
+-.El
+-.Sh EXIT STATUS
+-.Nm
+-will exit with
+-.Dv 0
+-if the operation was successful or
+-.Dv >0
+-if an error was encountered.
+-The following errors cause diagnostic messages, but don't affect the program
+-exit code (as POSIX requires), unless
+-.Fl E
+-is specified:
+-.Bl -bullet -compact -offset indent
+-.It
+-A file cannot be found
+-.It
+-There is no permission to read a file
+-.It
+-The file type cannot be determined
+-.El
+-.Sh EXAMPLES
+-.Bd -literal -offset indent
+-$ file file.c file /dev/{wd0a,hda}
+-file.c:	  C program text
+-file:	  ELF 32-bit LSB executable, Intel 80386, version 1 (SYSV),
+-	  dynamically linked (uses shared libs), stripped
+-/dev/wd0a: block special (0/0)
+-/dev/hda: block special (3/0)
+-
+-$ file -s /dev/wd0{b,d}
+-/dev/wd0b: data
+-/dev/wd0d: x86 boot sector
+-
+-$ file -s /dev/hda{,1,2,3,4,5,6,7,8,9,10}
+-/dev/hda:   x86 boot sector
+-/dev/hda1:  Linux/i386 ext2 filesystem
+-/dev/hda2:  x86 boot sector
+-/dev/hda3:  x86 boot sector, extended partition table
+-/dev/hda4:  Linux/i386 ext2 filesystem
+-/dev/hda5:  Linux/i386 swap file
+-/dev/hda6:  Linux/i386 swap file
+-/dev/hda7:  Linux/i386 swap file
+-/dev/hda8:  Linux/i386 swap file
+-/dev/hda9:  empty
+-/dev/hda10: empty
+-
+-$ file -i file.c file /dev/{wd0a,hda}
+-file.c:	     text/x-c
+-file:	     application/x-executable
+-/dev/hda:    application/x-not-regular-file
+-/dev/wd0a:   application/x-not-regular-file
+-
+-.Ed
++option becomes the default symlink behavior (don't follow symlinks)
++unless
++.Dv POSIXLY_CORRECT
++is set.
++.Pp
++For more information about legacy mode, see
++.Xr compat 5 .
+ .Sh SEE ALSO
+ .Xr hexdump 1 ,
+ .Xr od 1 ,
+ .Xr strings 1 ,
+-.Xr magic __FSECTION__
++.Xr magic __FSECTION__ ,
++.Xr otool 1 ,
++.Xr compat 5
+ .Sh STANDARDS CONFORMANCE
+-This program is believed to exceed the System V Interface Definition
+-of FILE(CMD), as near as one can determine from the vague language
+-contained therein.
++This program conforms to
++.St -susv3 .
+ Its behavior is mostly compatible with the System V program of the same name.
+ This version knows more magic, however, so it will produce
+ different (albeit more accurate) output in many cases.
+@@ -544,23 +480,6 @@ for example,
+ .Bd -literal -offset indent
+ \*[Gt]16	long\*[Am]0x7fffffff	\*[Gt]0		not stripped
+ .Ed
+-.Sh SECURITY
+-On systems where libseccomp
+-.Pa ( https://github.com/seccomp/libseccomp )
+-is available,
+-.Nm
+-is enforces limiting system calls to only the ones necessary for the
+-operation of the program.
+-This enforcement does not provide any security benefit when
+-.Nm
+-is asked to decompress input files running external programs with
+-the
+-.Fl z
+-option.
+-To enable execution of external decompressors, one needs to disable
+-sandboxing using the
+-.Fl S
+-option.
+ .Sh MAGIC DIRECTORY
+ The magic file entries have been collected from various sources,
+ mainly USENET, and contributed by various authors.
+@@ -578,6 +497,39 @@ command uses a magic file,
+ keep the old magic file around for comparison purposes
+ (rename it to
+ .Pa __MAGIC__.orig ) .
++.Sh EXAMPLES
++.Bd -literal -offset indent
++$ file file.c file /dev/{wd0a,hda}
++file.c:	  C program text
++file:	  ELF 32-bit LSB executable, Intel 80386, version 1 (SYSV),
++	  dynamically linked (uses shared libs), stripped
++/dev/wd0a: block special (0/0)
++/dev/hda: block special (3/0)
++
++$ file -s /dev/wd0{b,d}
++/dev/wd0b: data
++/dev/wd0d: x86 boot sector
++
++$ file -s /dev/hda{,1,2,3,4,5,6,7,8,9,10}
++/dev/hda:   x86 boot sector
++/dev/hda1:  Linux/i386 ext2 filesystem
++/dev/hda2:  x86 boot sector
++/dev/hda3:  x86 boot sector, extended partition table
++/dev/hda4:  Linux/i386 ext2 filesystem
++/dev/hda5:  Linux/i386 swap file
++/dev/hda6:  Linux/i386 swap file
++/dev/hda7:  Linux/i386 swap file
++/dev/hda8:  Linux/i386 swap file
++/dev/hda9:  empty
++/dev/hda10: empty
++
++$ file -i file.c file /dev/{wd0a,hda}
++file.c:	     text/x-c
++file:	     application/x-executable
++/dev/hda:    application/x-not-regular-file
++/dev/wd0a:   application/x-not-regular-file
++
++.Ed
+ .Sh HISTORY
+ There has been a
+ .Nm
+@@ -614,7 +566,7 @@ Christos Zoulas
+ Altered by Chris Lowth
+ .Aq chris@lowth.com ,
+ 2000: handle the
+-.Fl i
++.Fl I
+ option to output mime type strings, using an alternative
+ magic file and internal logic.
+ .Pp
+@@ -649,6 +601,9 @@ and
+ were written by John Gilmore from his public-domain
+ .Xr tar 1
+ program, and are not covered by the above license.
++.Sh RETURN CODE
++.Nm
++returns 0 on success, and non-zero on error.
+ .Sh BUGS
+ Please report bugs and send patches to the bug tracker at
+ .Pa https://bugs.astron.com/
+--- a/magic/Magdir/c-lang	2022-12-03 00:18:18.000000000 +0800
++++ b/magic/Magdir/c-lang	2023-04-21 18:38:23.058430285 +0800
+@@ -2,7 +2,6 @@
+ # $File: c-lang,v 1.31 2022/12/01 22:04:33 christos Exp $
+ # c-lang:  file(1) magic for C and related languages programs
+ #
+-# The strength is to beat standard HTML
+ 
+ # BCPL
+ 0	search/8192	"libhdr"	BCPL source text
+@@ -13,88 +12,88 @@
+ # C
+ # Check for class if include is found, otherwise class is beaten by include because of lowered strength
+ 0	search/8192	#include
+->0	regex	\^#include			C
++>0	regex	\^#include			c
+ >>0	regex	\^class[[:space:]]+
+ >>>&0	regex 	\\{[\.\*]\\}(;)?$			\b++
+->>&0	clear	x				source text
++>>&0	clear	x				program text
+ !:strength + 13
+ !:mime	text/x-c
+ 0	search/8192	pragma
+->0	regex	\^#[[:space:]]*pragma	C source text
++>0	regex	\^#[[:space:]]*pragma	c program text
+ !:mime	text/x-c
+ 0	search/8192	endif
+ >0	regex	\^#[[:space:]]*(if\|ifn)def
+->>&0	regex	\^#[[:space:]]*endif$	C source text
++>>&0	regex	\^#[[:space:]]*endif$	c program text
+ !:mime	text/x-c
+ 0	search/8192	define
+ >0	regex	\^#[[:space:]]*(if\|ifn)def
+->>&0	regex	\^#[[:space:]]*define	C source text
++>>&0	regex	\^#[[:space:]]*define	c program text
+ !:mime	text/x-c
+ 0	search/8192	char
+->0	regex	\^[[:space:]]*char(\ \\*|\\*)(.+)(=.*)?;[[:space:]]*$			C source text
++>0	regex	\^[[:space:]]*char(\ \\*|\\*)(.+)(=.*)?;[[:space:]]*$			c program text
+ !:mime	text/x-c
+ 0	search/8192	double
+->0	regex	\^[[:space:]]*double(\ \\*|\\*)(.+)(=.*)?;[[:space:]]*$			C source text
++>0	regex	\^[[:space:]]*double(\ \\*|\\*)(.+)(=.*)?;[[:space:]]*$			c program text
+ !:mime	text/x-c
+ 0	search/8192	extern
+->0	regex	\^[[:space:]]*extern[[:space:]]+		C source text
++>0	regex	\^[[:space:]]*extern[[:space:]]+		c program text
+ !:mime	text/x-c
+ 0	search/8192	float
+->0	regex	\^[[:space:]]*float(\ \\*|\\*)(.+)(=.*)?;[[:space:]]*$			C source text
++>0	regex	\^[[:space:]]*float(\ \\*|\\*)(.+)(=.*)?;[[:space:]]*$			c program text
+ !:mime	text/x-c
+ 0	search/8192	struct
+->0	regex	\^struct[[:space:]]+		C source text
++>0	regex	\^struct[[:space:]]+		c program text
+ !:mime	text/x-c
+ 0	search/8192	union
+->0	regex	\^union[[:space:]]+		C source text
++>0	regex	\^union[[:space:]]+		c program text
+ !:mime	text/x-c
+ 0	search/8192	main(
+ >&0	search/64	String			Java source text
+ !:mime	text/x-java
+ >&0	default		x
+->>&0 regex	\\)[[:space:]]*\\{		C source text
++>>&0 regex	\\)[[:space:]]*\\{		c program text
+ !:mime	text/x-c
+ 
+ # C++
+ # The strength of these rules is increased so they beat the C rules above
+ 0	search/8192	namespace
+ >0	regex	\^namespace[[:space:]]+[_[:alpha:]]{1,30}[[:space:]]*\\{	C++ source text
+-!:strength + 30
++!:strength + 5
+ !:mime	text/x-c++
+ # using namespace [namespace] or using std::[lib]
+ 0	search/8192	using
+ >0	regex	\^using[[:space:]]+(namespace\ )?std(::)?[[:alpha:]]*[[:space:]]*;		C++ source text
+-!:strength + 30
++!:strength + 5
+ !:mime	text/x-c++
+ 0	search/8192	template
+ >0	regex	\^[[:space:]]*template[[:space:]]*<.*>[[:space:]]*$	C++ source text
+-!:strength + 30
++!:strength + 5
+ !:mime	text/x-c++
+ 0	search/8192	virtual
+ >0	regex	\^[[:space:]]*virtual[[:space:]]+.*[};][[:space:]]*$		C++ source text
+-!:strength + 30
++!:strength + 5
+ !:mime	text/x-c++
+ # But class alone is reduced to avoid beating php (Jens Schleusener)
+ 0	search/8192	class
+ >0	regex	\^[[:space:]]*class[[:space:]]+[[:digit:][:alpha:]:_]+[[:space:]]*\\{(.*[\n]*)*\\}(;)?$		C++ source text
+-!:strength + 13
++!:strength + 5
+ !:mime	text/x-c++
+ 0	search/8192	public
+ >0	regex	\^[[:space:]]*public:		C++ source text
+-!:strength + 30
++!:strength + 5
+ !:mime	text/x-c++
+ 0	search/8192	private
+ >0	regex	\^[[:space:]]*private:		C++ source text
+-!:strength + 30
++!:strength + 5
+ !:mime	text/x-c++
+ 0	search/8192	protected
+ >0	regex	\^[[:space:]]*protected:	C++ source text
+-!:strength + 30
++!:strength + 5
+ !:mime	text/x-c++
+ 
+ # Objective-C
+ 0	search/8192	#import
+->0	regex	\^#import[[:space:]]+["<]	Objective-C source text
++>0	regex	\^#import[[:space:]]+["<]	Objective-c program text
+ !:strength + 25
+ !:mime	text/x-objective-c
+ 
+--- a/magic/Magdir/cafebabe	2022-07-02 07:24:47.000000000 +0800
++++ b/magic/Magdir/cafebabe	2023-04-21 18:38:32.973324851 +0800
+@@ -8,10 +8,10 @@
+ # The long at offset 4 in a Mach-O universal binary tells the number of
+ # architectures; the short at offset 4 in a Java bytecode file is the JVM minor
+ # version and the short at offset 6 is the JVM major version.  Since there are only
+-# only 18 labeled Mach-O architectures at current, and the first released
++# only 23 labeled Mach-O architectures at current, and the first released
+ # Java class format was version 43.0, we can safely choose any number
+-# between 18 and 39 to test the number of architectures against
+-# (and use as a hack). Let's not use 18, because the Mach-O people
++# between 23 and 39 to test the number of architectures against
++# (and use as a hack). Let's not use 23, because the Mach-O people
+ # might add another one or two as time goes by...
+ #
+ ### JAVA START ###
+@@ -88,9 +88,9 @@
+ >4	belong		1		Mach-O universal binary with 1 architecture:
+ !:mime application/x-mach-binary
+ >>8	use		mach-o		\b
+-# nfat_arch; number of CPU architectures; highest is 18 for CPU_TYPE_POWERPC in 2020
++# nfat_arch; number of CPU architectures; highest is 23 for CPU_TYPE_AIR in 2022
+ >4	ubelong		>1
+->>4	ubelong		<20		Mach-O universal binary with %d architectures:
++>>4	ubelong		<25		Mach-O universal binary with %d architectures:
+ !:mime application/x-mach-binary
+ >>>8	use		mach-o		\b
+ >>>4	ubelong		>1
+--- a/magic/Magdir/mach	2021-05-13 00:30:24.000000000 +0800
++++ b/magic/Magdir/mach	2023-04-21 18:38:50.182212773 +0800
+@@ -1,6 +1,6 @@
+ 
+ #------------------------------------------------------------
+-# $File: mach,v 1.29 2021/04/26 15:56:00 christos Exp $
++# $File: mach,v 1.20 2015/05/21 18:28:41 christos Exp $
+ # Mach has two magic numbers, 0xcafebabe and 0xfeedface.
+ # Unfortunately the first, cafebabe, is shared with
+ # Java ByteCode, so they are both handled in the file "cafebabe".
+@@ -11,11 +11,8 @@
+ # it's also separate from the "64-bit libraries" bit in the
+ # upper 8 bits of the CPU subtype
+ 
+-# Reference:	https://opensource.apple.com/source/cctools/cctools-949.0.1/
+-#               include/mach-o/loader.h
+-# display CPU type as string like: i386 x86_64 ... armv7 armv7k ...
+ 0	name	mach-o-cpu
+->0	belong&0xff000000	0
++>0	belong&0x03000000	0
+ #
+ # 32-bit ABIs.
+ #
+@@ -109,19 +106,15 @@
+ >>>4		belong&0x00ffffff	2	subarchitecture=%d
+ >>>4		belong&0x00ffffff	3	subarchitecture=%d
+ >>>4		belong&0x00ffffff	4	subarchitecture=%d
+->>>4		belong&0x00ffffff	5	\bv4t
+->>>4		belong&0x00ffffff	6	\bv6
+->>>4		belong&0x00ffffff	7	\bv5tej
+->>>4		belong&0x00ffffff	8	\bxscale
+->>>4		belong&0x00ffffff	9	\bv7
+->>>4		belong&0x00ffffff	10	\bv7f
+->>>4		belong&0x00ffffff	11	\bv7s
+->>>4		belong&0x00ffffff	12	\bv7k
+->>>4		belong&0x00ffffff	13	\bv8
+->>>4		belong&0x00ffffff	14	\bv6m
+->>>4		belong&0x00ffffff	15	\bv7m
+->>>4		belong&0x00ffffff	16	\bv7em
+->>>4		belong&0x00ffffff	>16	subarchitecture=%d
++>>>4		belong&0x00ffffff	5	\b_v4t
++>>>4		belong&0x00ffffff	6	\b_v6
++>>>4		belong&0x00ffffff	7	\b_v5tej
++>>>4		belong&0x00ffffff	8	\b_xscale
++>>>4		belong&0x00ffffff	9	\b_v7
++>>>4		belong&0x00ffffff	10	\b_v7f
++>>>4		belong&0x00ffffff	11	\b_v7s
++>>>4		belong&0x00ffffff	12	\b_v7k
++>>>4		belong&0x00ffffff	>12	subarchitecture=%d
+ #				13	m88k
+ >>0	belong&0x00ffffff	13
+ >>>4		belong&0x00ffffff	0	mc88000
+@@ -142,13 +135,13 @@
+ >>>4		belong&0x00ffffff	6	\b_604
+ >>>4		belong&0x00ffffff	7	\b_604e
+ >>>4		belong&0x00ffffff	8	\b_620
+->>>4		belong&0x00ffffff	9	\b_750
++>>>4		belong&0x00ffffff	9	\b_650
+ >>>4		belong&0x00ffffff	10	\b_7400
+ >>>4		belong&0x00ffffff	11	\b_7450
+ >>>4		belong&0x00ffffff	100	\b_970
+ >>>4		belong&0x00ffffff	>100	subarchitecture=%d
+ >>0	belong&0x00ffffff	>18	architecture=%d
+->0	belong&0xff000000	0x01000000
++>0	belong&0x01000000	0x01000000
+ #
+ # 64-bit ABIs.
+ #
+@@ -165,24 +158,19 @@
+ >>>4		belong&0x00ffffff	2	subarchitecture=%d
+ >>>4		belong&0x00ffffff	3
+ >>>4		belong&0x00ffffff	4	\b_arch1
+->>>4		belong&0x00ffffff	8	\b_haswell
+->>>4		belong&0x00ffffff	>4	subarchitecture=%d
++>>>4		belong&0x00ffffff	5	subarchitecture=%d
++>>>4		belong&0x00ffffff	6	subarchitecture=%d
++>>>4		belong&0x00ffffff	7	subarchitecture=%d
++>>>4		belong&0x00ffffff	8	\bh
++>>>4		belong&0x00ffffff	>8	subarchitecture=%d
+ >>0	belong&0x00ffffff	8	64-bit architecture=%d
+ >>0	belong&0x00ffffff	9	64-bit architecture=%d
+ >>0	belong&0x00ffffff	10	64-bit architecture=%d
+ >>0	belong&0x00ffffff	11	64-bit architecture=%d
+ >>0	belong&0x00ffffff	12	arm64
+ >>>4		belong&0x00ffffff	0
+->>>4		belong&0x00ffffff	1	\bv8
++>>>4		belong&0x00ffffff	1	\b_v8
+ >>>4		belong&0x00ffffff	2	\be
+->>>>7		ubyte&0xff		>0	(caps:
+->>>>7		ubyte&0xff		<0x80	%#02x
+->>>>7		ubyte&0xc0		0x80	PAC
+->>>>>7		ubyte&0x3f		x	\b%02d
+->>>>7		ubyte&0xc0		0xc0	PAK
+->>>>>7		ubyte&0x3f		x	\b%02d
+->>>>7		ubyte&0xff		x	\b)
+->>>4		belong&0x00ffffff	>2	subarchitecture=%d
+ >>0	belong&0x00ffffff	13	64-bit architecture=%d
+ >>0	belong&0x00ffffff	14	64-bit architecture=%d
+ >>0	belong&0x00ffffff	15	64-bit architecture=%d
+@@ -203,101 +191,109 @@
+ >>>4		belong&0x00ffffff	11		\b_7450
+ >>>4		belong&0x00ffffff	100		\b_970
+ >>>4		belong&0x00ffffff	>100		subarchitecture=%d
+->>0	belong&0x00ffffff	>18	64-bit architecture=%d
+->0	belong&0xff000000	0x02000000
+ #
+-# 64_32-bit ABIs.
++# Apple GPUs
+ #
+->>0	belong&0x00ffffff	0	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	1	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	2	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	3	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	4	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	5	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	6	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	7	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	8	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	9	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	10	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	11	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	12	64_32-bit arm
+->>>4		belong&0x00ffffff	0
+->>>4		belong&0x00ffffff	1	\bv8
+->>>4		belong&0x00ffffff	>1	subarchitecture=%d
+->>0	belong&0x00ffffff	13	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	14	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	15	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	16	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	17	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	18	64_32-bit architecture=%d
+->>0	belong&0x00ffffff	>18	64_32-bit architecture=%d
++>>0	belong&0x00ffffff	19	applegpu
++>>>4		belong&0x00ffffff	32		\b_gx2
++>>>4		belong&0x00ffffff	17		\b_g4p
++>>>4		belong&0x00ffffff	49		\b_g4g
++>>>4		belong&0x00ffffff	65		\b_g5p
++>>>4		belong&0x00ffffff	81		\b_g9p
++>>>4		belong&0x00ffffff	97		\b_g9g
++>>>4		belong&0x00ffffff	34		\b_g10p
++>>>4		belong&0x00ffffff	114		\b_g11p
++>>>4		belong&0x00ffffff	82		\b_g11m
++>>>4		belong&0x00ffffff	130		\b_g11g
++>>>4		belong&0x00ffffff	1602		\b_g11g_8fstp
++>>>4		belong&0x00ffffff	210		\b_g12p
++>>>4		belong&0x00ffffff	290		\b_g13p
++>>>4		belong&0x00ffffff	322		\b_g13g
++>>>4		belong&0x00ffffff	530		\b_g13s
++>>>4		belong&0x00ffffff	562		\b_g13c
++>>>4		belong&0x00ffffff	594		\b_g13d
++>>>4		belong&0x00ffffff	370		\b_g14p
++#
++# AMD GPUs
++#
++>>0	belong&0x00ffffff	20	amdgpu
++>>>4		belong&0x00ffffff	4000		\b_gfx600
++>>>4		belong&0x00ffffff	4001		\b_gfx600_nwh
++>>>4		belong&0x00ffffff	4002		\b_gfx701
++>>>4		belong&0x00ffffff	4003		\b_gfx704
++>>>4		belong&0x00ffffff	4004		\b_gfx803
++>>>4		belong&0x00ffffff	4005		\b_gfx802
++>>>4		belong&0x00ffffff	5000		\b_gfx900
++>>>4		belong&0x00ffffff	5001		\b_gfx904
++>>>4		belong&0x00ffffff	5002		\b_gfx906
++>>>4		belong&0x00ffffff	6000		\b_gfx1010_nsgc
++>>>4		belong&0x00ffffff	6001		\b_gfx1010
++>>>4		belong&0x00ffffff	6002		\b_gfx1011
++>>>4		belong&0x00ffffff	6003		\b_gfx1012
++>>>4		belong&0x00ffffff	6004		\b_gfx1030
++>>>4		belong&0x00ffffff	6005		\b_gfx1032
++#
++# Intel GPUs
++#
++>>0	belong&0x00ffffff	21	intelgpu
++>>>4		belong&0x00ffffff	590342		\b_skl_gt2r6
++>>>4		belong&0x00ffffff	590343		\b_skl_gt2r7
++>>>4		belong&0x00ffffff	590602		\b_skl_gt3r10
++>>>4		belong&0x00ffffff	9765376		\b_kbl_gt2r0
++>>>4		belong&0x00ffffff	9765378		\b_kbl_gt2r2
++>>>4		belong&0x00ffffff	9765380		\b_kbl_gt2r4
++>>>4		belong&0x00ffffff	9765633		\b_kbl_gt3r1
++>>>4		belong&0x00ffffff	9765638		\b_kbl_gt3r6
++>>>4		belong&0x00ffffff	1115655		\b_icl_1x6x8r7
++>>>4		belong&0x00ffffff	1116167		\b_icl_1x8x8r7
++#
++# AIR
++#
++>>0	belong&0x00ffffff	23	air64
++>>>4		belong&0x00ffffff	1		\b_v16
++>>>4		belong&0x00ffffff	2		\b_v18
++>>>4		belong&0x00ffffff	3		\b_v111
++>>>4		belong&0x00ffffff	4		\b_v20
++>>>4		belong&0x00ffffff	5		\b_v21
++>>>4		belong&0x00ffffff	6		\b_v22
++>>>4		belong&0x00ffffff	7		\b_v23
++>>>4		belong&0x00ffffff	8		\b_v24
++>>>4		belong&0x00ffffff	9		\b_v25
++>>0	belong&0x00ffffff	>23	64-bit architecture=%d
++>0	belong&0x02000000	0x02000000
++#
++# 64/32-bit ABIs
++#
++>>0	belong&0x00ffffff	12	arm64_32
++>>>4		belong&0x00ffffff	1	\b_v8
++
+ 
+ 0	name		mach-o-be
+ >0	byte		0xcf		64-bit
+->4	use		mach-o-cpu
+ >12	belong		1		object
+-# GRR: Does not work for Mach-O with 2 architectures; instead display oo
+-#!:ext	o
+-!:ext	o/
+ >12	belong		2		executable
+-# the executables normally have no file extension like perl,
+-# but exceptions like perl5.18 perl5.16
+-!:ext	16/18/
+ >12	belong		3		fixed virtual memory shared library
+ >12	belong		4		core
+ >12	belong		5		preload executable
+ >12	belong		6		dynamically linked shared library
+-# GRR: Does not work for Mach-O with 2 architectures; instead display dylibdylib
+-#!:ext	dylib
+-!:ext	dylib/
+ >12	belong		7		dynamic linker
+ >12	belong		8		bundle
+-# normally name extension bundle; but exceptions like: AMDil_r700.dylib 
+-!:ext	bundle/dylib/
+ >12	belong		9		dynamically linked shared library stub
+ >12	belong		10		dSYM companion file
+ >12	belong		11		kext bundle
+->12	belong		>11
++>12	belong		13		GPU executable
++>12	belong		14		GPU dynamically linked shared library
++>12	belong		>14
+ >>12	belong		x		filetype=%d
+->24	belong		>0		\b, flags:<
+->>24	belong		&0x00000001	\bNOUNDEFS
+->>24	belong		&0x00000002	\b|INCRLINK
+->>24	belong		&0x00000004	\b|DYLDLINK
+->>24	belong		&0x00000008	\b|BINDATLOAD
+->>24	belong		&0x00000010	\b|PREBOUND
+->>24	belong		&0x00000020	\b|SPLIT_SEGS
+->>24	belong		&0x00000040	\b|LAZY_INIT
+->>24	belong		&0x00000080	\b|TWOLEVEL
+->>24	belong		&0x00000100	\b|FORCE_FLAT
+->>24	belong		&0x00000200	\b|NOMULTIDEFS
+->>24	belong		&0x00000400	\b|NOFIXPREBINDING
+->>24	belong		&0x00000800	\b|PREBINDABLE
+->>24	belong		&0x00001000	\b|ALLMODSBOUND
+->>24	belong		&0x00002000	\b|SUBSECTIONS_VIA_SYMBOLS
+->>24	belong		&0x00004000	\b|CANONICAL
+->>24	belong		&0x00008000	\b|WEAK_DEFINES
+->>24	belong		&0x00010000	\b|BINDS_TO_WEAK
+->>24	belong		&0x00020000	\b|ALLOW_STACK_EXECUTION
+->>24	belong		&0x00040000	\b|ROOT_SAFE
+->>24	belong		&0x00080000	\b|SETUID_SAFE
+->>24	belong		&0x00100000	\b|NO_REEXPORTED_DYLIBS
+->>24	belong		&0x00200000	\b|PIE
+->>24	belong		&0x00400000	\b|DEAD_STRIPPABLE_DYLIB
+->>24	belong		&0x00800000	\b|HAS_TLV_DESCRIPTORS
+->>24	belong		&0x01000000	\b|NO_HEAP_EXECUTION
+->>24	belong		&0x02000000	\b|APP_EXTENSION_SAFE
+->>24	belong		&0x04000000	\b|NLIST_OUTOFSYNC_WITH_DYLDINFO
+->>24	belong		&0x08000000	\b|SIM_SUPPORT
+->>24	belong		&0x80000000	\b|DYLIB_IN_CACHE
+->>24	belong		x		\b>
++>4	use		mach-o-cpu
+ 
+ #
+ 0	lelong&0xfffffffe	0xfeedface	Mach-O
+-!:strength +1
++!:strength +2
+ !:mime application/x-mach-binary
+ >0	use	\^mach-o-be
+ 
+ 0	belong&0xfffffffe	0xfeedface	Mach-O
+-!:strength +1
++!:strength +2
+ !:mime application/x-mach-binary
+ >0	use	mach-o-be
+--- a/magic/Makefile.am	2022-12-03 00:18:18.000000000 +0800
++++ b/magic/Makefile.am	2023-04-21 18:41:01.480785802 +0800
+@@ -94,6 +94,7 @@ $(MAGIC_FRAGMENT_DIR)/digital \
+ $(MAGIC_FRAGMENT_DIR)/dolby \
+ $(MAGIC_FRAGMENT_DIR)/dump \
+ $(MAGIC_FRAGMENT_DIR)/dyadic \
++$(MAGIC_FRAGMENT_DIR)/dyld \
+ $(MAGIC_FRAGMENT_DIR)/ebml \
+ $(MAGIC_FRAGMENT_DIR)/edid \
+ $(MAGIC_FRAGMENT_DIR)/editors \
+@@ -131,6 +132,7 @@ $(MAGIC_FRAGMENT_DIR)/gnu \
+ $(MAGIC_FRAGMENT_DIR)/gnumeric \
+ $(MAGIC_FRAGMENT_DIR)/gpt \
+ $(MAGIC_FRAGMENT_DIR)/gpu \
++$(MAGIC_FRAGMENT_DIR)/gpu-fat \
+ $(MAGIC_FRAGMENT_DIR)/grace \
+ $(MAGIC_FRAGMENT_DIR)/graphviz \
+ $(MAGIC_FRAGMENT_DIR)/gringotts \
+@@ -153,9 +155,11 @@ $(MAGIC_FRAGMENT_DIR)/java \
+ $(MAGIC_FRAGMENT_DIR)/javascript \
+ $(MAGIC_FRAGMENT_DIR)/jpeg \
+ $(MAGIC_FRAGMENT_DIR)/karma \
++$(MAGIC_FRAGMENT_DIR)/kcdata \
+ $(MAGIC_FRAGMENT_DIR)/kde \
+ $(MAGIC_FRAGMENT_DIR)/keepass \
+ $(MAGIC_FRAGMENT_DIR)/kerberos \
++$(MAGIC_FRAGMENT_DIR)/kernelcache \
+ $(MAGIC_FRAGMENT_DIR)/kicad \
+ $(MAGIC_FRAGMENT_DIR)/kml \
+ $(MAGIC_FRAGMENT_DIR)/lammps \
+@@ -184,6 +188,7 @@ $(MAGIC_FRAGMENT_DIR)/matroska \
+ $(MAGIC_FRAGMENT_DIR)/mcrypt \
+ $(MAGIC_FRAGMENT_DIR)/measure \
+ $(MAGIC_FRAGMENT_DIR)/mercurial \
++$(MAGIC_FRAGMENT_DIR)/metallib \
+ $(MAGIC_FRAGMENT_DIR)/metastore \
+ $(MAGIC_FRAGMENT_DIR)/meteorological \
+ $(MAGIC_FRAGMENT_DIR)/microfocus \
+@@ -298,6 +303,7 @@ $(MAGIC_FRAGMENT_DIR)/subtitle \
+ $(MAGIC_FRAGMENT_DIR)/sun \
+ $(MAGIC_FRAGMENT_DIR)/sylk \
+ $(MAGIC_FRAGMENT_DIR)/symbos \
++$(MAGIC_FRAGMENT_DIR)/symbols \
+ $(MAGIC_FRAGMENT_DIR)/sysex \
+ $(MAGIC_FRAGMENT_DIR)/tcl \
+ $(MAGIC_FRAGMENT_DIR)/teapot \
+@@ -307,6 +313,7 @@ $(MAGIC_FRAGMENT_DIR)/tgif \
+ $(MAGIC_FRAGMENT_DIR)/ti-8x \
+ $(MAGIC_FRAGMENT_DIR)/timezone \
+ $(MAGIC_FRAGMENT_DIR)/tplink \
++$(MAGIC_FRAGMENT_DIR)/trace \
+ $(MAGIC_FRAGMENT_DIR)/troff \
+ $(MAGIC_FRAGMENT_DIR)/tuxedo \
+ $(MAGIC_FRAGMENT_DIR)/typeset \
+--- a/src/ascmagic.c	2022-12-27 02:00:48.000000000 +0800
++++ b/src/ascmagic.c	2023-04-21 18:41:40.058988516 +0800
+@@ -235,6 +235,10 @@ file_ascmagic_with_encoding(struct magic
+ 		}
+ 	} else {
+ 		if (len) {
++#ifdef __APPLE__
++			if (file_printf(ms, ", ") == -1)
++				goto done;
++#else
+ 			switch (file_replace(ms, " text$", ", ")) {
+ 			case 0:
+ 				switch (file_replace(ms, " text executable$",
+@@ -255,6 +259,7 @@ file_ascmagic_with_encoding(struct magic
+ 			default:
+ 				break;
+ 			}
++#endif
+ 		}
+ 
+ 		if (file_printf(ms, "%s", code) == -1)
+--- a/src/buffer.c	2022-09-28 03:00:44.000000000 +0800
++++ b/src/buffer.c	2023-04-21 18:41:43.756127452 +0800
+@@ -56,6 +56,7 @@ void
+ buffer_fini(struct buffer *b)
+ {
+ 	free(b->ebuf);
++	b->ebuf = NULL;
+ }
+ 
+ int
+--- a/src/file.c	2022-12-27 02:00:48.000000000 +0800
++++ b/src/file.c	2023-04-21 18:43:00.466175975 +0800
+@@ -77,6 +77,12 @@ int getopt_long(int, char * const *, con
+ #  include "mygetopt.h"
+ #endif
+ 
++#ifdef __APPLE__
++#include "get_compat.h"
++#else
++#define COMPAT_MODE(func, mode) 1
++#endif
++
+ #ifdef S_IFLNK
+ # define IFLNK_h "h"
+ # define IFLNK_L "L"
+@@ -87,15 +93,24 @@ int getopt_long(int, char * const *, con
+ 
+ #define FILE_FLAGS	"bcCdE" IFLNK_h "ik" IFLNK_L "lNnprsSvzZ0"
+ #define OPTSTRING	"bcCde:Ef:F:hiklLm:nNpP:rsSvzZ0"
++#define OPTSTRING03	"bcCdDe:Ef:F:hiIkLm:M:nNpP:rsSvzZ0"
+ 
+ # define USAGE  \
+-    "Usage: %s [-" FILE_FLAGS "] [--apple] [--extension] [--mime-encoding]\n" \
++    "Usage: %s [-" FILE_FLAGS "] [--extension] [--mime-encoding]\n" \
+     "            [--mime-type] [-e <testname>] [-F <separator>] " \
+     " [-f <namefile>]\n" \
+     "            [-m <magicfiles>] [-P <parameter=value>] [--exclude-quiet]\n" \
+     "            <file> ...\n" \
+     "       %s -C [-m <magicfiles>]\n" \
+     "       %s [--help]\n"
++# define USAGE03  \
++	"Usage: %s [-" FILE_FLAGS "] [--extension] [--mime-encoding]\n" \
++	"            [--mime-type] [-e <testname>] [-F <separator>] " \
++	" [-f <namefile>]\n" \
++	"            [-m <magicfiles>] [-M magicfiles] [-P <parameter=value>] [--exclude-quiet]\n" \
++	"            <file> ...\n" \
++	"       %s -C [-m <magicfiles>]\n" \
++	"       %s [--help]\n"
+ 
+ file_private int 		/* Global command-line options 		*/
+ 	bflag = 0,	/* brief output format	 		*/
+@@ -115,9 +130,11 @@ file_private const struct option long_op
+     {longname, opt, NULL, shortname},
+ #define OPT_LONGONLY(longname, opt, def, doc, id)	\
+     {longname, opt, NULL, id},
++#define OPT_UNIX03(shortname, def, doc)
+ #include "file_opts.h"
+ #undef OPT
+ #undef OPT_LONGONLY
++#undef OPT_UNIX03
+     {0, 0, NULL, 0}
+     };
+ 
+@@ -199,6 +216,9 @@ main(int argc, char *argv[])
+ #endif
+ 	struct magic_set *magic = NULL;
+ 	int longindex;
++	int dflag = 0; /* POSIX 'd' option -- use default magic file */
++	int Mflag = 0;
++	int unix03 = COMPAT_MODE("bin/file", "unix2003");
+ 	const char *magicfile = NULL;		/* where the magic is	*/
+ 	char *progname;
+ 
+@@ -220,9 +240,10 @@ main(int argc, char *argv[])
+ 
+ #ifdef S_IFLNK
+ 	posixly = getenv("POSIXLY_CORRECT") != NULL;
+-	flags |=  posixly ? MAGIC_SYMLINK : 0;
++	flags |=  (unix03 || posixly) ? MAGIC_SYMLINK : 0;
+ #endif
+-	while ((c = getopt_long(argc, argv, OPTSTRING, long_options,
++	if (unix03) flags |= MAGIC_RAW; /* See 5747343. */
++	while ((c = getopt_long(argc, argv, unix03 ? OPTSTRING03 : OPTSTRING, long_options,
+ 	    &longindex)) != -1)
+ 		switch (c) {
+ 		case OPT_HELP:
+@@ -253,6 +274,11 @@ main(int argc, char *argv[])
+ 			action = FILE_COMPILE;
+ 			break;
+ 		case 'd':
++			if (unix03) {
++				++dflag;
++				break;
++			}
++		case 'D':
+ 			flags |= MAGIC_DEBUG|MAGIC_CHECK;
+ 			break;
+ 		case 'E':
+@@ -285,6 +311,11 @@ main(int argc, char *argv[])
+ 			separator = optarg;
+ 			break;
+ 		case 'i':
++			if (unix03) {
++				flags |= MAGIC_REGULAR;
++				break;
++			}
++		case 'I':
+ 			flags |= MAGIC_MIME;
+ 			break;
+ 		case 'k':
+@@ -293,9 +324,19 @@ main(int argc, char *argv[])
+ 		case 'l':
+ 			action = FILE_LIST;
+ 			break;
++		case 'M':
++			++Mflag;
+ 		case 'm':
+-			magicfile = optarg;
+-			break;
++		{
++			if (magicfile == NULL)
++				magicfile = magic_getpath(magicfile, action);
++			char *newmagicfile = malloc(strlen(magicfile) + strlen(separator) + strlen(optarg) + 1);
++			strcpy(newmagicfile, magicfile);
++			strcat(newmagicfile, separator);
++			strcat(newmagicfile, optarg);
++			magicfile = newmagicfile;
++		}
++		break;
+ 		case 'n':
+ 			++nobuffer;
+ 			break;
+@@ -375,6 +416,10 @@ main(int argc, char *argv[])
+ 		    "does not match with shared library magic version [%d]\n",
+ 		    MAGIC_VERSION, magic_version());
+ 
++	if (Mflag && !dflag) {
++		flags |= MAGIC_NO_CHECK_ASCII;
++	}
++
+ 	switch(action) {
+ 	case FILE_CHECK:
+ 	case FILE_COMPILE:
+@@ -445,6 +490,12 @@ out:
+ 
+ 	if (magic)
+ 		magic_close(magic);
++#ifdef __APPLE__
++	if (e == 0 && (ferror(stdout) != 0 || fflush(stdout) != 0)) {
++		file_warnx("failed to flush output");
++		e = 1;
++	}
++#endif
+ 	return e;
+ }
+ 
+@@ -698,7 +749,8 @@ file_private void
+ usage(void)
+ {
+ 	const char *pn = file_getprogname();
+-	(void)fprintf(stderr, USAGE, pn, pn, pn);
++	(void)fprintf(stderr, COMPAT_MODE("bin/file", "unix2003") ? USAGE03 : USAGE, pn, pn, pn);
++	(void)fputs("Try `file --help' for more information.\n", stderr);
+ 	exit(EXIT_FAILURE);
+ }
+ 
+@@ -763,6 +815,7 @@ docprint(const char *opts, int def)
+ file_private void
+ help(void)
+ {
++	int unix03 = COMPAT_MODE("bin/file", "unix2003");
+ 	(void)fputs(
+ "Usage: file [OPTION...] [FILE...]\n"
+ "Determine type of FILEs.\n"
+@@ -773,9 +826,13 @@ help(void)
+ #define OPT_LONGONLY(longname, opt, def, doc, id)    	\
+ 	(void)printf("      --" longname),	\
+ 	docprint(doc, def);
++#define OPT_UNIX03(shortname, def, doc) \
++	if (unix03) fprintf(stderr, "  -%c" doc, shortname); \
++	docprint(doc, def);
+ #include "file_opts.h"
+ #undef OPT
+ #undef OPT_LONGONLY
++#undef OPT_UNIX03
+ 	(void)printf("\nReport bugs to https://bugs.astron.com/\n");
+ 	exit(EXIT_SUCCESS);
+ }
+--- a/src/file.h	2022-12-27 02:00:48.000000000 +0800
++++ b/src/file.h	2023-04-21 18:44:59.677283605 +0800
+@@ -489,7 +489,7 @@ struct magic_set {
+ #define	FILE_ELF_PHNUM_MAX		2048
+ #define	FILE_ELF_SHNUM_MAX		32768
+ #define	FILE_INDIR_MAX			50
+-#define	FILE_NAME_MAX			50
++#define	FILE_NAME_MAX			60
+ #define	FILE_REGEX_MAX			8192
+ #define	FILE_ENCODING_MAX		(64 * 1024)
+ #if defined(HAVE_NEWLOCALE) && defined(HAVE_USELOCALE) && defined(HAVE_FREELOCALE)
+@@ -533,6 +533,7 @@ file_protected int file_printf(struct ma
+     __attribute__((__format__(__printf__, 2, 3)));
+ file_protected int file_reset(struct magic_set *, int);
+ file_protected int file_tryelf(struct magic_set *, const struct buffer *);
++file_protected int file_trymacho(struct magic_set *, const struct buffer *, const char *);
+ file_protected int file_trycdf(struct magic_set *, const struct buffer *);
+ #if HAVE_FORK
+ file_protected int file_zmagic(struct magic_set *, const struct buffer *,
+--- a/src/file_opts.h	2022-10-27 00:54:10.000000000 +0800
++++ b/src/file_opts.h	2023-04-21 18:45:32.628385826 +0800
+@@ -22,6 +22,8 @@ OPT('v', "version", 0, 0,
+ OPT('m', "magic-file", 1, 0,
+     " LIST      use LIST as a colon-separated list of magic\n"
+     "                               number files\n")
++OPT_UNIX03('M', 0, " LIST                    use LIST as a colon-separated list of magic\n"
++    "                               number files in place of default\n")
+ OPT('z', "uncompress", 0, 0,
+     "           try to look inside compressed files\n")
+ OPT('Z', "uncompress-noreport", 0, 0,
+@@ -32,6 +34,7 @@ OPT('c', "checking-printout", 0, 0,
+     "    print the parsed form of the magic file, use in\n"
+     "                               conjunction with -m to debug a new magic file\n"
+     "                               before installing it\n")
++OPT_UNIX03('d', 0, "                         use default magic file\n")
+ OPT('e', "exclude", 1, 0,
+     " TEST         exclude TEST from the list of test to be\n"
+     "                               performed for file. Valid tests are:\n"
+@@ -42,11 +45,10 @@ OPT('f', "files-from", 1, 0,
+     " FILE      read the filenames to be examined from FILE\n")
+ OPT('F', "separator", 1, 0,
+     " STRING     use string as separator instead of `:'\n")
+-OPT('i', "mime", 0, 0,
++OPT_UNIX03('i', 0, "                         do not further classify regular files\n")
++OPT('I', "mime", 0, 0,
+     "                 output MIME type strings (--mime-type and\n"
+     "                               --mime-encoding)\n")
+-OPT_LONGONLY("apple", 0, 0,
+-    "                output the Apple CREATOR/TYPE\n", OPT_APPLE)
+ OPT_LONGONLY("extension", 0, 0,
+     "            output a slash-separated list of extensions\n", OPT_EXTENSIONS)
+ OPT_LONGONLY("mime-type", 0, 0,
+@@ -85,5 +87,5 @@ OPT('S', "no-sandbox", 0, 0,
+     "           disable system call sandboxing\n")
+ OPT('C', "compile", 0, 0,
+     "              compile file specified by -m\n")
+-OPT('d', "debug", 0, 0,
+-    "                print debugging messages\n")
++/* 'D' is always debug, 'd' is frequently something else */
++OPT('D', "debug", 0, 0, "                print debugging messages\n")
+--- a/src/fsmagic.c	2022-12-27 02:00:48.000000000 +0800
++++ b/src/fsmagic.c	2023-04-21 18:45:54.134519575 +0800
+@@ -158,6 +158,14 @@ file_fsmagic(struct magic_set *ms, const
+ 	}
+ #endif
+ 
++#ifdef	S_IFLNK
++	/* POSIX says pretend symlinks to nonexistant files
++	 have the -h option */
++	if (ret && (ms->flags & MAGIC_SYMLINK) != 0) {
++		ret = lstat(fn, sb);
++	}
++#endif
++
+ 	if (ret) {
+ 		if (ms->flags & MAGIC_ERROR) {
+ 			file_error(ms, errno, "cannot stat `%s'", fn);
+@@ -391,6 +399,11 @@ file_fsmagic(struct magic_set *ms, const
+ #endif
+ #endif
+ 	case S_IFREG:
++		if (ms->flags & MAGIC_REGULAR) {
++			if (file_printf(ms, "regular file") == -1)
++				return -1;
++			return 1;
++		}
+ 		/*
+ 		 * regular file, check next possibility
+ 		 *
+--- a/src/funcs.c	2022-12-27 02:00:48.000000000 +0800
++++ b/src/funcs.c	2023-04-21 18:45:58.122796087 +0800
+@@ -454,6 +454,9 @@ file_buffer(struct magic_set *ms, int fd
+ 				goto done;
+ 		}
+ 		if (m) {
++#ifdef BUILTIN_MACHO
++			file_trymacho(ms, &b, inname);
++#endif
+ 			if (checkdone(ms, &rv))
+ 				goto done;
+ 		}
+@@ -575,7 +578,7 @@ file_getbuffer(struct magic_set *ms)
+ 				break;
+ 			}
+ 
+-			if (iswprint(nextchar)) {
++			if (iswprint(nextchar) || nextchar == L'\t' || nextchar == L'\n') {
+ 				(void)memcpy(np, op, bytesconsumed);
+ 				op += bytesconsumed;
+ 				np += bytesconsumed;
+@@ -593,7 +596,7 @@ file_getbuffer(struct magic_set *ms)
+ #endif
+ 
+ 	for (np = ms->o.pbuf, op = ms->o.buf; *op;) {
+-		if (isprint(CAST(unsigned char, *op))) {
++		if (isprint(CAST(unsigned char, *op)) || ((unsigned char)*op) == '\t' || ((unsigned char)*op) == '\n') {
+ 			*np++ = *op++;
+ 		} else {
+ 			OCTALIFY(np, op);
+--- a/src/magic.c	2022-12-27 02:00:48.000000000 +0800
++++ b/src/magic.c	2023-04-21 18:46:41.358963112 +0800
+@@ -60,6 +60,12 @@ FILE_RCSID("@(#)$File: magic.c,v 1.120 2
+ #include <unistd.h>	/* for read() */
+ #endif
+ 
++#ifdef __APPLE__
++#include "get_compat.h"
++#else
++#define COMPAT_MODE(func, mode) 1
++#endif
++
+ #ifndef PIPE_BUF
+ /* Get the PIPE_BUF from pathconf */
+ #ifdef _PC_PIPE_BUF
+@@ -174,80 +180,7 @@ DllMain(HINSTANCE hinstDLL, DWORD fdwRea
+ file_private const char *
+ get_default_magic(void)
+ {
+-	static const char hmagic[] = "/.magic/magic.mgc";
+-	static char *default_magic;
+-	char *home, *hmagicpath;
+-
+-#ifndef WIN32
+-	struct stat st;
+-
+-	if (default_magic) {
+-		free(default_magic);
+-		default_magic = NULL;
+-	}
+-	if ((home = getenv("HOME")) == NULL)
+-		return MAGIC;
+-
+-	if (asprintf(&hmagicpath, "%s/.magic.mgc", home) < 0)
+-		return MAGIC;
+-	if (stat(hmagicpath, &st) == -1) {
+-		free(hmagicpath);
+-		if (asprintf(&hmagicpath, "%s/.magic", home) < 0)
+-			return MAGIC;
+-		if (stat(hmagicpath, &st) == -1)
+-			goto out;
+-		if (S_ISDIR(st.st_mode)) {
+-			free(hmagicpath);
+-			if (asprintf(&hmagicpath, "%s/%s", home, hmagic) < 0)
+-				return MAGIC;
+-			if (access(hmagicpath, R_OK) == -1)
+-				goto out;
+-		}
+-	}
+-
+-	if (asprintf(&default_magic, "%s:%s", hmagicpath, MAGIC) < 0)
+-		goto out;
+-	free(hmagicpath);
+-	return default_magic;
+-out:
+-	default_magic = NULL;
+-	free(hmagicpath);
+ 	return MAGIC;
+-#else
+-	hmagicpath = NULL;
+-
+-	if (default_magic) {
+-		free(default_magic);
+-		default_magic = NULL;
+-	}
+-
+-	/* Before anything else, try to get a magic file from user HOME */
+-	if ((home = getenv("HOME")) != NULL)
+-		_w32_append_path(&hmagicpath, "%s%s", home, hmagic);
+-
+-	/* First, try to get a magic file from user-application data */
+-	if ((home = getenv("LOCALAPPDATA")) != NULL)
+-		_w32_append_path(&hmagicpath, "%s%s", home, hmagic);
+-
+-	/* Second, try to get a magic file from the user profile data */
+-	if ((home = getenv("USERPROFILE")) != NULL)
+-		_w32_append_path(&hmagicpath,
+-		    "%s/Local Settings/Application Data%s", home, hmagic);
+-
+-	/* Third, try to get a magic file from Common Files */
+-	if ((home = getenv("COMMONPROGRAMFILES")) != NULL)
+-		_w32_append_path(&hmagicpath, "%s%s", home, hmagic);
+-
+-	/* Fourth, try to get magic file relative to exe location */
+-        _w32_get_magic_relative_to(&hmagicpath, NULL);
+-
+-	/* Fifth, try to get magic file relative to dll location */
+-        _w32_get_magic_relative_to(&hmagicpath, _w32_dll_instance);
+-
+-	/* Avoid MAGIC constant - it likely points to a file within MSys tree */
+-	default_magic = hmagicpath;
+-	return default_magic;
+-#endif
+ }
+ 
+ file_public const char *
+@@ -272,6 +205,11 @@ magic_open(int flags)
+ file_private int
+ unreadable_info(struct magic_set *ms, mode_t md, const char *file)
+ {
++	if (COMPAT_MODE("bin/file", "unix2003")) {
++		if (file_printf(ms, "cannot open: %s", strerror(errno)) == -1)
++			return -1;
++		return 0;
++	}
+ 	if (file) {
+ 		/* We cannot open it, but we were able to stat it. */
+ 		if (access(file, W_OK) == 0)
+--- a/src/softmagic.c	2022-12-27 02:00:48.000000000 +0800
++++ b/src/softmagic.c	2023-04-21 19:15:39.494394012 +0800
+@@ -204,17 +204,16 @@ file_fmtcheck(struct magic_set *ms, cons
+  *	so that higher-level continuations are processed.
+  */
+ file_private int
+-match(struct magic_set *ms, struct magic *magic, file_regex_t **magic_rxcomp,
++_match(struct magic_set *ms, struct magic *magic, file_regex_t **magic_rxcomp,
+     size_t nmagic, const struct buffer *b, size_t offset, int mode, int text,
+     int flip, uint16_t *indir_count, uint16_t *name_count,
+     int *printed_something, int *need_separator, int *firstline,
+-    int *returnval, int *found_match)
++    int *returnval, int *found_match, struct buffer *bb)
+ {
+ 	uint32_t magindex = 0;
+ 	unsigned int cont_level = 0;
+ 	int found_matchv = 0; /* if a match is found it is set to 1*/
+ 	int returnvalv = 0, e;
+-	struct buffer bb;
+ 	int print = (ms->flags & MAGIC_NODESC) == 0;
+ 
+ 	/*
+@@ -249,13 +248,13 @@ flush:
+ 			continue; /* Skip to next top-level test*/
+ 		}
+ 
+-		if (msetoffset(ms, m, &bb, b, offset, cont_level) == -1)
++		if (msetoffset(ms, m, bb, b, offset, cont_level) == -1)
+ 			goto flush;
+ 		ms->line = m->lineno;
+ 
+ 		/* if main entry matches, print it... */
+-		switch (mget(ms, m, b, CAST(const unsigned char *, bb.fbuf),
+-		    bb.flen, offset, cont_level,
++		switch (mget(ms, m, b, CAST(const unsigned char *, bb->fbuf),
++		    bb->flen, offset, cont_level,
+ 		    mode, text, flip, indir_count, name_count,
+ 		    printed_something, need_separator, firstline, returnval,
+ 		    found_match))
+@@ -317,7 +316,7 @@ flush:
+ 			}
+ 		}
+ 
+-		switch (moffset(ms, m, &bb, &ms->c.li[cont_level].off)) {
++		switch (moffset(ms, m, bb, &ms->c.li[cont_level].off)) {
+ 		case -1:
+ 		case 0:
+ 			goto flush;
+@@ -344,7 +343,7 @@ flush:
+ 				 */
+ 				cont_level = m->cont_level;
+ 			}
+-			if (msetoffset(ms, m, &bb, b, offset, cont_level) == -1)
++			if (msetoffset(ms, m, bb, b, offset, cont_level) == -1)
+ 				goto flush;
+ 			if (m->flag & OFFADD) {
+ 				if (cont_level == 0) {
+@@ -366,7 +365,7 @@ flush:
+ 			}
+ #endif
+ 			switch (mget(ms, m, b, CAST(const unsigned char *,
+-			    bb.fbuf), bb.flen, offset,
++			    bb->fbuf), bb->flen, offset,
+ 			    cont_level, mode, text, flip, indir_count,
+ 			    name_count, printed_something, need_separator,
+ 			    firstline, returnval, found_match)) {
+@@ -447,7 +446,7 @@ flush:
+ 					*need_separator = 1;
+ 				}
+ 
+-				switch (moffset(ms, m, &bb,
++				switch (moffset(ms, m, bb,
+ 				    &ms->c.li[cont_level].off)) {
+ 				case -1:
+ 				case 0:
+@@ -482,6 +481,34 @@ flush:
+ 	return *returnval;
+ }
+ 
++/*
++ * Wrapper around _match to allocate the buffer instead of placing it on the stack
++ * This is meant to fix memory exhaustion in processes with small stacks. We use a
++ * wrapper because allocating & freeing the buffer in _match would lead to a major
++ * refactor.
++ */
++file_private int
++match(struct magic_set *ms, struct magic *magic, file_regex_t **magic_rxcomp,
++      size_t nmagic, const struct buffer *b, size_t offset, int mode, int text,
++      int flip, uint16_t *indir_count, uint16_t *name_count,
++      int *printed_something, int *need_separator, int *firstline,
++      int *returnval, int *found_match)
++{
++	int rv = -1;
++	struct buffer *bb = NULL;
++	if ((bb = malloc(sizeof(struct buffer))) == NULL) {
++		file_error(ms, errno,
++		    "can't allocate %" SIZE_T_FORMAT "u bytes",
++		    sizeof(struct buffer));
++		return -1;
++	}
++	rv = _match(ms, magic, magic_rxcomp, nmagic, b, offset, mode, text, flip,
++		    indir_count, name_count, printed_something, need_separator,
++		    firstline, returnval, found_match, bb);
++	free(bb);
++	return rv;
++}
++
+ file_private int
+ check_fmt(struct magic_set *ms, const char *fmt)
+ {
+@@ -649,9 +676,11 @@ mprint(struct magic_set *ms, struct magi
+   	case FILE_BESTRING16:
+   	case FILE_LESTRING16:
+ 		if (m->reln == '=' || m->reln == '!') {
+-			if (file_printf(ms, F(ms, desc, "%s"),
+-			    file_printable(ms, sbuf, sizeof(sbuf), m->value.s,
+-			    sizeof(m->value.s))) == -1)
++			/*
++			 * Avoid mangling m->value.s with file_printable().
++			 * It breaks Conformance (rdar://53176479).
++			 */
++			if (file_printf(ms, F(ms, desc, "%s"), m->value.s) == -1)
+ 				return -1;
+ 		}
+ 		else {
+@@ -665,10 +694,7 @@ mprint(struct magic_set *ms, struct magi
+ 			if (m->str_flags & STRING_TRIM)
+ 				str = file_strtrim(str);
+ 
+-			if (file_printf(ms, F(ms, desc, "%s"),
+-			    file_printable(ms, sbuf, sizeof(sbuf), str,
+-				sizeof(p->s) - (str - p->s))) == -1)
+-				return -1;
++			if (file_printf(ms, F(ms, desc, "%s"), str) == -1)
+ 
+ 			if (m->type == FILE_PSTRING) {
+ 				size_t l = file_pstring_length_size(ms, m);
+@@ -1584,7 +1610,6 @@ mget(struct magic_set *ms, struct magic
+     int *found_match)
+ {
+ 	uint32_t eoffset, offset = ms->offset;
+-	struct buffer bb;
+ 	intmax_t lhs;
+ 	file_pushbuf_t *pb;
+ 	int rv, oneed_separator, in_type, nfound_match;
+@@ -1880,19 +1905,26 @@ mget(struct magic_set *ms, struct magic
+ 			return -1;
+ 
+ 		(*indir_count)++;
+-		bb = *b;
+-		bb.fbuf = s + offset;
+-		bb.flen = nbytes - offset;
+-		rv = -1;
++		struct buffer *bb = NULL;
++		if ((bb = malloc(sizeof(struct buffer))) == NULL) {
++			file_error(ms, errno,
++			    "can't allocate %" SIZE_T_FORMAT "u bytes",
++			    sizeof(struct buffer));
++			return -1;
++		}
++		*bb = *b;
++		bb->fbuf = s + offset;
++		bb->flen = nbytes - offset;
+ 		for (mlp = ms->mlist[0]->next; mlp != ms->mlist[0];
+ 		    mlp = mlp->next)
+ 		{
+ 			if ((rv = match(ms, mlp->magic, mlp->magic_rxcomp,
+-			    mlp->nmagic, &bb, 0, BINTEST, text, 0, indir_count,
++			    mlp->nmagic, bb, 0, BINTEST, text, 0, indir_count,
+ 			    name_count, printed_something, need_separator,
+ 			    firstline, NULL, NULL)) != 0)
+ 				break;
+ 		}
++		free(bb);
+ 
+ 		if ((ms->flags & MAGIC_DEBUG) != 0)
+ 			fprintf(stderr, "indirect @offs=%u[%d]\n", offset, rv);
+--- /dev/null	2023-04-21 19:29:45.341927000 +0800
++++ magic/Magdir/dyld	2023-04-21 18:38:36.662858617 +0800
+@@ -0,0 +1,8 @@
++# dyld:  file(1) for dyld shared cache
++#
++# At position 0, search for the string "dyld_vX   ARCH", where X is the file
++# format version and ARCH is the CPU architecture. The two tokens are separated
++# by a variable amount of whitespace.
++0       string		dyld_v		Dyld shared cache
++>6	byte		x		version %c
++>8	string/T	x		%s
+--- /dev/null	2023-04-21 19:29:55.036861000 +0800
++++ magic/Magdir/gpu-fat	2023-04-21 18:38:40.044137672 +0800
+@@ -0,0 +1,22 @@
++
++#------------------------------------------------------------------------------
++# $File: metallib,v 1.12 2020/10/22 11:25:44 john_doe Exp $
++# metallib:  file(1) magic for MetalLib
++#
++
++# From: John Doe <john_doe@unknown.us>
++0	belong		0xcbfebabe
++>4	belong		1		GPU Mach-O universal binary with 1 architecture:
++>>8	use		mach-o		\b
++>4	ubelong		>1
++>>8	use		mach-o		\b
++>>4	ubelong		>1
++>>>28	use		mach-o		\b
++>>4	ubelong		>2
++>>>48	use		mach-o		\b
++>>4	ubelong		>3
++>>>68	use		mach-o		\b
++>>4	ubelong		>4
++>>>88	use		mach-o		\b
++>>4	ubelong		>5
++>>>108	use		mach-o		\b
+--- /dev/null	2023-04-21 19:29:58.783836000 +0800
++++ magic/Magdir/kcdata	2023-04-21 18:38:43.109335057 +0800
+@@ -0,0 +1,6 @@
++
++0	lelong		0x59a25807		kcdata: stackshot
++0	lelong		0xDEADF157		kcdata: crashinfo
++0	lelong		0xDE17A59A		kcdata: delta stackshot
++0	lelong		0x53A20900		kcdata: os reason
++0	lelong		0x1e21c09f		kcdata: xnupost config
+--- /dev/null	2023-04-21 19:30:03.943435000 +0800
++++ magic/Magdir/kernelcache	2023-04-21 18:38:47.105109932 +0800
+@@ -0,0 +1,3 @@
++
++0	string		complzvn			Compressed kernel cache
++0	string		complzss			Compressed kernel cache
+--- /dev/null	2023-04-21 19:30:11.063491000 +0800
++++ magic/Magdir/metallib	2023-04-21 18:38:53.557477643 +0800
+@@ -0,0 +1,27 @@
++
++#------------------------------------------------------------------------------
++# $File: metallib,v 1.12 2020/10/22 11:25:44 john_doe Exp $
++# metallib:  file(1) magic for MetalLib
++#
++
++# From: John Doe <john_doe@unknown.us>
++0       string          MTLB           MetalLib
++!:strength +2
++
++# File type
++>6      uleshort        >0x1
++>8      uleshort        >0x3
++>>10    byte&0x7F       =0x0           executable
++>>10    byte&0x7F       =0x1           core image library
++>>10    byte&0x7F       =0x2           dynamically linked shared library
++>>10    byte&0x7F       =0x3           companion
++
++>6      uleshort        >0x1
++>8      uleshort        >0x5
++>>10    byte&0x80       =0x80          \b stub
++
++# File version
++>5      byte&0x80       =0x80          \b (MacOS)
++>4      uleshort&0x7FFF x              \b, version %d
++>6      uleshort        x              \b.%d
++>8      uleshort        x              \b.%d
+--- /dev/null	2023-04-21 19:30:17.156729000 +0800
++++ magic/Magdir/symbols	2023-04-21 18:38:57.248027773 +0800
+@@ -0,0 +1,4 @@
++# `file` magic for Compact Type Format (CTF)
++
++0 leshort 0xcff1 Compact Type Format data
++0 beshort 0xcff1 Compact Type Format data
+--- /dev/null	2023-04-21 19:30:20.064704000 +0800
++++ magic/Magdir/trace	2023-04-21 18:39:00.622353153 +0800
+@@ -0,0 +1,8 @@
++# `file` magic for Darwin trace files
++
++0 lelong 0x55aa0101 Darwin trace file (v1)
++0 lelong 0x55aa0200 Darwin trace file (v2)
++0 lelong 0x55aa0300 Apple Trace File
++0 belong 0x55aa0101 Darwin trace file (v1)
++0 belong 0x55aa0200 Darwin trace file (v2)
++0 belong 0x55aa0300 Apple Trace File
+--- /dev/null	2023-04-21 19:30:40.114614000 +0800
++++ src/readmacho.c	2023-04-21 18:50:26.317058295 +0800
+@@ -0,0 +1,345 @@
++/*
++ * Copyright (c) 1999-2009 Apple Inc. All rights reserved.
++ *
++ * @APPLE_LICENSE_HEADER_START@
++ * 
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this
++ * file.
++ * 
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ * 
++ * @APPLE_LICENSE_HEADER_END@
++ */
++
++#ifdef BUILTIN_MACHO
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/types.h>
++#include <sys/param.h>
++#include <sys/file.h>
++#include <unistd.h>
++
++#include <mach-o/fat.h>
++#include <mach-o/arch.h>
++#include <mach-o/swap.h>
++
++#include "file.h"
++
++/* Silence a compiler warning. */
++FILE_RCSID("")
++
++/* Known values for GPU cpu_type_t */
++#define CPU_TYPE_APPLEGPU	((cpu_type_t)	(19 | CPU_ARCH_ABI64))
++#define CPU_TYPE_AMDGPU		((cpu_type_t)	(20 | CPU_ARCH_ABI64))
++#define CPU_TYPE_INTELGPU	((cpu_type_t)	(21 | CPU_ARCH_ABI64))
++#define CPU_TYPE_AIR64		((cpu_type_t)	(23 | CPU_ARCH_ABI64))
++
++/* Known values for Apple cpu_subtype_t */
++#define CPU_SUBTYPE_APPLEGPU_GX2	((cpu_subtype_t) 32)
++#define CPU_SUBTYPE_APPLEGPU_G4P	((cpu_subtype_t) 17)
++#define CPU_SUBTYPE_APPLEGPU_G4G	((cpu_subtype_t) 49)
++#define CPU_SUBTYPE_APPLEGPU_G5P	((cpu_subtype_t) 65)
++#define CPU_SUBTYPE_APPLEGPU_G9P	((cpu_subtype_t) 81)
++#define CPU_SUBTYPE_APPLEGPU_G9G	((cpu_subtype_t) 97)
++#define CPU_SUBTYPE_APPLEGPU_G10P	((cpu_subtype_t) 34)
++#define CPU_SUBTYPE_APPLEGPU_G11P	((cpu_subtype_t) 114)
++#define CPU_SUBTYPE_APPLEGPU_G11M	((cpu_subtype_t) 82)
++#define CPU_SUBTYPE_APPLEGPU_G11G	((cpu_subtype_t) 130)
++#define CPU_SUBTYPE_APPLEGPU_G11G_8FSTP	((cpu_subtype_t) 1602)
++#define CPU_SUBTYPE_APPLEGPU_G12P	((cpu_subtype_t) 210)
++#define CPU_SUBTYPE_APPLEGPU_G13P	((cpu_subtype_t) 290)
++#define CPU_SUBTYPE_APPLEGPU_G13G	((cpu_subtype_t) 322)
++#define CPU_SUBTYPE_APPLEGPU_G13S	((cpu_subtype_t) 530)
++#define CPU_SUBTYPE_APPLEGPU_G13C	((cpu_subtype_t) 562)
++#define CPU_SUBTYPE_APPLEGPU_G13D	((cpu_subtype_t) 594)
++#define CPU_SUBTYPE_APPLEGPU_G14P	((cpu_subtype_t) 370)
++#define CPU_SUBTYPE_APPLEGPU_G14G	((cpu_subtype_t) 402)
++
++/* Known values for AMD cpu_subtype_t */
++#define CPU_SUBTYPE_AMD_GFX600		((cpu_subtype_t) 4000)
++#define CPU_SUBTYPE_AMD_GFX600_NWH	((cpu_subtype_t) 4001)
++#define CPU_SUBTYPE_AMD_GFX701		((cpu_subtype_t) 4002)
++#define CPU_SUBTYPE_AMD_GFX704		((cpu_subtype_t) 4003)
++#define CPU_SUBTYPE_AMD_GFX803		((cpu_subtype_t) 4004)
++#define CPU_SUBTYPE_AMD_GFX802		((cpu_subtype_t) 4005)
++#define CPU_SUBTYPE_AMD_GFX900		((cpu_subtype_t) 5000)
++#define CPU_SUBTYPE_AMD_GFX904		((cpu_subtype_t) 5001)
++#define CPU_SUBTYPE_AMD_GFX906		((cpu_subtype_t) 5002)
++#define CPU_SUBTYPE_AMD_GFX1010_NSGC	((cpu_subtype_t) 6000)
++#define CPU_SUBTYPE_AMD_GFX1010		((cpu_subtype_t) 6001)
++#define CPU_SUBTYPE_AMD_GFX1011		((cpu_subtype_t) 6002)
++#define CPU_SUBTYPE_AMD_GFX1012		((cpu_subtype_t) 6003)
++#define CPU_SUBTYPE_AMD_GFX1030		((cpu_subtype_t) 6004)
++#define CPU_SUBTYPE_AMD_GFX1032		((cpu_subtype_t) 6005)
++
++/* Known values for Intel cpu_subtype_t */
++#define CPU_SUBTYPE_INTEL_SKL_GT2R6	((cpu_subtype_t) 590342)
++#define CPU_SUBTYPE_INTEL_SKL_GT2R7	((cpu_subtype_t) 590343)
++#define CPU_SUBTYPE_INTEL_SKL_GT3R10	((cpu_subtype_t) 590602)
++#define CPU_SUBTYPE_INTEL_KBL_GT2R0	((cpu_subtype_t) 9765376)
++#define CPU_SUBTYPE_INTEL_KBL_GT2R2	((cpu_subtype_t) 9765378)
++#define CPU_SUBTYPE_INTEL_KBL_GT2R4	((cpu_subtype_t) 9765380)
++#define CPU_SUBTYPE_INTEL_KBL_GT3R1	((cpu_subtype_t) 9765633)
++#define CPU_SUBTYPE_INTEL_KBL_GT3R6	((cpu_subtype_t) 9765638)
++#define CPU_SUBTYPE_INTEL_ICL_1X6X8R7	((cpu_subtype_t) 1115655)
++#define CPU_SUBTYPE_INTEL_ICL_1X8X8R7	((cpu_subtype_t) 1116167)
++
++/* Known values for AIR cpu_subtype_t */
++#define CPU_SUBTYPE_AIR_V16	((cpu_subtype_t) 1)
++#define CPU_SUBTYPE_AIR_V18	((cpu_subtype_t) 2)
++#define CPU_SUBTYPE_AIR_V111	((cpu_subtype_t) 3)
++#define CPU_SUBTYPE_AIR_V20	((cpu_subtype_t) 4)
++#define CPU_SUBTYPE_AIR_V21	((cpu_subtype_t) 5)
++#define CPU_SUBTYPE_AIR_V22	((cpu_subtype_t) 6)
++#define CPU_SUBTYPE_AIR_V23	((cpu_subtype_t) 7)
++#define CPU_SUBTYPE_AIR_V24	((cpu_subtype_t) 8)
++#define CPU_SUBTYPE_AIR_V25	((cpu_subtype_t) 9)
++
++/* Magic number for fat GPU files */
++#define FAT_GPU_MAGIC 0xcbfebabe
++
++static const NXArchInfo GPUArchInfoTable[] =
++{
++	/* Apple GPUs */
++	{"applegpu_gx2",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_GX2,	NX_LittleEndian,
++	 "APPLEGPU_GX2"},
++	{"applegpu_g4p",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G4P,	NX_LittleEndian,
++	 "APPLEGPU_G4P"},
++	{"applegpu_g4g",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G4G,	NX_LittleEndian,
++	 "APPLEGPU_G4G"},
++	{"applegpu_g5p",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G5P,	NX_LittleEndian,
++	 "APPLEGPU_G5P"},
++	{"applegpu_g9p",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G9P,	NX_LittleEndian,
++	 "APPLEGPU_G9P"},
++	{"applegpu_g9g",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G9G,	NX_LittleEndian,
++	 "APPLEGPU_G9G"},
++	{"applegpu_g10p",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G10P,	NX_LittleEndian,
++	 "APPLEGPU_G10P"},
++	{"applegpu_g11p",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G11P,	NX_LittleEndian,
++	 "APPLEGPU_G11P"},
++	{"applegpu_g11m",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G11M,	NX_LittleEndian,
++	 "APPLEGPU_G11M"},
++	{"applegpu_g11g",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G11G,	NX_LittleEndian,
++	 "APPLEGPU_G11G"},
++	{"applegpu_g11g_8fstp",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G11G_8FSTP,	NX_LittleEndian,
++	 "APPLEGPU_G11G_8FSTP"},
++	{"applegpu_g12p",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G12P,	NX_LittleEndian,
++	 "APPLEGPU_G12P"},
++	{"applegpu_g13p",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G13P,	NX_LittleEndian,
++	 "APPLEGPU_G13P"},
++	{"applegpu_g13g",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G13G,	NX_LittleEndian,
++	 "APPLEGPU_G13G"},
++	{"applegpu_g13s",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G13S,	NX_LittleEndian,
++	 "APPLEGPU_G13S"},
++	{"applegpu_g13c",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G13C,	NX_LittleEndian,
++	 "APPLEGPU_G13C"},
++	{"applegpu_g13d",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G13D,	NX_LittleEndian,
++	 "APPLEGPU_G13D"},
++	{"applegpu_g14p",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G14P,	NX_LittleEndian,
++	 "APPLEGPU_G14P"},
++	{"applegpu_g14g",	CPU_TYPE_APPLEGPU,	CPU_SUBTYPE_APPLEGPU_G14G,	NX_LittleEndian,
++	 "APPLEGPU_G14G"},
++	/* AMD GPUs */
++	{"amdgpu_gfx600",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX600,	NX_LittleEndian,
++	 "AMDGPU_GFX600"},
++	{"amdgpu_gfx600_nwh",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX600_NWH,	NX_LittleEndian,
++	 "AMDGPU_GFX600_NWH"},
++	{"amdgpu_gfx701",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX701,	NX_LittleEndian,
++	 "AMDGPU_GFX701"},
++	{"amdgpu_gfx704",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX704,	NX_LittleEndian,
++	 "AMDGPU_GFX704"},
++	{"amdgpu_gfx803",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX803,	NX_LittleEndian,
++	 "AMDGPU_GFX803"},
++	{"amdgpu_gfx802",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX802,	NX_LittleEndian,
++	 "AMDGPU_GFX802"},
++	{"amdgpu_gfx900",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX900,	NX_LittleEndian,
++	 "AMDGPU_GFX900"},
++	{"amdgpu_gfx904",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX904,	NX_LittleEndian,
++	 "AMDGPU_GFX904"},
++	{"amdgpu_gfx906",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX906,	NX_LittleEndian,
++	 "AMDGPU_GFX906"},
++	{"amdgpu_gfx1010_nsgc",		CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX1010_NSGC,	NX_LittleEndian,
++	 "AMDGPU_GFX1010_NSGC"},
++	{"amdgpu_gfx1010",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX1010,	NX_LittleEndian,
++	 "AMDGPU_GFX1010"},
++	{"amdgpu_gfx1011",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX1011,	NX_LittleEndian,
++	 "AMDGPU_GFX1011"},
++	{"amdgpu_gfx1012",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX1012,	NX_LittleEndian,
++	 "AMDGPU_GFX1012"},
++	{"amdgpu_gfx1030",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX1030,	NX_LittleEndian,
++	 "AMDGPU_GFX1030"},
++	{"amdgpu_gfx1032",	CPU_TYPE_AMDGPU,	CPU_SUBTYPE_AMD_GFX1032,	NX_LittleEndian,
++	 "AMDGPU_GFX1032"},
++	/* Intel GPUs */
++	{"intelgpu_skl_gt2r6",	CPU_TYPE_INTELGPU,	CPU_SUBTYPE_INTEL_SKL_GT2R6,	NX_LittleEndian,
++	 "INTELGPU_SKL_GT2R6"},
++	{"intelgpu_skl_gt2r7",	CPU_TYPE_INTELGPU,	CPU_SUBTYPE_INTEL_SKL_GT2R7,	NX_LittleEndian,
++	 "INTELGPU_SKL_GT2R7"},
++	{"intelgpu_skl_gt3r10",	CPU_TYPE_INTELGPU,	CPU_SUBTYPE_INTEL_SKL_GT3R10,	NX_LittleEndian,
++	 "INTELGPU_SKL_GT3R10"},
++	{"intelgpu_kbl_gt2r0",	CPU_TYPE_INTELGPU,	CPU_SUBTYPE_INTEL_KBL_GT2R0,	NX_LittleEndian,
++	 "INTELGPU_KBL_GT2R0"},
++	{"intelgpu_kbl_gt2r2",	CPU_TYPE_INTELGPU,	CPU_SUBTYPE_INTEL_KBL_GT2R2,	NX_LittleEndian,
++	 "INTELGPU_KBL_GT2R2"},
++	{"intelgpu_kbl_gt2r4",	CPU_TYPE_INTELGPU,	CPU_SUBTYPE_INTEL_KBL_GT2R4,	NX_LittleEndian,
++	 "INTELGPU_KBL_GT2R4"},
++	{"intelgpu_kbl_gt3r1",	CPU_TYPE_INTELGPU,	CPU_SUBTYPE_INTEL_KBL_GT3R1,	NX_LittleEndian,
++	 "INTELGPU_KBL_GT3R1"},
++	{"intelgpu_kbl_gt3r6",	CPU_TYPE_INTELGPU,	CPU_SUBTYPE_INTEL_KBL_GT3R6,	NX_LittleEndian,
++	 "INTELGPU_KBL_GT3R6"},
++	{"intelgpu_icl_1x6x8r7",	CPU_TYPE_INTELGPU,	CPU_SUBTYPE_INTEL_ICL_1X6X8R7,	NX_LittleEndian,
++	 "INTELGPU_ICL_1X6X8R7"},
++	{"intelgpu_icl_1x8x8r7",	CPU_TYPE_INTELGPU,	CPU_SUBTYPE_INTEL_ICL_1X8X8R7,	NX_LittleEndian,
++	 "INTELGPU_ICL_1X8X8R7"},
++	/* AIR */
++	{"air64_v16",	CPU_TYPE_AIR64,	CPU_SUBTYPE_AIR_V16,	NX_LittleEndian,
++	 "AIR64_V16"},
++	{"air64_v18",	CPU_TYPE_AIR64,	CPU_SUBTYPE_AIR_V18,	NX_LittleEndian,
++	 "AIR64_V18"},
++	{"air64_v111",	CPU_TYPE_AIR64,	CPU_SUBTYPE_AIR_V111,	NX_LittleEndian,
++	 "AIR64_V111"},
++	{"air64_v20",	CPU_TYPE_AIR64,	CPU_SUBTYPE_AIR_V20,	NX_LittleEndian,
++	 "AIR64_V20"},
++	{"air64_v21",	CPU_TYPE_AIR64,	CPU_SUBTYPE_AIR_V21,	NX_LittleEndian,
++	 "AIR64_V21"},
++	{"air64_v22",	CPU_TYPE_AIR64,	CPU_SUBTYPE_AIR_V22,	NX_LittleEndian,
++	 "AIR64_V22"},
++	{"air64_v23",	CPU_TYPE_AIR64,	CPU_SUBTYPE_AIR_V23,	NX_LittleEndian,
++	 "AIR64_V23"},
++	{"air64_v24",	CPU_TYPE_AIR64,	CPU_SUBTYPE_AIR_V24,	NX_LittleEndian,
++	 "AIR64_V24"},
++	{"air64_v25",	CPU_TYPE_AIR64,	CPU_SUBTYPE_AIR_V25,	NX_LittleEndian,
++	 "AIR64_V25"},
++	{NULL,	0,	0,	0,
++	 NULL}
++};
++
++static const NXArchInfo *GetAllGPUArchInfos(void)
++{
++	return GPUArchInfoTable;
++}
++
++static int
++print_known_arch_name_for_file(struct magic_set *ms, cpu_type_t cputype,
++	cpu_subtype_t cpusubtype, const NXArchInfo *ArchInfoTable)
++{
++	const NXArchInfo *ai;
++
++	for (ai = ArchInfoTable; ai->name != NULL; ai++) {
++		if(ai->cputype == cputype && ai->cpusubtype == (cpu_subtype_t)(cpusubtype & ~CPU_SUBTYPE_MASK)) {
++			file_printf(ms, " (for architecture %s)", ai->name);
++			return 0;
++		}
++	}
++
++	return -1;
++}
++
++static void
++print_arch_name_for_file(struct magic_set *ms, cpu_type_t cputype,
++	cpu_subtype_t cpusubtype)
++{
++	if (print_known_arch_name_for_file(ms, cputype, cpusubtype,
++		NXGetAllArchInfos()) == 0)
++		return;
++
++	if (print_known_arch_name_for_file(ms, cputype, cpusubtype,
++		GetAllGPUArchInfos()) == 0)
++		return;
++
++	file_printf(ms, " (for architecture cputype (%d) cpusubtype (%d))",
++		cputype, cpusubtype);
++}
++
++protected int
++file_trymacho(struct magic_set *ms, const struct buffer *b, const char *inname)
++{
++	int fd = b->fd;
++	const unsigned char *buf = b->fbuf;
++	size_t nbytes = b->flen;
++	struct stat stat_buf;
++	unsigned long size;
++	struct fat_header fat_header;
++	struct fat_arch *fat_archs;
++	uint32_t arch_size, i;
++	ssize_t tbytes;
++	unsigned char *tmpbuf;
++
++	if (fstat(fd, &stat_buf) == -1) {
++		return -1;
++	}
++
++	size = stat_buf.st_size;
++
++	if (nbytes < sizeof(struct fat_header)) {
++		return -1;
++	}
++
++	memcpy(&fat_header, buf, sizeof(struct fat_header));
++#ifdef __LITTLE_ENDIAN__
++	swap_fat_header(&fat_header, NX_LittleEndian);
++#endif /* __LITTLE_ENDIAN__ */
++
++	/* Check magic number, plus little hack for Mach-O vs. Java. */
++	if(!((fat_header.magic == FAT_MAGIC && fat_header.nfat_arch < 20) ||
++			fat_header.magic == FAT_GPU_MAGIC)) {
++		return -1;
++	}
++
++	arch_size = fat_header.nfat_arch * sizeof(struct fat_arch);
++
++	if (nbytes < sizeof(struct fat_header) + arch_size) {
++		return -1;
++	}
++
++	if ((fat_archs = (struct fat_arch *)malloc(arch_size)) == NULL) {
++		return -1;
++	}
++
++	memcpy((void *)fat_archs, buf + sizeof(struct fat_header), arch_size);
++#ifdef __LITTLE_ENDIAN__
++	swap_fat_arch(fat_archs, fat_header.nfat_arch, NX_LittleEndian);
++#endif /* __LITTLE_ENDIAN__ */
++
++	for(i = 0; i < fat_header.nfat_arch; i++) {
++		file_printf(ms, "\n%s", inname);
++		print_arch_name_for_file(ms,
++			fat_archs[i].cputype, fat_archs[i].cpusubtype);
++		file_printf(ms, ":\t");
++
++		if (fat_archs[i].offset + fat_archs[i].size > size) {
++			free(fat_archs);
++			return -1;
++		}
++
++		if (lseek(fd, fat_archs[i].offset, SEEK_SET) == -1) {
++			free(fat_archs);
++			return -1;
++		}
++
++		tmpbuf = calloc(1,ms->bytes_max + 1);
++		if ((tbytes = read(fd, tmpbuf, ms->bytes_max)) == -1) {
++			free(fat_archs);
++			free(tmpbuf);
++			return -1;
++		}
++
++		file_buffer(ms, -1, NULL, inname, tmpbuf, (size_t)tbytes);
++		free(tmpbuf);
++	}
++
++	free(fat_archs);
++	return 0;
++}
++#endif /* BUILTIN_MACHO */
