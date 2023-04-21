@@ -1,0 +1,58 @@
+--- a/src/Info.plist.src	2022-09-29 00:58:36.000000000 +0800
++++ b/src/Info.plist.src	2023-04-20 18:36:18.394511867 +0800
+@@ -35,7 +35,7 @@
+ 	<string>0x00000001</string>
+ 
+ 	<key>ifdLogLevel</key>
+-	<string>0x0003</string>
++	<string>0x0001</string>
+ 
+ 	<!-- Possible values for ifdLogLevel
+ 	1: CRITICAL  important error messages
+--- a/src/Makefile.am	2022-11-14 18:37:14.000000000 +0800
++++ b/src/Makefile.am	2023-04-20 18:37:14.511619564 +0800
+@@ -51,22 +51,20 @@ TOKEN_PARSER = tokenparser.l parser.h \
+ 	simclist.c \
+ 	simclist.h
+ 
+-if WITHOUT_PCSC
+ PROVIDED_BY_PCSC = debug.c
+-endif
+ 
+ libccid_la_SOURCES = $(COMMON) $(USB) $(TOKEN_PARSER) $(PROVIDED_BY_PCSC) $(T1)
+ libccid_la_LIBADD = $(LIBUSB_LIBS) $(PTHREAD_LIBS)
+ libccid_la_CFLAGS = $(PCSC_CFLAGS) $(LIBUSB_CFLAGS) $(PTHREAD_CFLAGS) \
+ 	$(SYMBOL_VISIBILITY) -D$(CCID_VERSION) -DSIMCLIST_NO_DUMPRESTORE
+-libccid_la_LDFLAGS = -avoid-version
++libccid_la_LDFLAGS = -avoid-version -Wl,-headerpad_max_install_names
+ 
+ libccidtwin_la_SOURCES = $(COMMON) $(SERIAL) $(TOKEN_PARSER) \
+ 	$(PROVIDED_BY_PCSC) $(T1)
+ libccidtwin_la_CFLAGS = $(PCSC_CFLAGS) $(PTHREAD_CFLAGS) $(SYMBOL_VISIBILITY) \
+ 	-DTWIN_SERIAL -D$(CCID_VERSION) -DSIMCLIST_NO_DUMPRESTORE
+ libccidtwin_la_LIBADD = $(PTHREAD_LIBS)
+-libccidtwin_la_LDFLAGS = -avoid-version
++libccidtwin_la_LDFLAGS = -avoid-version -Wl,-headerpad_max_install_names
+ 
+ parse_SOURCES = parse.c debug.c ccid_usb.c sys_unix.c $(TOKEN_PARSER)
+ parse_LDADD = $(LIBUSB_LIBS)
+--- a/src/ccid_usb.c	2022-11-14 18:37:14.000000000 +0800
++++ b/src/ccid_usb.c	2023-04-21 16:44:38.298618455 +0800
+@@ -1471,6 +1471,7 @@ static void bulk_transfer_cb(struct libu
+  *					InterruptRead
+  *
+  ****************************************************************************/
++__attribute__((visibility("default")))
+ int InterruptRead(int reader_index, int timeout /* in ms */)
+ {
+ 	int ret, actual_length;
+--- a/src/commands.c	2022-11-08 00:09:49.000000000 +0800
++++ b/src/commands.c	2023-04-21 16:42:05.842701615 +0800
+@@ -43,6 +43,7 @@
+ #include "openct/proto-t1.h"
+ #include "ccid.h"
+ #include "defs.h"
++#include "ccid_usb.h"
+ #include "ccid_ifdhandler.h"
+ #include "debug.h"
+ #include "utils.h"

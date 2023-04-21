@@ -1,0 +1,66 @@
+--- a/CM_linux_packages.cmake	1674500700.000000000
++++ b/CM_linux_packages.cmake	1681469175.883270127
+@@ -1,9 +1,13 @@
+ # determine the version number from the #define in libyuv/version.h
++IF (APPLE)
++SET ( YUV_VERSION_NUMBER 0)
++ELSE ()
+ EXECUTE_PROCESS (
+ 	COMMAND grep --perl-regex --only-matching "(?<=LIBYUV_VERSION )[0-9]+" include/libyuv/version.h
+ 	WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+ 	OUTPUT_VARIABLE YUV_VERSION_NUMBER
+ 	OUTPUT_STRIP_TRAILING_WHITESPACE )
++ENDIF ()
+ SET ( YUV_VER_MAJOR 0 )
+ SET ( YUV_VER_MINOR 0 )
+ SET ( YUV_VER_PATCH ${YUV_VERSION_NUMBER} )
+--- a/CMakeLists.txt	1674500700.000000000
++++ b/CMakeLists.txt	1681469197.555717148
+@@ -3,9 +3,11 @@
+ # Run with -DTEST=ON to build unit tests
+ 
+ PROJECT ( YUV C CXX )	# "C" is required even for C++ projects
+-CMAKE_MINIMUM_REQUIRED( VERSION 2.8.12 )
++CMAKE_MINIMUM_REQUIRED( VERSION 3.2 )
+ OPTION( TEST "Built unit tests" OFF )
+ 
++include(GNUInstallDirs)
++
+ SET ( ly_base_dir	${PROJECT_SOURCE_DIR} )
+ SET ( ly_src_dir	${ly_base_dir}/source )
+ SET ( ly_inc_dir	${ly_base_dir}/include )
+@@ -36,6 +38,9 @@ SET_TARGET_PROPERTIES	( ${ly_lib_shared}
+ if(WIN32)
+   SET_TARGET_PROPERTIES	( ${ly_lib_shared} PROPERTIES IMPORT_PREFIX "lib" )
+ endif()
++# Debian-specific: for library version, use ${YUV_VERSION}
++INCLUDE ( CM_linux_packages.cmake )
++SET_TARGET_PROPERTIES	( ${ly_lib_shared} PROPERTIES VERSION ${YUV_VERSION} SOVERSION 0 )
+ 
+ # this creates the conversion tool
+ ADD_EXECUTABLE			( yuvconvert ${ly_base_dir}/util/yuvconvert.cc )
+@@ -55,7 +60,7 @@ endif()
+ if(TEST)
+   find_library(GTEST_LIBRARY gtest)
+   if(GTEST_LIBRARY STREQUAL "GTEST_LIBRARY-NOTFOUND")
+-    set(GTEST_SRC_DIR /usr/src/gtest CACHE STRING "Location of gtest sources")
++    set(GTEST_SRC_DIR /usr/share/src/googletest/googletest CACHE STRING "Location of gtest sources")
+     if(EXISTS ${GTEST_SRC_DIR}/src/gtest-all.cc)
+       message(STATUS "building gtest from sources in ${GTEST_SRC_DIR}")
+       set(gtest_sources ${GTEST_SRC_DIR}/src/gtest-all.cc)
+@@ -91,10 +96,11 @@ endif()
+ 
+ 
+ # install the conversion tool, .so, .a, and all the header files
+-INSTALL ( PROGRAMS ${CMAKE_BINARY_DIR}/yuvconvert			DESTINATION bin )
+-INSTALL ( TARGETS ${ly_lib_static}						DESTINATION lib )
+-INSTALL ( TARGETS ${ly_lib_shared} LIBRARY				DESTINATION lib RUNTIME DESTINATION bin )
+-INSTALL ( DIRECTORY ${PROJECT_SOURCE_DIR}/include/		DESTINATION include )
++INSTALL ( PROGRAMS ${CMAKE_BINARY_DIR}/yuvconvert			DESTINATION ${CMAKE_INSTALL_BINDIR} )
++INSTALL ( PROGRAMS ${CMAKE_BINARY_DIR}/yuvconstants			DESTINATION ${CMAKE_INSTALL_BINDIR} )
++INSTALL ( TARGETS ${ly_lib_static}						DESTINATION ${CMAKE_INSTALL_LIBDIR} )
++INSTALL ( TARGETS ${ly_lib_shared} LIBRARY				DESTINATION ${CMAKE_INSTALL_LIBDIR} RUNTIME DESTINATION bin )
++INSTALL ( DIRECTORY ${PROJECT_SOURCE_DIR}/include/		DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} )
+ 
+ # create the .deb and .rpm packages using cpack
+ INCLUDE ( CM_linux_packages.cmake )

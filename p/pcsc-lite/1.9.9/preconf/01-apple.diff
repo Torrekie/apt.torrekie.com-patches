@@ -1,0 +1,5018 @@
+--- a/src/Makefile.am	1645176895.000000000
++++ b/src/Makefile.am	1681992919.778072727
+@@ -26,8 +26,15 @@ libpcsclite_la_SOURCES = \
+ 	simclist.c \
+ 	sys_unix.c \
+ 	utils.c \
+-	winscard_msg.c
+-libpcsclite_la_LDFLAGS = -version-info 1:0:0
++	winscard_msg.c \
++	musclecard.c \
++	tokenfactory.c \
++	dyn_generic.h \
++	dyn_hpux.c \
++	dyn_macosx.c \
++	dyn_unix.c \
++	tokenparser.c
++libpcsclite_la_LDFLAGS = -version-info 1:0:0 -Wl,-framework,CoreFoundation
+ libpcsclite_la_CFLAGS = $(CFLAGS) $(PTHREAD_CFLAGS) -DLIBPCSCLITE -DSIMCLIST_NO_DUMPRESTORE
+ libpcsclite_la_LIBADD = $(PTHREAD_CFLAGS) $(PTHREAD_LIBS)
+ 
+@@ -58,6 +65,9 @@ pcscd_SOURCES = \
+ 	PCSC/pcsclite.h.in \
+ 	PCSC/winscard.h \
+ 	PCSC/wintypes.h \
++	PCSC/mscdefines.h \
++	PCSC/musclecard.h \
++	PCSC/tokenfactory.h \
+ 	prothandler.c \
+ 	prothandler.h \
+ 	readerfactory.c \
+@@ -129,7 +139,9 @@ nobase_include_HEADERS = \
+ 	PCSC/ifdhandler.h \
+ 	PCSC/reader.h \
+ 	PCSC/winscard.h \
+-	PCSC/wintypes.h
++	PCSC/wintypes.h \
++	PCSC/musclecard.h \
++	PCSC/mscdefines.h
+ 
+ nodistheaderdir = $(includedir)/PCSC
+ nodistheader_DATA = PCSC/pcsclite.h
+--- a/src/PCSC/pcsclite.h.in	1644689363.000000000
++++ b/src/PCSC/pcsclite.h.in	1681992963.330077992
+@@ -275,6 +275,37 @@ extern const SCARD_IO_REQUEST g_rgSCardT
+ #define SCARD_STATE_MUTE		0x0200	/**< Unresponsive card */
+ #define SCARD_STATE_UNPOWERED		0x0400	/**< Unpowered card */
+ 
++/** PC/SC Lite specific extensions */
++#define SCARD_W_INSERTED_CARD		0x8010006A
++
++#define SCARD_SCOPE_GLOBAL		0x0003	/**< Scope is global */
++
++#define SCARD_RESET			0x0001	/**< Card was reset */
++#define SCARD_INSERTED			0x0002	/**< Card was inserted */
++#define SCARD_REMOVED			0x0004	/**< Card was removed */
++
++#define BLOCK_STATUS_RESUME		0x00FF	/**< Normal resume */
++#define BLOCK_STATUS_BLOCKING		0x00FA	/**< Function is blocking */
++
++#if __APPLE__
++#include <TargetConditionals.h>
++#if TARGET_OS_OSX
++// Torrekie: Apple does that, not my fault
++#define PCSCLITE_CONFIG_DIR		"/etc"
++#if !defined(USE_IPCDIR) && !defined(PCSCLITE_IPC_DIR)
++#define PCSCLITE_IPC_DIR		"/var/run"
++#else
++#define PCSCLITE_IPC_DIR		USE_IPCDIR
++#endif
++#endif
++#endif
++
++#define PCSCLITE_READER_CONFIG		PCSCLITE_CONFIG_DIR "/reader.conf"
++#define PCSCLITE_PUBSHM_FILE		PCSCLITE_IPC_DIR "/pcscd.pub"
++#define PCSCLITE_CSOCK_NAME		PCSCLITE_IPC_DIR "/pcscd.comm"
++
++#define PCSCLITE_SVC_IDENTITY		0x01030000	/**< Service ID */
++
+ #ifndef INFINITE
+ #define INFINITE			0xFFFFFFFF	/**< Infinite timeout */
+ #endif
+--- a/src/debug.c	1628280231.000000000
++++ b/src/debug.c	1681992686.191957821
+@@ -147,5 +147,29 @@ void log_msg(const int priority, const c
+ 	}
+ } /* log_msg */
+ 
+-#endif
++void log_xxd(const int priority, const char *msg, const unsigned char *buffer,
++	const int len)
++{
++	char DebugBuffer[DEBUG_BUF_SIZE];
++	int i;
++	char *c;
++	char *debug_buf_end;
++
++	if (priority < LogLevel) /* log priority lower than threshold? */
++		return;
++
++	debug_buf_end = DebugBuffer + DEBUG_BUF_SIZE - 5;
++
++	(void)strlcpy(DebugBuffer, msg, sizeof(DebugBuffer));
++	c = DebugBuffer + strlen(DebugBuffer);
+ 
++	for (i = 0; (i < len) && (c < debug_buf_end); ++i)
++	{
++		sprintf(c, "%02X ", buffer[i]);
++		c += strlen(c);
++	}
++
++	fprintf(stderr, "%s\n", DebugBuffer);
++} /* log_xxd */
++
++#endif
+--- a/src/dyn_generic.h	1613492735.000000000
++++ b/src/dyn_generic.h	1681989126.202793110
+@@ -42,6 +42,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE PO
+ 
+ 	LONG DYN_LoadLibrary(void **, char *);
+ 	LONG DYN_CloseLibrary(void **);
+-	LONG DYN_GetAddress(void *, /*@out@*/ void **, const char *, int);
++	LONG DYN_GetAddress(void *, /*@out@*/ void **, const char *);
+ 
+ #endif
+--- a/src/dyn_macosx.c	1596625292.000000000
++++ b/src/dyn_macosx.c	1681989120.353685609
+@@ -111,11 +111,8 @@ int DYN_CloseLibrary(void **pvLHandle)
+ 	return SCARD_S_SUCCESS;
+ }
+ 
+-int DYN_GetAddress(void *pvLHandle, void **pvFHandle, const char *pcFunction,
+-	int mayfail)
++int DYN_GetAddress(void *pvLHandle, void **pvFHandle, const char *pcFunction)
+ {
+-	(void)mayfail;
+-
+ 	CFBundleRef bundle = (CFBundleRef) pvLHandle;
+ 	CFStringRef cfName = CFStringCreateWithCString(NULL, pcFunction,
+ 		kCFStringEncodingMacRoman);
+--- a/src/readerfactory.c	1662897103.000000000
++++ b/src/readerfactory.c	1681991660.529790551
+@@ -892,7 +892,7 @@ LONG RFBindFunctions(READER_CONTEXT * rC
+ 	int rv;
+ 	void *f;
+ 
+-	rv = DYN_GetAddress(rContext->vHandle, &f, "IFDHCreateChannelByName", TRUE);
++	rv = DYN_GetAddress(rContext->vHandle, &f, "IFDHCreateChannelByName");
+ 	if (SCARD_S_SUCCESS == rv)
+ 	{
+ 		/* Ifd Handler 3.0 found */
+@@ -900,7 +900,7 @@ LONG RFBindFunctions(READER_CONTEXT * rC
+ 	}
+ 	else
+ 	{
+-		rv = DYN_GetAddress(rContext->vHandle, &f, "IFDHCreateChannel", FALSE);
++		rv = DYN_GetAddress(rContext->vHandle, &f, "IFDHCreateChannel");
+ 		if (SCARD_S_SUCCESS == rv)
+ 		{
+ 			/* Ifd Handler 2.0 found */
+@@ -920,7 +920,7 @@ LONG RFBindFunctions(READER_CONTEXT * rC
+ #define GET_ADDRESS_OPTIONALv2(s, code) \
+ { \
+ 	void *f1 = NULL; \
+-	int rvl = DYN_GetAddress(rContext->vHandle, &f1, "IFDH" #s, FALSE); \
++	int rvl = DYN_GetAddress(rContext->vHandle, &f1, "IFDH" #s); \
+ 	if (SCARD_S_SUCCESS != rvl) \
+ 	{ \
+ 		code \
+@@ -952,7 +952,7 @@ LONG RFBindFunctions(READER_CONTEXT * rC
+ #define GET_ADDRESS_OPTIONALv3(s, code) \
+ { \
+ 	void *f1 = NULL; \
+-	int rvl = DYN_GetAddress(rContext->vHandle, &f1, "IFDH" #s, FALSE); \
++	int rvl = DYN_GetAddress(rContext->vHandle, &f1, "IFDH" #s); \
+ 	if (SCARD_S_SUCCESS != rvl) \
+ 	{ \
+ 		code \
+--- /dev/null	2023-04-21 18:06:23.869049000 +0800
++++ src/PCSC/mscdefines.h	2023-04-20 19:00:26.377366555 +0800
+@@ -0,0 +1,186 @@
++/*
++ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
++ *
++ * @APPLE_LICENSE_HEADER_START@
++ *
++ * The contents of this file constitute Original Code as defined in and
++ * are subject to the Apple Public Source License Version 1.1 (the
++ * "License").  You may not use this file except in compliance with the
++ * License.  Please obtain a copy of the License at
++ * http://www.apple.com/publicsource and read it before using this file.
++ *
++ * This Original Code and all software distributed under the License are
++ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
++ * License for the specific language governing rights and limitations
++ * under the License.
++ *
++ * @APPLE_LICENSE_HEADER_END@
++ */
++
++/******************************************************************
++
++        MUSCLE SmartCard Development ( http://www.linuxnet.com )
++            Title  : mscdefines.h
++            Package: MuscleCard Framework
++            Author : David Corcoran
++            Date   : 10/02/01
++            License: Copyright (C) 2001-2002 David Corcoran
++                     <corcoran@linuxnet.com>
++            Purpose: This provides high level definitions for
++                     data types, structures.
++
++	    You may not remove this header from this file
++	    without prior permission from the author.
++   
++********************************************************************/
++
++#ifndef __mscdefines_h__
++#define __mscdefines_h__
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#ifdef WIN32
++#include "../win32/win32_pcsclite.h"
++#else
++#include "pcsclite.h"
++#endif
++
++#ifndef __APPLE__
++#include <winscard.h>
++#else
++#include <PCSC/winscard.h>
++#endif
++
++#include <stdint.h>
++
++#ifdef MSC_ARCH_WIN32
++#define MAX_BUFFER_SIZE		265
++#endif
++
++	/*
++	 * Some type defines used in MuscleCard 
++	 */
++
++	typedef uint32_t MSC_RV;
++	typedef char MSCChar8;
++	typedef uint8_t *MSCPUChar8;
++	typedef const uint8_t *MSCPCUChar8;
++	typedef uint8_t MSCUChar8;
++	typedef uint16_t *MSCPUShort16;
++	typedef uint16_t MSCUShort16;
++	typedef int16_t *MSCPShort16;
++	typedef int16_t MSCShort16;
++	typedef uint32_t *MSCPULong32;
++	typedef uint32_t MSCULong32;
++	typedef int32_t *MSCPLong32;
++	typedef int32_t MSCLong32;
++	typedef const void *MSCPCVoid32;
++	typedef void *MSCPVoid32;
++	typedef const char *MSCCString;
++	typedef char *MSCString;
++
++	typedef struct
++	{
++		MSCPVoid32 pvfWriteFramework;
++		MSCPVoid32 pvfInitializePlugin;
++		MSCPVoid32 pvfIdentifyToken;
++		MSCPVoid32 pvfFinalizePlugin;
++		MSCPVoid32 pvfGetStatus;
++		MSCPVoid32 pvfGetCapabilities;
++		MSCPVoid32 pvfExtendedFeature;
++		MSCPVoid32 pvfGenerateKeys;
++		MSCPVoid32 pvfImportKey;
++		MSCPVoid32 pvfExportKey;
++		MSCPVoid32 pvfComputeCrypt;
++		MSCPVoid32 pvfExtAuthenticate;
++		MSCPVoid32 pvfListKeys;
++		MSCPVoid32 pvfCreatePIN;
++		MSCPVoid32 pvfVerifyPIN;
++		MSCPVoid32 pvfChangePIN;
++		MSCPVoid32 pvfUnblockPIN;
++		MSCPVoid32 pvfListPINs;
++		MSCPVoid32 pvfCreateObject;
++		MSCPVoid32 pvfDeleteObject;
++		MSCPVoid32 pvfWriteObject;
++		MSCPVoid32 pvfReadObject;
++		MSCPVoid32 pvfListObjects;
++		MSCPVoid32 pvfLogoutAll;
++		MSCPVoid32 pvfGetChallenge;
++
++	}
++	CFDyLibPointers, *LPCFDyLibPointers;
++
++#define MSC_MAXSIZE_TOKENAME      150
++#define MSC_MAXSIZE_SVCPROV       200
++#define MSC_MAXSIZE_OBJID          16
++#define MSC_MAXSIZE_AID            64
++#define MSC_MAXSIZE_MAC           128
++#define MSC_MAXSIZE_LABEL          32
++#define MSC_MAXSIZE_CERT_ISSUER    512
++#define MSC_MAXSIZE_CERT_SUBJECT   512
++#define MSC_MAXSIZE_CERT_SERIAL    512
++#define MSC_MAXSIZE_BUFFER     MAX_BUFFER_SIZE
++
++	typedef struct
++	{
++	        MSCChar8 tokenName[MSC_MAXSIZE_TOKENAME]; /* Token name */ 
++                MSCChar8 slotName[MAX_READERNAME];	/* Slot/reader name */
++		MSCChar8 svProvider[MSC_MAXSIZE_SVCPROV]; /* Library */
++		MSCUChar8 tokenId[MAX_ATR_SIZE];     /* Token ID (ATR) */
++		MSCUChar8 tokenApp[MSC_MAXSIZE_AID]; /* Default app ID */
++		MSCULong32 tokenAppLen;	  /* Default AID Length */
++		MSCULong32 tokenIdLength; /* ID Length (ATR Length) */
++		MSCULong32 tokenState;	  /* State (dwEventState) */
++		MSCULong32 tokenType;	  /* Type - RFU */
++		MSCPVoid32 addParams;	  /* Additional Data */
++		MSCULong32 addParamsSize; /* Size of additional data */
++	}
++	MSCTokenInfo, *MSCLPTokenInfo;
++
++	/*
++	 * Callback function definitions 
++	 */
++
++	typedef MSCULong32(*MSCCallBack) (MSCLPTokenInfo, MSCULong32,
++					  MSCPVoid32);
++
++	typedef struct
++	{
++		MSCULong32 arraySize;
++		MSCLPTokenInfo tokenArray;
++		MSCPVoid32 appData;
++		MSCCallBack callBack;
++	}
++	MSCEventWaitInfo, *MSCLPEventWaitInfo;
++
++	typedef MSC_RV(*LPRWEventCallback) (MSCPVoid32, int);
++
++	typedef struct
++	{
++		MSCLong32 hContext;	      /* Handle to resource manager */
++		MSCLong32 hCard;	      /* Handle to the connection */
++		LPSCARD_IO_REQUEST ioType;    /* Type of protocol */
++		MSCUChar8 pMac[MSC_MAXSIZE_MAC];  /* MAC code */
++		MSCULong32 macSize;	      /* Size of the MAC code */
++		MSCPVoid32 tokenLibHandle;    /* Handle to token library */
++		CFDyLibPointers libPointers;  /* Function pointers */
++		MSCTokenInfo tokenInfo;	/* token information */
++		MSCUChar8 loggedIDs;	/* Verification bit mask */
++		MSCULong32 shareMode;	/* Sharing mode for this */
++		LPRWEventCallback rwCallback;	/* Registered callback */
++	}
++	MSCTokenConnection, *MSCLPTokenConnection;
++
++#define MSC_OK MSC_SUCCESS
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif							/* __mscdefines_h__ */
+--- /dev/null	2023-04-21 18:06:27.834427000 +0800
++++ src/PCSC/musclecard.h	2023-04-20 19:05:16.056192000 +0800
+@@ -0,0 +1,1050 @@
++/*
++ * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
++ *
++ * @APPLE_LICENSE_HEADER_START@
++ *
++ * The contents of this file constitute Original Code as defined in and
++ * are subject to the Apple Public Source License Version 1.1 (the
++ * "License").  You may not use this file except in compliance with the
++ * License.  Please obtain a copy of the License at
++ * http://www.apple.com/publicsource and read it before using this file.
++ *
++ * This Original Code and all software distributed under the License are
++ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
++ * License for the specific language governing rights and limitations
++ * under the License.
++ *
++ * @APPLE_LICENSE_HEADER_END@
++ */
++
++/******************************************************************
++ 
++        MUSCLE SmartCard Development ( http://www.linuxnet.com )
++            Title  : musclecard.h
++            Package: MuscleCard Framework
++            Author : David Corcoran
++            Date   : 11/28/01
++            License: Copyright (C) 2001 David Corcoran
++                     <corcoran@linuxnet.com>
++            Purpose: This abstracts the MUSCLE Card Edge Inteface
++
++	    You may not remove this header from this file
++	    without prior permission from the author.
++ 
++********************************************************************/
++
++#ifndef __musclecard_h__
++#define __musclecard_h__
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#ifdef WIN32
++#include "PCSC.h"
++#endif
++
++#ifndef __APPLE__
++#include <mscdefines.h>
++#else
++#include <PCSC/mscdefines.h>
++#endif
++
++	/****************
++     * Return codes *
++     ****************/
++
++	/** success */
++#define MSC_SUCCESS                        0x9000
++
++	/** There have been memory problems on the card */
++#define MSC_NO_MEMORY_LEFT                 0x9C01
++	/** Entered PIN is not correct */
++#define MSC_AUTH_FAILED                    0x9C02
++	/** Required operation is not allowed in actual circumstances */
++#define MSC_OPERATION_NOT_ALLOWED          0x9C03
++	/** Required operation is inconsistent with memory contents */
++#define MSC_INCONSISTENT_STATUS            0x9C04
++	/** Required feature is not (yet) supported */
++#define MSC_UNSUPPORTED_FEATURE            0x9C05
++	/** Required operation was not authorized because of a lack of privileges */
++#define MSC_UNAUTHORIZED                   0x9C06
++	/** Required object is missing */
++#define MSC_OBJECT_NOT_FOUND               0x9C07
++	/** New object ID already in use */
++#define MSC_OBJECT_EXISTS                  0x9C08
++	/** Algorithm specified is not correct */
++#define MSC_INCORRECT_ALG                  0x9C09
++
++	/** Verify operation detected an invalid signature */
++#define MSC_SIGNATURE_INVALID              0x9C0B
++	/** Operation has been blocked for security reason  */
++#define MSC_IDENTITY_BLOCKED               0x9C0C
++	/** Unspecified error */
++#define MSC_UNSPECIFIED_ERROR              0x9C0D
++	/** PCSC and driver transport errors */
++#define MSC_TRANSPORT_ERROR                0x9C0E
++	/** Invalid parameter given */
++#define MSC_INVALID_PARAMETER              0x9C0F
++	/** Incorrect P1 parameter */
++#define MSC_INCORRECT_P1                   0x9C10
++	/** Incorrect P2 parameter */
++#define MSC_INCORRECT_P2                   0x9C11
++	/** End of sequence */
++#define MSC_SEQUENCE_END                   0x9C12
++	/** For debugging purposes */
++#define MSC_INTERNAL_ERROR                 0x9CFF
++
++	/*******************************************************/
++	/*
++	 * These returns are beyond the protocol specification 
++	 */
++	/*
++	 * and only exist here to provide return codes for the 
++	 */
++	/*
++	 * additional functions provided by the MuscleCard API 
++	 */
++	/*
++	 * beyond the protocol specification.  
++	 */
++	/*******************************************************/
++
++	/** A blocking event has been cancelled */
++#define MSC_CANCELLED                      0x9C50
++	/*
++	 * The buffer provided is too short 
++	 */
++#define MSC_INSUFFICIENT_BUFFER            0x9C51
++	/*
++	 * The selected token is not recognized 
++	 */
++#define MSC_UNRECOGNIZED_TOKEN             0x9C52
++	/*
++	 * The PC/SC services is not available 
++	 */
++#define MSC_SERVICE_UNRESPONSIVE           0x9C53
++	/*
++	 * The action has timed out 
++	 */
++#define MSC_TIMEOUT_OCCURRED               0x9C54
++	/*
++	 * The token has been removed 
++	 */
++#define MSC_TOKEN_REMOVED                  0x9C55
++	/*
++	 * The token has been reset 
++	 */
++#define MSC_TOKEN_RESET                    0x9C56
++	/*
++	 * The token has been inserted 
++	 */
++#define MSC_TOKEN_INSERTED                 0x9C57
++	/*
++	 * The token is unresponsive 
++	 */
++#define MSC_TOKEN_UNRESPONSIVE             0x9C58
++	/*
++	 * The handle is invalid 
++	 */
++#define MSC_INVALID_HANDLE                 0x9C59
++	/*
++	 * Invalid sharing 
++	 */
++#define MSC_SHARING_VIOLATION              0x9C60
++
++
++#define MSC_BLOCKSTATUS_RESUME             0x0000
++#define MSC_BLOCKSTATUS_BLOCKING           0x0001
++#define MSC_BLOCKSTATUS_CANCELLING         0x0002
++
++	/*
++	 * Some boundary defines 
++	 */
++#define MSC_MAX_KEYS                       16
++#define MSC_MAX_PINS                        8
++#define MSC_SIZEOF_KEYPACKET              200
++#define MSC_MAXSIZEOF_APDU_DATALEN        255
++#define MSC_PERCENT_STEPSIZE             1000
++#define MSC_SINGLE_READ_PACKET            255
++#define MSC_MAXSIZE_TOKENARRAY            255
++
++	/*
++	 * KeyPair Generation algorithms 
++	 */
++#define MSC_GEN_ALG_RSA	        0x00
++#define MSC_GEN_ALG_RSA_CRT	0x01
++#define MSC_GEN_ALG_DSA	        0x02
++#define MSC_GEN_ALG_DES	        0x03
++#define MSC_GEN_ALG_3DES	0x04
++#define MSC_GEN_ALG_3DES3	0x05
++
++	/*
++	 * Blob encodings in KeyBlob structure 
++	 */
++#define MSC_BLOB_ENC_PLAIN	0x00
++#define MSC_BLOB_ENC_CRYPT	0x01
++
++	/*
++	 * Key Type in Key Blobs 
++	 */
++#define MSC_KEY_RSA_PUBLIC       0x01
++#define MSC_KEY_RSA_PRIVATE      0x02
++#define MSC_KEY_RSA_PRIVATE_CRT  0x03
++#define MSC_KEY_DSA_PUBLIC       0x04
++#define MSC_KEY_DSA_PRIVATE      0x05
++#define MSC_KEY_DES              0x06
++#define MSC_KEY_3DES             0x07
++#define MSC_KEY_3DES3            0x08
++
++	/*
++	 * Key generation options TODO: add other 
++	 */
++#define MSC_OPT_DEFAULT		 0x00
++#define MSC_OPT_RSA_PUB_EXP      0x01
++#define MSC_OPT_DSA_GPQ          0x02
++
++	/*
++	 * Cipher operations in ComputeCrypt() 
++	 */
++#define MSC_CIPHER_INIT	        0x01
++#define MSC_CIPHER_PROCESS	0x02
++#define MSC_CIPHER_FINAL	0x03
++
++	/*
++	 * Cipher modes in ComputeCrypt() 
++	 */
++#define MSC_MODE_RSA_NOPAD	0x00
++#define MSC_MODE_RSA_PAD_PKCS1	0x01
++#define MSC_MODE_DSA_SHA	0x10
++#define MSC_MODE_DES_CBC_NOPAD	0x20
++#define MSC_MODE_DES_ECB_NOPAD	0x21
++
++	/*
++	 * Cipher directions 
++	 */
++#define MSC_DIR_SIGN		0x01
++#define MSC_DIR_VERIFY		0x02
++#define MSC_DIR_ENCRYPT		0x03
++#define MSC_DIR_DECRYPT		0x04
++
++	/*
++	 * Sequence options in ListXXX() 
++	 */
++#define MSC_SEQUENCE_RESET	0x00
++#define MSC_SEQUENCE_NEXT	0x01
++
++	/*
++	 * Zero flag in DeleteObject() 
++	 */
++#define MSC_ZF_DEFAULT	0x00
++#define MSC_ZF_WRITE_ZERO	0x01
++
++	/*
++	 * Some defines for ID's Bitmask 
++	 */
++#define MSC_AUT_ALL       0x0000
++#define MSC_AUT_NONE      0xFFFF
++
++#define MSC_AUT_PIN_0     0x0001
++#define MSC_AUT_PIN_1     0x0002
++#define MSC_AUT_PIN_2     0x0004
++#define MSC_AUT_PIN_3     0x0008
++#define MSC_AUT_PIN_4     0x0010
++
++#define MSC_AUT_KEY_0     0x0100
++#define MSC_AUT_KEY_1     0x0200
++#define MSC_AUT_KEY_2     0x0400
++#define MSC_AUT_KEY_3     0x0800
++#define MSC_AUT_KEY_4     0x1000
++#define MSC_AUT_KEY_5     0x2000
++
++#define MSC_AUT_USR_0     0x4000
++#define MSC_AUT_USR_1     0x8000
++
++	/*
++	 * This structure allows you to customize your MuscleCard. It is used
++	 * in MSCWriteFramework to specify attributes you may want to set in
++	 * this 'personalization' routine and will be getting new values in
++	 * future revisions of the API 
++	 */
++
++#define MSC_INIT_DEFAULT_KEY     0x00	/* Use card's default transport
++										 * key */
++#define MSC_INIT_IGNORE_KEY      0x01	/* Don't verify any key at all */
++#define MSC_INIT_USE_KEY         0x02	/* Use the key in this struct */
++
++	typedef struct
++	{
++		MSCUChar8 transportKey[MAX_BUFFER_SIZE];
++		MSCULong32 transportKeyLen;
++		MSCUChar8  transportBehavior;
++		MSCULong32 objectMemory;
++
++		MSCUChar8  newTransportKey[MAX_BUFFER_SIZE];
++		MSCULong32 newTransportKeyLen;
++
++		MSCUChar8  defaultCHV[MAX_BUFFER_SIZE];
++		MSCULong32 defaultCHVLen;
++		MSCUChar8  defaultCHVTries;
++
++		MSCUChar8  defaultCHVUnblock[MAX_BUFFER_SIZE];
++		MSCULong32 defaultCHVUnblockSize;
++		MSCUChar8  defaultCHVUnblockTries;
++
++		MSCUShort16 createObjectACL;
++		MSCUShort16 createKeysACL;
++		MSCUShort16 createPINsACL;
++
++		MSCUChar8   maxNumberKeys;
++		MSCUChar8   maxNumberPINs;
++		MSCUShort16 maxNumberObjects;
++
++	}
++	MSCInitTokenParams, *MSCLPInitTokenParams;
++
++	/*
++	 * Direction policy bitmasks for MSCKeyPolicy 
++	 */
++#define MSC_KEYPOLICY_MODE_RSA_NOPAD      0x0001
++#define MSC_KEYPOLICY_MODE_RSA_PAD_PKCS1  0x0002
++#define MSC_KEYPOLICY_MODE_DSA_SHA        0x0004
++#define MSC_KEYPOLICY_MODE_DES_CBC_NOPAD  0x0008
++#define MSC_KEYPOLICY_MODE_DES_ECB_NOPAD  0x0010
++
++#define MSC_KEYPOLICY_DIR_SIGN            0x0100
++#define MSC_KEYPOLICY_DIR_VERIFY          0x0200
++#define MSC_KEYPOLICY_DIR_ENCRYPT         0x0400
++#define MSC_KEYPOLICY_DIR_DECRYPT         0x0800
++
++	typedef struct
++	{
++		MSCUShort16 cipherMode;
++		MSCUShort16 cipherDirection;
++	}
++	MSCKeyPolicy, *MSCLPKeyPolicy;
++
++	typedef struct
++	{
++		MSCUShort16 readPermission;
++		MSCUShort16 writePermission;
++		MSCUShort16 usePermission;
++	}
++	MSCKeyACL, *MSCLPKeyACL;
++
++	typedef struct
++	{
++		MSCUShort16 readPermission;
++		MSCUShort16 writePermission;
++		MSCUShort16 deletePermission;
++	}
++	MSCObjectACL, *MSCLPObjectACL, MSCCertACL, *MSCLPCertACL;
++
++	typedef struct
++	{
++		MSCUChar8 algoType;
++		MSCUShort16 keySize;
++		MSCKeyACL privateKeyACL;
++		MSCKeyACL publicKeyACL;
++		MSCKeyPolicy privateKeyPolicy;
++		MSCKeyPolicy publicKeyPolicy;
++		MSCUChar8 keyGenOptions;
++		MSCPUChar8 pOptParams;
++		MSCULong32 optParamsSize;
++	}
++	MSCGenKeyParams, *MSCLPGenKeyParams;
++
++	typedef MSCPUChar8 MSCLPKeyBlob;
++
++	typedef struct
++	{
++		MSCUChar8 keyNum;
++		MSCUChar8 keyType;
++		MSCUChar8 keyPartner;   /* Do not use (deprecated) */
++	        MSCUChar8 keyMapping;   /* Do not use (deprecated) */
++		MSCUShort16 keySize;
++		MSCKeyPolicy keyPolicy;
++		MSCKeyACL keyACL;
++	}
++	MSCKeyInfo, *MSCLPKeyInfo;
++
++	typedef struct
++	{
++		MSCUChar8 keyNum;
++		MSCUChar8 cipherMode;
++		MSCUChar8 cipherDirection;
++		MSCPUChar8 optParams;
++		MSCUShort16 optParamsSize;
++	}
++	MSCCryptInit, *MSCLPCryptInit;
++
++	/*
++	 * Scope definitions for MSCListTokens 
++	 */
++#define MSC_LIST_KNOWN     1	/* Lists known tokens only */
++#define MSC_LIST_SLOTS     2	/* Lists all slots, with or without tokens 
++								 */
++#define MSC_LIST_ALL       3	/* Lists all tokens, known or not */
++
++#define MSC_TOKEN_EMPTY_STR    "Token Removed"
++#define MSC_TOKEN_UNKNOWN_STR  "Token Unknown"
++
++#define MSC_TOKEN_TYPE_REMOVED   1	/* Token was removed at one point */
++#define MSC_TOKEN_TYPE_UNKNOWN   2	/* Token is unknown, state is fine */
++#define MSC_TOKEN_TYPE_KNOWN     4	/* Token is known, state is fine */
++#define MSC_TOKEN_TYPE_RESET     8	/* Token is known, was reset */
++
++	/*
++	 * endAction definitions for MSCReleaseConnection 
++	 */
++#define MSC_LEAVE_TOKEN    SCARD_LEAVE_CARD
++#define MSC_RESET_TOKEN    SCARD_RESET_CARD
++#define MSC_EJECT_TOKEN    SCARD_EJECT_CARD
++
++	/*
++	 * sharingMode for MSCEstablishConnection 
++	 */
++#define MSC_SHARE_SHARED     SCARD_SHARE_SHARED
++#define MSC_SHARE_EXCLUSIVE  SCARD_SHARE_EXCLUSIVE
++#define MSC_SHARE_DIRECT     SCARD_SHARE_DIRECT
++
++	/*
++	 * tokenState for MSCWaitForTokenEvent 
++	 */
++#define MSC_STATE_UNAWARE      0x4000
++#define MSC_STATE_CHANGED      SCARD_STATE_CHANGED
++#define MSC_STATE_UNKNOWN      SCARD_STATE_UNKNOWN
++#define MSC_STATE_UNAVAILABLE  SCARD_STATE_UNAVAILABLE
++#define MSC_STATE_EMPTY        SCARD_STATE_EMPTY
++#define MSC_STATE_PRESENT      SCARD_STATE_PRESENT
++#define MSC_STATE_EXCLUSIVE    SCARD_STATE_EXCLUSIVE
++#define MSC_STATE_INUSE        SCARD_STATE_INUSE
++#define MSC_STATE_MUTE         SCARD_STATE_MUTE
++
++#define MSC_NO_TIMEOUT         INFINITE
++
++/********************** TAGS for GetStatus ********************************/
++
++	/*
++	 * high level tags 
++	 */
++#define MSC_TAG_SUPPORT_FUNCTIONS     101	/* Supported functions */
++#define MSC_TAG_SUPPORT_CRYPTOALG     102	/* Supported crypto algorithms 
++											 */
++
++	/*
++	 * crypto related tags 
++	 */
++#define MSC_TAG_CAPABLE_RSA           103	/* RSA capabilities */
++#define MSC_TAG_CAPABLE_DSA           104	/* DSA capabilities */
++#define MSC_TAG_CAPABLE_ECURVE        105	/* Eliptic Curve capabilities */
++#define MSC_TAG_CAPABLE_ELGAMAL       106	/* El Gamal capabilities */
++
++#define MSC_TAG_CAPABLE_KEY_AUTH      180	/* Key import/gen AUT needed */
++
++#define MSC_TAG_CAPABLE_DES           201	/* DES capabilities */
++#define MSC_TAG_CAPABLE_3DES          202	/* Triple DES capabilities */
++#define MSC_TAG_CAPABLE_IDEA          203	/* IDEA capabilities */
++#define MSC_TAG_CAPABLE_AES           204	/* AES capabilities */
++#define MSC_TAG_CAPABLE_BLOWFISH      205	/* Blowfish capabilities */
++#define MSC_TAG_CAPABLE_TWOFISH       206	/* Twofish capabilities */
++
++#define MSC_TAG_CAPABLE_MD5           207	/* MD5 capabilities */
++#define MSC_TAG_CAPABLE_SHA1          208	/* SHA1 capabilities */
++
++	/*
++	 * object related tags 
++	 */
++#define MSC_TAG_CAPABLE_OBJ_ATTR      301	/* returns general attributes */
++#define MSC_TAG_CAPABLE_OBJ_IDSIZE    302	/* returns size of object id */
++#define MSC_TAG_CAPABLE_OBJ_AUTH      303	/* return AUT needed for
++											 * create */
++#define MSC_TAG_CAPABLE_OBJ_MAXNUM    304	/* maximum number of objects */
++
++	/*
++	 * pin related tags 
++	 */
++#define MSC_TAG_CAPABLE_PIN_ATTR      401	/* returns general attributes */
++#define MSC_TAG_CAPABLE_PIN_MAXNUM    402	/* returns max number of pins */
++#define MSC_TAG_CAPABLE_PIN_MINSIZE   403	/* returns minimum pin size */
++#define MSC_TAG_CAPABLE_PIN_MAXSIZE   404	/* returns maximum pin size */
++#define MSC_TAG_CAPABLE_PIN_CHARSET   405	/* char set supported
++											 * (bitmask) */
++#define MSC_TAG_CAPABLE_PIN_POLICY    406	/* returns pin policy
++											 * (bitmask) */
++#define MSC_TAG_CAPABLE_PIN_AUTH      407	/* return AUT needed for
++											 * create */
++
++#define MSC_TAG_CAPABLE_ID_STATE      501	/* returns state capability */
++
++#define MSC_TAG_CAPABLE_RANDOM        600	/* Random number capabilities */
++#define MSC_TAG_CAPABLE_RANDOM_MAX    601	/* Maximum random number */
++#define MSC_TAG_CAPABLE_RANDOM_MIN    602	/* Minimum random number */
++
++/********************************** END OF TAGS ***************************/
++
++	/*
++	 * Bitmask for TAG MSC_TAG_SUPPORT_FUNCTIONS 
++	 */
++#define MSC_SUPPORT_GENKEYS           0x00000001
++#define MSC_SUPPORT_IMPORTKEY         0x00000002
++#define MSC_SUPPORT_EXPORTKEY         0x00000004
++#define MSC_SUPPORT_COMPUTECRYPT      0x00000008
++#define MSC_SUPPORT_EXTAUTH           0x00000010
++#define MSC_SUPPORT_LISTKEYS          0x00000020
++#define MSC_SUPPORT_CREATEPIN         0x00000040
++#define MSC_SUPPORT_VERIFYPIN         0x00000080
++#define MSC_SUPPORT_CHANGEPIN         0x00000100
++#define MSC_SUPPORT_UNBLOCKPIN        0x00000200
++#define MSC_SUPPORT_LISTPINS          0x00000400
++#define MSC_SUPPORT_CREATEOBJECT      0x00000800
++#define MSC_SUPPORT_DELETEOBJECT      0x00001000
++#define MSC_SUPPORT_WRITEOBJECT       0x00002000
++#define MSC_SUPPORT_READOBJECT        0x00004000
++#define MSC_SUPPORT_LISTOBJECTS       0x00008000
++#define MSC_SUPPORT_LOGOUTALL         0x00010000
++#define MSC_SUPPORT_GETCHALLENGE      0x00020000
++
++	/*
++	 * Bitmask for MSC_TAG_SUPPORT_CRYPTOALG 
++	 */
++#define MSC_SUPPORT_RSA           0x00000001	/* Supports RSA */
++#define MSC_SUPPORT_DSA           0x00000002	/* Supports DSA */
++#define MSC_SUPPORT_ECURVE        0x00000004	/* Supports Eliptic Curve */
++#define MSC_SUPPORT_ELGAMAL       0x00000008	/* Supports El Gamal */
++
++#define MSC_SUPPORT_DES           0x00000010	/* Supports DES */
++#define MSC_SUPPORT_3DES          0x00000020	/* Supports Triple DES */
++#define MSC_SUPPORT_IDEA          0x00000040	/* Supports IDEA */
++#define MSC_SUPPORT_AES           0x00000080	/* Supports AES */
++#define MSC_SUPPORT_BLOWFISH      0x00000100	/* Supports Blowfish */
++#define MSC_SUPPORT_TWOFISH       0x00000200	/* Supports Twofish */
++#define MSC_SUPPORT_SHA1          0x00000400	/* Supports SHA1 */
++#define MSC_SUPPORT_MD5           0x00000800	/* Supports MD5 */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_RSA 
++	 */
++#define MSC_CAPABLE_RSA_512       0x00000001	/* Supports 512 bit RSA */
++#define MSC_CAPABLE_RSA_768       0x00000002	/* Supports 768 bit RSA */
++#define MSC_CAPABLE_RSA_1024      0x00000004	/* Supports 1024 bit RSA */
++#define MSC_CAPABLE_RSA_2048      0x00000008	/* Supports 2048 bit RSA */
++#define MSC_CAPABLE_RSA_4096      0x00000010	/* Supports 4096 bit RSA */
++
++#define MSC_CAPABLE_RSA_KEYGEN    0x00001000	/* Support RSA key-gen */
++#define MSC_CAPABLE_RSA_NOPAD     0x00002000	/* Supports RSA NO PAD */
++#define MSC_CAPABLE_RSA_PKCS1     0x00004000	/* Supports PKCS padding */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_DSA 
++	 */
++#define MSC_CAPABLE_DSA_512       0x00000001	/* Supports 512 bit DSA */
++#define MSC_CAPABLE_DSA_768       0x00000002	/* Supports 768 bit DSA */
++#define MSC_CAPABLE_DSA_1024      0x00000004	/* Supports 1024 bit DSA */
++#define MSC_CAPABLE_DSA_2048      0x00000008	/* Supports 2048 bit DSA */
++#define MSC_CAPABLE_DSA_4096      0x00000010	/* Supports 4096 bit DSA */
++#define MSC_CAPABLE_DSA_KEYGEN    0x00001000	/* Supports DSA key-gen */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_DES 
++	 */
++#define MSC_CAPABLE_DES_KEYGEN    0x00001000	/* Supports DES key-gen */
++#define MSC_CAPABLE_DES_CBC       0x00002000	/* Supports DES CBC mode */
++#define MSC_CAPABLE_DES_EBC       0x00004000	/* Supports DES EBC mode */
++#define MSC_CAPABLE_DES_ECB       0x00008000	/* Supports DES ECB mode */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_3DES 
++	 */
++#define MSC_CAPABLE_3DES_KEYGEN   0x00001000	/* Supports 3DES key-gen */
++#define MSC_CAPABLE_3DES_3KEY     0x00002000	/* Support 3 key 3DES */
++#define MSC_CAPABLE_3DES_CBC      0x00004000	/* Supports 3DES CBC mode */
++#define MSC_CAPABLE_3DES_EBC      0x00008000	/* Supports 3DES EBC mode */
++#define MSC_CAPABLE_3DES_ECB      0x00010000	/* Supports 3DES ECB mode */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_IDEA 
++	 */
++#define MSC_CAPABLE_IDEA_KEYGEN   0x00001000	/* Supports IDEA key-gen */
++#define MSC_CAPABLE_IDEA_CBC      0x00002000	/* Supports IDEA CBC mode */
++#define MSC_CAPABLE_IDEA_ECB      0x00008000	/* Supports IDEA ECB mode */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_AES 
++	 */
++#define MSC_CAPABLE_AES_KEYGEN    0x00001000	/* Supports AES key-gen */
++#define MSC_CAPABLE_AES_CBC       0x00002000	/* Supports AES CBC mode */
++#define MSC_CAPABLE_AES_ECB       0x00008000	/* Supports AES ECB mode */
++
++	/***********************************
++     Bitmasks for other crypto algorithms 
++     will come in future releases 
++    ************************************/
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_OBJ_ATTR 
++	 */
++#define MSC_CAPABLE_OBJ_ZERO      0x00010000	/* Supports zero on DEL */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_PIN_ATTR 
++	 */
++#define MSC_CAPABLE_PIN_RESET     0x00000100	/* Unblock reset's pin */
++#define MSC_CAPABLE_PIN_LEAVE     0x00000200	/* Unblock leaves pin */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_PIN_CHARSET 
++	 */
++#define MSC_CAPABLE_PIN_A_Z       0x00000001	/* Supports uppercase A-Z */
++#define MSC_CAPABLE_PIN_a_z       0x00000002	/* Supports lowercase a-z */
++#define MSC_CAPABLE_PIN_0_9       0x00000004	/* Supports numbers 0-9 */
++#define MSC_CAPABLE_PIN_SPACE     0x00000008	/* Supports spaces */
++#define MSC_CAPABLE_PIN_CALC      0x00000010	/* Supports + - / * % .= */
++#define MSC_CAPABLE_PIN_NONALPHA  0x00000020	/* Supports all other
++												 * chars */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_PIN_POLICY 
++	 */
++#define MSC_CAPABLE_PIN_A_Z       0x00000001	/* Requires uppercase A-Z */
++#define MSC_CAPABLE_PIN_a_z       0x00000002	/* Requires lowercase a-z */
++#define MSC_CAPABLE_PIN_0_9       0x00000004	/* Requires numbers 0-9 */
++#define MSC_CAPABLE_PIN_NONALPHA  0x00000020	/* Requires
++												 * non-alphanumeric */
++#define MSC_CAPABLE_PIN_HISTORY   0x00001000	/* Checks pin history */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_ID_STATE 
++	 */
++#define MSC_CAPABLE_ID_STATE      0x00000001	/* maintains logged id
++												 * state */
++
++	/*
++	 * Bitmask for TAG MSC_TAG_CAPABLE_RANDOM 
++	 */
++#define MSC_CAPABLE_RANDOM_SEED   0x00000001	/* Uses supplied seed */
++
++	/*
++	 * Structure used in MSCGetStatus to return status and capability
++	 * information about the inserted token 
++	 */
++
++	typedef struct
++	{
++		MSCUShort16 appVersion;	/* Applet version number */
++		MSCUShort16 swVersion;	/* Software version number */
++		MSCULong32 freeMemory;	/* Free memory for objects */
++		MSCULong32 totalMemory;	/* Total amount of memory */
++		MSCUChar8 usedPINs;		/* Number of pins used */
++		MSCUChar8 usedKeys;		/* Number of keys used */
++		MSCUShort16 loggedID;	/* Bitmask of ID's verified */
++	}
++	MSCStatusInfo, *MSCLPStatusInfo;
++
++	typedef struct
++	{
++		MSCChar8 objectID[MSC_MAXSIZE_OBJID];
++		MSCULong32 objectSize;
++		MSCObjectACL objectACL;
++	}
++	MSCObjectInfo, *MSCLPObjectInfo;
++
++	/*******************************************************************/
++	/*
++	 * Connection oriented functions 
++	 */
++	/*
++	 * These functions do not coorespond to internal library funcions 
++	 */
++	/*
++	 * but serve to connect to tokens.  You can still use the internal 
++	 */
++	/*
++	 * PC/SC calls to do this.  These provide an abstract means.  
++	 */
++	/*******************************************************************/
++
++	/*
++	 * Lists all known tokens on the system 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	 MSC_RV MSCListTokens(MSCULong32 listScope,	/* defines the scope to
++												 * return */
++		MSCLPTokenInfo tokenArray,	/* token struct array */
++		MSCPULong32 arrayLength	/* Length of array */
++		);
++
++	/*
++	 * Establishes a connection to the specified token 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCEstablishConnection(MSCLPTokenInfo tokenStruct,	/* The
++																 * struct
++																 * of
++																 * token */
++		MSCULong32 sharingMode,	/* Mode of sharing */
++		MSCPUChar8 applicationName,	/* The applet ID/Name */
++		MSCULong32 nameSize,	/* The ID/Name Size */
++		MSCLPTokenConnection pConnection	/* Returned connection */
++		);
++
++	/*
++	 * Releases a connection to the specified token 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCReleaseConnection(MSCLPTokenConnection pConnection,	/* Connection 
++																	 * handle 
++																	 */
++		MSCULong32 endAction	/* Action to perform */
++		);
++
++	/*
++	 * Blocks for an event to occur on a token 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCWaitForTokenEvent(MSCLPTokenInfo tokenArray,	/* Array of
++															 * token
++															 * structs */
++		MSCULong32 arraySize,	/* Size of the array */
++		MSCULong32 timeoutValue	/* Timeout */
++		);
++
++	/*
++	 * Cancels a pending MSCWaitForTokenEvent 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCCancelEventWait(void	/* No parameters */
++		);
++
++	/*
++	 * Registers a callback function for event change 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCCallbackForTokenEvent(MSCLPTokenInfo tokenArray,	/* Array
++																 * of
++																 * token
++																 * structs 
++																 */
++		MSCULong32 arraySize,	/* Size of the array */
++		MSCCallBack callBack,	/* Callback function */
++		MSCPVoid32 appData		/* Application data */
++		);
++
++	/*
++	 * Cancels all callback registrations 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCCallbackCancelEvent(void);
++
++	/*
++	 * Locks a transaction to the token 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCBeginTransaction(MSCLPTokenConnection pConnection	/* Connection 
++																 * handle */
++		);
++
++	/*
++	 * Releases a locked transaction to the token 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCEndTransaction(MSCLPTokenConnection pConnection,	/* Connection 
++																 * handle */
++		MSCULong32 endAction	/* Action to perform on token */
++		);
++
++	/*
++	 * Selects applet - Not to be used by applications 
++	 */
++	MSC_RV MSCSelectAID(MSCLPTokenConnection pConnection,
++		MSCPUChar8 aidValue, MSCULong32 aidSize);
++
++	/*
++	 * Pre-personalization function 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCWriteFramework(MSCLPTokenConnection pConnection,
++		MSCLPInitTokenParams pInitParams);
++
++	/*****************************************************************/
++	/*
++	 * Core Musclecard functions 
++	 */
++	/*
++	 * These functions coorespond directly to internal library 
++	 */
++	/*
++	 * functions.  
++	 */
++	/*****************************************************************/
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCGetStatus(MSCLPTokenConnection pConnection,
++		MSCLPStatusInfo pStatusInfo);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCGetCapabilities(MSCLPTokenConnection pConnection,
++		MSCULong32 Tag, MSCPUChar8 Value, MSCPULong32 Length);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCExtendedFeature(MSCLPTokenConnection pConnection,
++		MSCULong32 extFeature,
++		MSCPUChar8 outData,
++		MSCULong32 outLength, MSCPUChar8 inData, MSCPULong32 inLength);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCGenerateKeys(MSCLPTokenConnection pConnection,
++		MSCUChar8 prvKeyNum,
++		MSCUChar8 pubKeyNum, MSCLPGenKeyParams pParams);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCImportKey(MSCLPTokenConnection pConnection,
++		MSCUChar8 keyNum,
++		MSCLPKeyACL pKeyACL,
++		MSCPUChar8 pKeyBlob,
++		MSCULong32 keyBlobSize,
++		MSCLPKeyPolicy keyPolicy,
++		MSCPVoid32 pAddParams, MSCUChar8 addParamsSize);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCExportKey(MSCLPTokenConnection pConnection,
++		MSCUChar8 keyNum,
++		MSCPUChar8 pKeyBlob,
++		MSCPULong32 keyBlobSize,
++		MSCPVoid32 pAddParams, MSCUChar8 addParamsSize);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCComputeCrypt(MSCLPTokenConnection pConnection,
++		MSCLPCryptInit cryptInit,
++		MSCPUChar8 pInputData,
++		MSCULong32 inputDataSize,
++		MSCPUChar8 pOutputData, MSCPULong32 outputDataSize);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCExtAuthenticate(MSCLPTokenConnection pConnection,
++				  MSCUChar8 keyNum,
++				  MSCUChar8 cipherMode,
++				  MSCUChar8 cipherDirection, 
++				  MSCPUChar8 pData, 
++				  MSCULong32 dataSize);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCListKeys(MSCLPTokenConnection pConnection,
++			   MSCUChar8 seqOption, 
++			   MSCLPKeyInfo pKeyInfo);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCCreatePIN(MSCLPTokenConnection pConnection,
++			    MSCUChar8 pinNum,
++			    MSCUChar8 pinAttempts,
++			    MSCPUChar8 pPinCode,
++			    MSCULong32 pinCodeSize,
++			    MSCPUChar8 pUnblockCode, 
++			    MSCUChar8 unblockCodeSize);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCVerifyPIN(MSCLPTokenConnection pConnection,
++			    MSCUChar8 pinNum, 
++			    MSCPUChar8 pPinCode, 
++			    MSCULong32 pinCodeSize);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCChangePIN(MSCLPTokenConnection pConnection,
++		MSCUChar8 pinNum,
++		MSCPUChar8 pOldPinCode,
++		MSCUChar8 oldPinCodeSize,
++		MSCPUChar8 pNewPinCode, MSCUChar8 newPinCodeSize);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCUnblockPIN(MSCLPTokenConnection pConnection,
++		MSCUChar8 pinNum,
++		MSCPUChar8 pUnblockCode, MSCULong32 unblockCodeSize);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCListPINs(MSCLPTokenConnection pConnection,
++		MSCPUShort16 pPinBitMask);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCCreateObject(MSCLPTokenConnection pConnection,
++		MSCString objectID,
++		MSCULong32 objectSize, MSCLPObjectACL pObjectACL);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCDeleteObject(MSCLPTokenConnection pConnection,
++		MSCString objectID, MSCUChar8 zeroFlag);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCWriteObject(MSCLPTokenConnection pConnection,
++		MSCString objectID, MSCULong32 offset, 
++		MSCPUChar8 pInputData, MSCULong32 dataSize,
++		LPRWEventCallback rwCallback, MSCPVoid32 addParams);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCReadObject(MSCLPTokenConnection pConnection,
++		MSCString objectID, MSCULong32 offset, 
++                MSCPUChar8 pOutputData, MSCULong32 dataSize,
++		LPRWEventCallback rwCallback, MSCPVoid32 addParams);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCReadAllocateObject(MSCLPTokenConnection pConnection,
++		MSCString objectID, MSCPUChar8 *pOutputData, 
++                MSCPULong32 dataSize,
++                LPRWEventCallback rwCallback, MSCPVoid32 addParams);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCListObjects(MSCLPTokenConnection pConnection,
++		MSCUChar8 seqOption, MSCLPObjectInfo pObjectInfo);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCLogoutAll(MSCLPTokenConnection pConnection);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCGetChallenge(MSCLPTokenConnection pConnection,
++		MSCPUChar8 pSeed,
++		MSCUShort16 seedSize,
++		MSCPUChar8 pRandomData, MSCUShort16 randomDataSize);
++
++	/*****************************************************************/
++	/*
++	 * Extended Musclecard functions 
++	 */
++	/*
++	 * These functions do not coorespond to internal library funcions 
++	 */
++	/*
++	 * but rather use them to provide some extended functionality.  
++	 */
++	/*****************************************************************/
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCGetKeyAttributes(MSCLPTokenConnection pConnection,
++				   MSCUChar8 keyNumber, 
++				   MSCLPKeyInfo pKeyInfo);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSC_RV MSCGetObjectAttributes(MSCLPTokenConnection pConnection,
++				      MSCString objectID, 
++				      MSCLPObjectInfo pObjectInfo);
++
++#ifdef WIN32
++	PCSC_API
++#endif
++	char *msc_error(unsigned long int errorCode);
++
++	/*
++	 * Was the token reset ? 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSCUChar8 MSCIsTokenReset(MSCLPTokenConnection pConnection);
++
++	/*
++	 * Clear the Reset state 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSCUChar8 MSCClearReset(MSCLPTokenConnection pConnection);
++
++	/*
++	 * Was the token moved (removed, removed/inserted) ? 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSCUChar8 MSCIsTokenMoved(MSCLPTokenConnection pConnection);
++
++	/*
++	 * Did any state change with the token ? 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSCUChar8 MSCIsTokenChanged(MSCLPTokenConnection pConnection);
++
++	/*
++	 * Is the token recognized ? 
++	 */
++#ifdef WIN32
++	PCSC_API
++#endif
++	MSCUChar8 MSCIsTokenKnown(MSCLPTokenConnection pConnection);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif							/* __musclecard_h__ */
+--- /dev/null	2023-04-21 18:07:23.982980000 +0800
++++ src/PCSC/readerstate.h	2023-04-20 19:19:13.057285000 +0800
+@@ -0,0 +1,117 @@
++/*
++ * Copyright (c) 2007 Apple Computer, Inc. All Rights Reserved.
++ * 
++ * @APPLE_LICENSE_HEADER_START@
++ * 
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this
++ * file.
++ * 
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ * 
++ * @APPLE_LICENSE_HEADER_END@
++ */
++
++/*
++ *  readerstate.h
++ *  SmartCardServices
++ */
++
++#ifndef _H_PCSCD_READER_STATE
++#define _H_PCSCD_READER_STATE
++
++#include "wintypes.h"
++#include "pcsclite.h"
++#include "readerfactory.h"
++#include "eventhandler.h"
++#include <MacTypes.h>
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++DWORD SharedReaderState_State(READER_STATE *rs);
++DWORD SharedReaderState_Protocol(READER_STATE *rs);
++DWORD SharedReaderState_Sharing(READER_STATE *rs);
++size_t SharedReaderState_CardAtrLength(READER_STATE *rs);
++LONG SharedReaderState_ReaderID(READER_STATE *rs);
++const unsigned char *SharedReaderState_CardAtr(READER_STATE *rs);
++const char *SharedReaderState_ReaderName(READER_STATE *rs);
++int SharedReaderState_ReaderNameIsEqual(READER_STATE *rs, const char *otherName);
++void SharedReaderState_SetState(READER_STATE *rs, DWORD state);
++void SharedReaderState_SetProtocol(READER_STATE *rs, DWORD newprotocol);
++void SharedReaderState_SetCardAtrLength(READER_STATE *rs, size_t len);
++
++#ifdef __cplusplus
++}
++#endif
++
++
++#if defined(__cplusplus)
++
++#warning #include <security_utilities/threading.h>
++
++namespace PCSCD {
++
++//
++// NB: We are using the fact that on our systems, mutexes provide read/write
++// memory barrier as a side effect to avoid having to flush the shared memory
++// region to disk
++//
++
++
++//
++// A PODWrapper for the PCSC ReaderState structure
++//
++class SharedReaderState : public PodWrapper<SharedReaderState, READER_STATE>
++{
++public:
++
++	LONG xreaderID() const {  Atomic<int>::barrier(); return ntohl(readerID); }
++	void xreaderID(LONG rid) { Atomic<int>::barrier(); readerID = htonl(rid); }
++	
++	DWORD xreaderState() const { Atomic<int>::barrier(); return ntohl(readerState); }
++	void xreaderState(DWORD state) { Atomic<int>::barrier(); readerState = htonl(state); }
++
++	DWORD sharing() const { Atomic<int>::barrier(); return ntohl(readerSharing); }
++	void sharing(DWORD sharing) { Atomic<int>::barrier(); readerSharing = htonl(sharing); }
++
++	DWORD xlockState() const { Atomic<int>::barrier(); return ntohl(lockState); }
++	void xlockState(DWORD state) { Atomic<int>::barrier(); lockState = htonl(state); }
++
++	DWORD xcardProtocol() const { Atomic<int>::barrier(); return ntohl(cardProtocol); }
++	void xcardProtocol(DWORD prot) { Atomic<int>::barrier(); cardProtocol = htonl(prot); }
++
++	// strings
++	const char *xreaderName() const	{ Atomic<int>::barrier(); return readerName; }
++	void xreaderName(const char *rname, size_t len = MAX_READERNAME)	{ Atomic<int>::barrier(); strlcpy(readerName, rname, len); }
++	size_t readerNameLength() const { return strlen(readerName); }
++	void xreaderNameClear()	{ Atomic<int>::barrier(); memset(readerName, 0, sizeof(readerName));  }
++
++	const unsigned char *xcardAtr() const	{ Atomic<int>::barrier(); return cardAtr; }
++	unsigned char *xcardAtr() 	{ Atomic<int>::barrier(); return cardAtr; }
++	void xcardAtr(const unsigned char *atr, size_t len)	{ Atomic<int>::barrier(); 
++		memcpy((char *)&cardAtr[0], (const char *)atr, len); cardAtrLength = htonl(len); }
++	size_t xcardAtrLength() const { Atomic<int>::barrier(); return ntohl(cardAtrLength); }
++	void xcardAtrLength(DWORD len)  { Atomic<int>::barrier(); cardAtrLength = htonl(len); }
++	void xcardAtrClear()	{ Atomic<int>::barrier(); memset(cardAtr, 0, sizeof(cardAtr));  }
++};
++
++
++
++} // end namespace PCSCD
++
++#endif /* __cplusplus__ */
++
++#endif //_H_PCSCD_READER_STATE
++
+--- /dev/null	2023-04-21 18:07:31.327789000 +0800
++++ src/PCSC/tokenfactory.h	2023-04-20 19:00:00.784192353 +0800
+@@ -0,0 +1,61 @@
++/*
++ * Copyright (c) 2000-2002 Apple Computer, Inc. All Rights Reserved.
++ * The contents of this file constitute Original Code as defined in and are
++ * subject to the Apple Public Source License Version 1.2 (the 'License').
++ * You may not use this file except in compliance with the License. Please
++ * obtain a copy of the License at http://www.apple.com/publicsource and
++ * read it before using this file.
++ *
++ * This Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, FITNESS
++ * FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. Please
++ * see the License for the specific language governing rights and
++ * limitations under the License.
++ */
++
++/******************************************************************
++
++	MUSCLE SmartCard Development ( http://www.linuxnet.com )
++	    Title  : tokenfactory.h
++	    Package: pcsc-lite
++            Author : David Corcoran
++            Date   : 01/01/00
++            Purpose: This handles card abstraction attachment. 
++	            
++********************************************************************/
++
++#ifndef __cardfactory_h__
++#define __cardfactory_h__
++
++#include "mscdefines.h"
++
++#ifdef __cplusplus
++extern "C"
++{
++#endif
++
++#ifndef WIN32
++#ifndef MSC_SVC_DROPDIR
++#define MSC_SVC_DROPDIR                     TPSvcDropdir()
++#define MSC_SVC_DROPDIR_DEFAULT             "/usr/libexec/SmartCardServices/services/"
++#define MSC_SVC_DROPDIR_ENV                 "MSC_SVC_DROPDIR"
++#endif
++#else
++#define MSC_SVC_DROPDIR                     "C:\\Program Files\\Muscle\\Services\\"
++#endif
++
++	const char *TPSvcDropdir(void);
++	MSCLong32 TPLoadToken(MSCLPTokenConnection);
++	MSCLong32 TPUnloadToken(MSCLPTokenConnection);
++	MSCLong32 TPBindFunctions(MSCLPTokenConnection);
++	MSCLong32 TPUnbindFunctions(MSCLPTokenConnection);
++	MSCLong32 TPSearchBundlesForAtr(MSCPUChar8 Atr, MSCULong32 Length,
++		MSCLPTokenInfo tokenInfo);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif							/* __cardfactory_h__ */
+--- /dev/null	2023-04-21 18:07:35.733644000 +0800
++++ src/bundleTool.c	2023-04-20 20:29:05.792101917 +0800
+@@ -0,0 +1,222 @@
++/*
++ * Copyright (c) 2000-2002 Apple Computer, Inc. All Rights Reserved.
++ * The contents of this file constitute Original Code as defined in and are
++ * subject to the Apple Public Source License Version 1.2 (the 'License').
++ * You may not use this file except in compliance with the License. Please
++ * obtain a copy of the License at http://www.apple.com/publicsource and
++ * read it before using this file.
++ *
++ * This Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, FITNESS
++ * FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. Please
++ * see the License for the specific language governing rights and
++ * limitations under the License.
++ */
++
++/******************************************************************
++ 
++	MUSCLE SmartCard Development ( http://www.linuxnet.com )
++	Title  : bundleTool.c
++	Package: MuscleCard Framework
++	Author : David Corcoran
++	Date   : 03/11/01
++	License: Copyright (C) 2002 David Corcoran
++			<corcoran@linuxnet.com>
++	Purpose: This automatically updates the Info.plist
++
++	You may not remove this header from this file
++	without prior permission from the author.
++
++$Id: bundleTool.c 123 2010-03-27 10:50:42Z ludovic.rousseau@gmail.com $
++ 
++********************************************************************/
++
++#include "wintypes.h"
++#include "winscard.h"
++#include "tokenfactory.h"
++
++#include <string.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#include <dirent.h>
++#include <stdio.h>
++#include <fcntl.h>
++#include <stdlib.h>
++
++/*
++ * End of personalization 
++ */
++
++#define CHECK_ERR(cond, msg) { if (cond) { \
++  printf("Error: %s\n", msg); return -1; } }
++
++int main(int argc, char **argv)
++{
++
++	LONG rv;
++	SCARDCONTEXT hContext;
++	SCARD_READERSTATE rgReaderStates;
++	DWORD readerListSize;
++	struct stat statBuffer;
++	char spAtrValue[100];
++	char chosenInfoPlist[1024];
++	char *readerList;
++	char *restFile;
++	char atrInsertion[256];
++	FILE *fp;
++	DIR *bundleDir;
++	struct dirent *currBundle;
++	int i, p;
++	int userChoice;
++	int totalBundles;
++	int filePosition;
++	int restFileSize;
++	int restOffset;
++	int getsSize;
++
++	if (argc > 1)
++	{
++		printf("Invalid arguments\n");
++		printf("./bundleTool\n");
++		return -1;
++	}
++
++	currBundle = 0;
++
++	bundleDir = opendir(MSC_SVC_DROPDIR);
++	CHECK_ERR(bundleDir == 0, "Could not open services directory.");
++        
++	printf("Select the approprate token driver:\n");
++	printf("-----------------------------------\n");
++
++	i = 1;
++	totalBundles = 0;
++
++	while ((currBundle = readdir(bundleDir)) != 0)
++	{
++		if (strstr(currBundle->d_name, ".bundle") != 0)
++		{
++			printf("  %d.     %s\n", i++, currBundle->d_name);
++			totalBundles += 1;
++		}
++	}
++	printf("-----------------------------------\n");
++
++	if (totalBundles == 0)
++	{
++		printf("No services are present - exiting.\n");
++		return 1;
++	}
++
++	do
++	{
++		printf("Enter the number: ");
++		scanf("%d", &userChoice);
++	}
++	while (userChoice < 1 && userChoice > totalBundles);
++
++	closedir(bundleDir);
++
++	bundleDir = opendir(MSC_SVC_DROPDIR);
++	CHECK_ERR(bundleDir == 0, "Could not open services directory.");
++	CHECK_ERR(bundleDir == 0, MSC_SVC_DROPDIR);
++
++	do
++	{
++		if ((currBundle = readdir(bundleDir)) != 0)
++		{
++			if (strstr(currBundle->d_name, ".bundle") != 0)
++			{
++				userChoice -= 1;
++			}
++		}
++	}
++	while (userChoice != 0);
++
++	snprintf(chosenInfoPlist, sizeof(chosenInfoPlist),
++		"%s%s/Contents/Info.plist", MSC_SVC_DROPDIR, currBundle->d_name);
++	closedir(bundleDir);
++	printf("\n");
++
++	rv = SCardEstablishContext(SCARD_SCOPE_SYSTEM, 0, 0, &hContext);
++	CHECK_ERR(rv != SCARD_S_SUCCESS, "PC/SC SCardEstablishContext Failed");
++
++	readerListSize = 0;
++	rv = SCardListReaders(hContext, 0, 0, &readerListSize);
++	CHECK_ERR(rv != SCARD_S_SUCCESS, "PC/SC SCardListReaders Failed");
++
++	readerList = (char *) malloc(sizeof(char) * readerListSize);
++	CHECK_ERR(readerList == 0, "Malloc Failed");
++
++	rv = SCardListReaders(hContext, 0, readerList, &readerListSize);
++	CHECK_ERR(rv != SCARD_S_SUCCESS, "PC/SC SCardListReaders Alloc Failed");
++
++	printf("Insert your token in: %s\n", readerList);
++
++	rgReaderStates.szReader = readerList;
++	rgReaderStates.dwCurrentState = SCARD_STATE_EMPTY;
++
++	rv = SCardGetStatusChange(hContext, INFINITE, &rgReaderStates, 1);
++	CHECK_ERR(rv != SCARD_S_SUCCESS, "PC/SC SCardGetStatusChange Failed");
++
++	p = 0;
++	for (i = 0; i < rgReaderStates.cbAtr; i++)
++	{
++		sprintf(&spAtrValue[p], "%02X", rgReaderStates.rgbAtr[i]);
++		p += 2;
++	}
++	printf("\n");
++
++	snprintf(atrInsertion, sizeof(atrInsertion),
++		"        <string>%s</string>\n", spAtrValue);
++
++	fp = fopen(chosenInfoPlist, "r+");
++	if (fp == 0)
++	{
++		printf("Could not open %s\n", chosenInfoPlist);
++	}
++	CHECK_ERR(fp == 0, "Opening of Info.plist failed.");
++
++	rv = stat(chosenInfoPlist, &statBuffer);
++	CHECK_ERR(rv != 0, "File Stat failed\n");
++
++	restFileSize = statBuffer.st_size + strlen(atrInsertion);
++	restFile = (char *) malloc(sizeof(char) * restFileSize);
++	CHECK_ERR(restFile == 0, "Malloc failed");
++
++	filePosition = 0;
++	restOffset = 0;
++	getsSize = 0;
++
++	do
++	{
++		if (fgets(&restFile[restOffset], restFileSize, fp) == 0)
++		{
++			break;
++		}
++
++		if (strstr(&restFile[restOffset], "<key>spAtrValue</key>"))
++		{
++			filePosition = ftell(fp);
++		}
++
++		getsSize = strlen(&restFile[restOffset]);
++		restOffset += getsSize;
++	}
++	while (1);
++
++	rewind(fp);
++	fwrite(restFile, 1, filePosition, fp);
++	fwrite(atrInsertion, 1, strlen(atrInsertion), fp);
++	fwrite(&restFile[filePosition], 1,
++		statBuffer.st_size - filePosition, fp);
++
++	fclose(fp);
++
++	printf("Token support updated successfully !\n");
++
++	return 0;
++}
+--- /dev/null	2023-04-21 18:08:31.941832000 +0800
++++ src/musclecard.c	2023-04-20 19:44:27.511765011 +0800
+@@ -0,0 +1,2285 @@
++/*
++ * Copyright (c) 2000-2002 Apple Computer, Inc. All Rights Reserved.
++ * The contents of this file constitute Original Code as defined in and are
++ * subject to the Apple Public Source License Version 1.2 (the 'License').
++ * You may not use this file except in compliance with the License. Please
++ * obtain a copy of the License at http://www.apple.com/publicsource and
++ * read it before using this file.
++ *
++ * This Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, FITNESS
++ * FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. Please
++ * see the License for the specific language governing rights and
++ * limitations under the License.
++ */
++
++/******************************************************************
++ 
++        MUSCLE SmartCard Development ( http://www.linuxnet.com )
++            Title  : musclecard.c
++            Package: MuscleCard Framework
++            Author : David Corcoran
++            Date   : 09/26/01
++            License: Copyright (C) 2001-2002 David Corcoran
++                     <corcoran@linuxnet.com>
++            Purpose: This loads MuscleCard plug-ins and provides
++	    functions for applications.
++
++	    You may not remove this header from this file without 
++	    prior permission from the author.
++  
++********************************************************************/
++
++#ifndef WIN32
++#include "config.h"
++#else
++#include "../win32/win32_config.h"
++#endif
++
++#include "musclecard.h"
++#include "tokenfactory.h"
++#include "debuglog.h"
++
++#ifdef USE_THREAD_SAFETY
++#ifndef WIN32
++#include "wintypes.h"
++#endif
++#include "thread_generic.h"
++#include "sys_generic.h"
++#endif
++
++#ifdef USE_THREAD_SAFETY
++static PCSCLITE_MUTEX mcardMutex = PTHREAD_MUTEX_INITIALIZER;
++#endif
++
++#include <string.h>
++#include <stdlib.h>
++#include <stdio.h>
++
++static SCARDCONTEXT localHContext = 0;
++
++#ifdef USE_THREAD_SAFETY
++static PCSCLITE_THREAD_T callbackThread;
++#endif
++
++/*
++ * internal function 
++ */
++MSC_RV pcscToMSC(MSCLong32);
++MSC_RV MSCReEstablishConnection(MSCLPTokenConnection);
++
++void mscLockThread()
++{
++#ifdef USE_THREAD_SAFETY
++	SYS_MutexLock(&mcardMutex);
++#endif
++}
++
++void mscUnLockThread()
++{
++#ifdef USE_THREAD_SAFETY
++	SYS_MutexUnLock(&mcardMutex);
++#endif
++}
++
++/**************** MSC Connection Functions **************************/
++
++MSC_RV MSCListTokens(MSCULong32 listScope, MSCLPTokenInfo tokenArray,
++		     MSCPULong32 arrayLength)
++{
++
++	MSCLong32 rv;
++	SCARD_READERSTATE rgReaderStates;
++	MSCTokenInfo tokenInfo;
++	MSCLPTokenInfo currentToken;
++	MSCULong32 tokensFound;
++	MSCULong32 readerLength;
++	char *readerList;
++	int i, strLoc;
++
++	readerLength = 0;
++	tokensFound = 0;
++	readerList = 0;
++	strLoc = 0;
++	i = 0;
++
++	if (arrayLength == 0)
++		return MSC_INVALID_PARAMETER;
++	if (listScope != MSC_LIST_KNOWN &&
++		listScope != MSC_LIST_ALL && listScope != MSC_LIST_SLOTS)
++	{
++		return MSC_INVALID_PARAMETER;
++	}
++
++	mscLockThread();
++	if (localHContext == 0)
++	{
++		rv = SCardEstablishContext(SCARD_SCOPE_SYSTEM, 0, 0,
++			&localHContext);
++		if (pcscToMSC(rv) != MSC_SUCCESS)
++		{
++			localHContext = 0;
++			mscUnLockThread();
++			return pcscToMSC(rv);
++		}
++	}
++	mscUnLockThread();
++
++	/*
++	 * Get the reader list size 
++	 */
++	rv = SCardListReaders(localHContext, 0, readerList, &readerLength);
++
++	if (pcscToMSC(rv) != MSC_SUCCESS)
++	{
++		return pcscToMSC(rv);
++	}
++
++	readerList = (char *) malloc(sizeof(char) * readerLength);
++
++	if (readerList == 0)
++	{
++		return MSC_INTERNAL_ERROR;
++	}
++
++	rv = SCardListReaders(localHContext, 0, readerList, &readerLength);
++
++	/*
++	 * Now that we have the readers, lets check their status 
++	 */
++	for (i = 0; i < readerLength - 1; i++)
++	{
++		rgReaderStates.szReader = &readerList[i];
++		rgReaderStates.dwCurrentState = SCARD_STATE_UNAWARE;
++
++		rv = SCardGetStatusChange(localHContext, INFINITE, 
++					  &rgReaderStates,
++					  1);
++
++		if (pcscToMSC(rv) != MSC_SUCCESS)
++		{
++			if (readerList)
++				free(readerList);
++			return pcscToMSC(rv);
++		}
++
++		/*
++		 * We only care about slots with a token unless stated 
++		 */
++		if ((rgReaderStates.dwEventState & SCARD_STATE_PRESENT) ||
++			(listScope == MSC_LIST_SLOTS))
++		{
++
++			if (rgReaderStates.dwEventState & SCARD_STATE_PRESENT)
++			{
++				/*
++				 * We only care about supported tokens 
++				 */
++				rv = TPSearchBundlesForAtr(rgReaderStates.rgbAtr,
++					rgReaderStates.cbAtr, &tokenInfo);
++			}
++
++			/*
++			 * Success for this function 
++			 */
++			if ((rv == 0) || (listScope == MSC_LIST_SLOTS) ||
++				(listScope == MSC_LIST_ALL))
++			{
++
++				/*
++				 * We found something interesting to the application 
++				 */
++				tokensFound += 1;
++
++				if ((tokensFound <= *arrayLength) && (tokenArray != 0))
++				{
++					currentToken = &tokenArray[tokensFound - 1];
++					currentToken->addParams     = 0;
++					currentToken->addParamsSize = 0;
++                                        currentToken->tokenType     = 0;  /* Vinnie 1693 */
++
++					if (rgReaderStates.dwEventState & SCARD_STATE_EMPTY)
++					{
++						currentToken->tokenType |= MSC_TOKEN_TYPE_REMOVED;
++						strncpy(currentToken->tokenName,
++							MSC_TOKEN_EMPTY_STR, MSC_MAXSIZE_TOKENAME);
++					} else if (rv == 0)
++					{
++						currentToken->tokenType |= MSC_TOKEN_TYPE_KNOWN;
++						strncpy(currentToken->tokenName,
++							tokenInfo.tokenName, MSC_MAXSIZE_TOKENAME);
++					} else
++					{
++						currentToken->tokenType |= MSC_TOKEN_TYPE_UNKNOWN;
++						strncpy(currentToken->tokenName,
++							MSC_TOKEN_UNKNOWN_STR, MSC_MAXSIZE_TOKENAME);
++					}
++
++					strncpy(currentToken->slotName,
++						rgReaderStates.szReader, MAX_READERNAME);
++
++					if (rgReaderStates.dwEventState & SCARD_STATE_PRESENT)
++					{
++						memcpy(currentToken->tokenId,
++							rgReaderStates.rgbAtr, rgReaderStates.cbAtr);
++						currentToken->tokenIdLength = rgReaderStates.cbAtr;
++					}
++					else
++					{
++						memset(currentToken->tokenId, 0x00, MAX_ATR_SIZE);
++						currentToken->tokenIdLength = 0x00;
++					}
++
++					if (rv == 0)
++					{
++						memcpy(currentToken->tokenApp,
++							tokenInfo.tokenApp, tokenInfo.tokenAppLen);
++							currentToken->tokenAppLen = tokenInfo.tokenAppLen;
++
++						strncpy(currentToken->svProvider,
++							tokenInfo.svProvider, MSC_MAXSIZE_SVCPROV);
++					} else
++					{
++						memset(currentToken->tokenApp, 0x00, MSC_MAXSIZE_AID);
++						currentToken->tokenAppLen = 0x00;
++						memset(currentToken->svProvider, 0x00, MSC_MAXSIZE_SVCPROV);
++					}
++
++					currentToken->tokenState = rgReaderStates.dwEventState;
++
++				}
++			}
++			/*
++			 * End of TPSearch success 
++			 */
++		}
++		/*
++		 * End of if token present 
++		 */
++		while (readerList[++i] != 0) ;
++	}	/* End of for .. readers */
++
++	if (readerList)
++		free(readerList);
++
++	/*
++	 * Application provides null requesting length 
++	 */
++	if (tokenArray == 0)
++	{
++		*arrayLength = tokensFound;
++		return MSC_SUCCESS;
++	}
++
++	/*
++	 * Provided length is too small 
++	 */
++	if (*arrayLength < tokensFound)
++	{
++		*arrayLength = tokensFound;
++		return MSC_INSUFFICIENT_BUFFER;
++	}
++
++	*arrayLength = tokensFound;
++	return MSC_SUCCESS;
++}
++
++MSC_RV MSCEstablishConnection(MSCLPTokenInfo tokenStruct,
++			      MSCULong32 sharingMode,
++			      MSCPUChar8 applicationName,
++			      MSCULong32 nameSize, 
++			      MSCLPTokenConnection pConnection)
++{
++	MSCLong32 rv;
++	MSCULong32 tokenSize;
++	MSCLPTokenInfo tokenList;
++	MSCPVoid32 vInitFunction;
++	MSCPVoid32 vIdFunction;
++	MSCLong32(*libPL_MSCInitializePlugin) (MSCLPTokenConnection);
++	MSCLong32(*libPL_MSCIdentifyToken) (MSCLPTokenConnection);
++	MSCULong32 dwActiveProtocol;
++	int selectedIFD;
++	char slotName[MAX_READERNAME];
++	MSCULong32 slotNameSize, slotState, slotProtocol;
++	MSCUChar8 tokenId[MAX_ATR_SIZE];
++	MSCULong32 tokenIdLength;
++
++	tokenSize = 0;
++	tokenList = 0;
++	tokenSize = 0;
++	selectedIFD = -1;
++	tokenIdLength = sizeof(tokenId);
++	slotState = 0;
++	slotProtocol = 0;
++	slotNameSize = sizeof(slotName);
++	vIdFunction = 0;
++	vInitFunction = 0;
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (tokenStruct == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (nameSize > MSC_MAXSIZE_AID)
++		return MSC_INVALID_PARAMETER;
++
++	pConnection->tokenLibHandle = 0;
++	pConnection->hContext = 0;
++	pConnection->tokenInfo.tokenIdLength = 0;
++	pConnection->shareMode = 0;
++
++	/*
++	 * Check the token name strings 
++	 */
++	if (sharingMode != MSC_SHARE_DIRECT)
++	{
++		if (strcmp(tokenStruct->tokenName, MSC_TOKEN_EMPTY_STR) == 0)
++		{
++			return MSC_TOKEN_REMOVED;
++		} else if (strcmp(tokenStruct->tokenName,
++				MSC_TOKEN_UNKNOWN_STR) == 0)
++		{
++			return MSC_UNRECOGNIZED_TOKEN;
++		}
++	}
++
++	/*
++	 * Set up the initial connection to the resource manager 
++	 */
++
++	mscLockThread();
++	if (localHContext == 0)
++	{
++		rv = SCardEstablishContext(SCARD_SCOPE_SYSTEM, 0, 0,
++			&localHContext);
++#ifdef MSC_DEBUG
++		DebugLogB("SCardEstablishContext returns %s\n",
++			pcsc_stringify_error(rv));
++#endif
++		if (pcscToMSC(rv) != MSC_SUCCESS)
++		{
++			localHContext = 0;
++			mscUnLockThread();
++			return pcscToMSC(rv);
++		}
++
++		pConnection->hContext = localHContext;
++	} else
++	{
++		pConnection->hContext = localHContext;
++	}
++	mscUnLockThread();
++
++#ifdef WIN32
++	rv = SCardConnect(pConnection->hContext, tokenStruct->slotName,
++		SCARD_SHARE_SHARED, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1,
++		&pConnection->hCard, &dwActiveProtocol);
++#else
++	rv = SCardConnect(pConnection->hContext, tokenStruct->slotName,
++		sharingMode, SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1,
++		&pConnection->hCard, &dwActiveProtocol);
++#endif
++
++#ifdef MSC_DEBUG
++	DebugLogB("SCardConnect returns %s\n", pcsc_stringify_error(rv));
++#endif
++
++	if (pcscToMSC(rv) != MSC_SUCCESS)
++	{
++		return pcscToMSC(rv);
++	}
++
++	/*
++	 * Set the sendPCI value based on the ActiveProtocol 
++	 */
++	switch (dwActiveProtocol)
++	{
++	case SCARD_PROTOCOL_T0:
++		pConnection->ioType = SCARD_PCI_T0;
++		break;
++	case SCARD_PROTOCOL_T1:
++		pConnection->ioType = SCARD_PCI_T1;
++		break;
++	default:
++		pConnection->ioType = SCARD_PCI_RAW;
++		break;
++	}
++
++	/*
++	 * Call SCardStatus, make sure the card information matches if it does 
++	 * not return an error.  If it does, copy it 
++	 */
++
++	rv = SCardStatus(pConnection->hCard, slotName,
++		&slotNameSize, &slotState, &slotProtocol, tokenId, &tokenIdLength);
++
++#ifdef MSC_DEBUG
++	DebugLogB("SCardStatus returns %s\n", pcsc_stringify_error(rv));
++#endif
++
++	if (pcscToMSC(rv) != MSC_SUCCESS)
++	{
++		SCardDisconnect(pConnection->hCard, SCARD_LEAVE_CARD);
++		pConnection->hCard = 0;
++		return pcscToMSC(rv);
++	}
++
++	if ((sharingMode == MSC_SHARE_DIRECT) && (slotState & SCARD_ABSENT))
++	{
++
++		/*
++		 * They asked for direct mode and no card is inserted so we are
++		 * done with this 
++		 */
++		pConnection->shareMode = sharingMode;
++		return MSC_SUCCESS;
++	}
++
++	if ((tokenIdLength != tokenStruct->tokenIdLength) ||
++		(strcmp(slotName, tokenStruct->slotName) != 0) ||
++		(memcmp(tokenId, tokenStruct->tokenId, tokenIdLength) != 0))
++	{
++	        DebugLogA("Internal inconsistent values, ID, slotName\n");
++		SCardDisconnect(pConnection->hCard, SCARD_LEAVE_CARD);
++		pConnection->hCard = 0;
++		return MSC_INCONSISTENT_STATUS;
++	}
++
++	memcpy(pConnection->tokenInfo.tokenId, tokenId, tokenIdLength);
++	pConnection->tokenInfo.tokenIdLength = tokenIdLength;
++	strncpy(pConnection->tokenInfo.slotName, tokenStruct->slotName,
++		MAX_READERNAME);
++	strncpy(pConnection->tokenInfo.tokenName, tokenStruct->tokenName,
++		MSC_MAXSIZE_TOKENAME);
++
++	/*
++	 * Load the library for the token 
++	 */
++	rv = TPLoadToken(pConnection);
++
++#ifdef MSC_DEBUG
++	DebugLogB("TPLoadToken returns %s\n", pcsc_stringify_error(rv));
++#endif
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		SCardDisconnect(pConnection->hCard, SCARD_LEAVE_CARD);
++		pConnection->hCard = 0;
++		return pcscToMSC(rv);
++	}
++
++	/*
++	 * Select the AID or initialization routine for the card 
++	 */
++	vInitFunction = pConnection->libPointers.pvfInitializePlugin;
++	vIdFunction = pConnection->libPointers.pvfIdentifyToken;
++
++	if (vInitFunction == 0)
++	{
++		DebugLogB("Error: Card service failure: %s\n",
++			"InitializePlugin function missing");
++		SCardDisconnect(pConnection->hCard, SCARD_LEAVE_CARD);
++		pConnection->hCard = 0;
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	if (vIdFunction == 0)
++	{
++		DebugLogB("Error: Card service failure: %s\n",
++			"IdentifyToken function missing");
++		SCardDisconnect(pConnection->hCard, SCARD_LEAVE_CARD);
++		pConnection->hCard = 0;
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	libPL_MSCInitializePlugin = (MSCLong32(*)(MSCLPTokenConnection))
++		vInitFunction;
++
++	libPL_MSCIdentifyToken = (MSCLong32(*)(MSCLPTokenConnection))
++		vIdFunction;
++
++	rv = (*libPL_MSCInitializePlugin) (pConnection);
++
++	if (rv != MSC_SUCCESS)
++	{
++	        SCardDisconnect(pConnection->hCard, SCARD_LEAVE_CARD);
++	        if (pConnection->tokenLibHandle != 0)
++	        {
++		       TPUnloadToken(pConnection);
++		       pConnection->tokenLibHandle = 0;
++	        }
++	        pConnection->hCard = 0;
++	}
++
++	if (sharingMode != MSC_SHARE_DIRECT)
++	{
++
++	        if ((applicationName == 0) || (nameSize == 0))
++	        {
++		        /*
++		         * Use the default AID given by the Info.plist 
++		         */
++
++		         rv = (*libPL_MSCIdentifyToken) (pConnection);
++  	        } else
++	        {
++		        pConnection->tokenInfo.tokenAppLen = nameSize;
++		        memcpy(pConnection->tokenInfo.tokenApp, 
++			       applicationName, nameSize);
++		        rv = (*libPL_MSCIdentifyToken) (pConnection);
++	        }
++
++#ifdef MSC_DEBUG
++	DebugLogB("MSCIdentifyToken returns %s\n", msc_error(rv));
++#endif
++
++		if (rv != MSC_SUCCESS)
++		{
++			SCardDisconnect(pConnection->hCard, SCARD_LEAVE_CARD);
++			if (pConnection->tokenLibHandle != 0)
++			{
++				TPUnloadToken(pConnection);
++				pConnection->tokenLibHandle = 0;
++			}
++			pConnection->hCard = 0;
++
++			if (rv == MSC_SHARING_VIOLATION)
++			{
++				return rv;
++			} else
++			{
++				return MSC_UNRECOGNIZED_TOKEN;
++			}
++		}
++	}
++
++	pConnection->shareMode = sharingMode;
++	return MSC_SUCCESS;
++}
++
++MSC_RV MSCReleaseConnection(MSCLPTokenConnection pConnection,
++			    MSCULong32 endAction)
++{
++
++	MSCLong32 rv = SCARD_S_SUCCESS;
++	MSCLong32(*libPL_MSCFinalizePlugin) (MSCLPTokenConnection);
++	MSCPVoid32 vFunction;
++
++	vFunction = 0;
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (pConnection->tokenLibHandle == 0 ||
++		pConnection->hContext == 0 || pConnection->hCard == 0)
++	{
++		return MSC_INVALID_HANDLE;
++	}
++
++	/*
++	 * Select finalization routine for the token plugin 
++	 */
++	vFunction = pConnection->libPointers.pvfFinalizePlugin;
++
++	if (vFunction == 0)
++	{
++		DebugLogB("Error: Card service failure: %s\n",
++			"FinalizePlugin function missing");
++		return MSC_INTERNAL_ERROR;
++	}
++
++	libPL_MSCFinalizePlugin = (MSCLong32(*)(MSCLPTokenConnection))
++		vFunction;
++
++	/*
++	 * Stop and clean up the plugin 
++	 */
++	rv = (*libPL_MSCFinalizePlugin) (pConnection);
++
++	/*
++	 * Disconnect from the token 
++	 */
++	if (pConnection->hCard != 0)
++	{
++		rv = SCardDisconnect(pConnection->hCard, endAction);
++		if (pcscToMSC(rv) != MSC_SUCCESS)
++		{
++			return pcscToMSC(rv);
++		}
++	}
++
++	/*
++	 * Unload the token driver 
++	 */
++	if (pConnection->tokenLibHandle != 0)
++	{
++		rv = TPUnloadToken(pConnection);
++		pConnection->tokenLibHandle = 0;
++	}
++
++	pConnection->tokenLibHandle = 0;
++	pConnection->hCard = 0;
++	pConnection->hContext = 0;
++	pConnection->shareMode = 0;
++
++	return MSC_SUCCESS;
++}
++
++MSC_RV MSCWaitForTokenEvent(MSCLPTokenInfo tokenArray,
++			    MSCULong32 arraySize, 
++			    MSCULong32 timeoutValue)
++{
++
++	MSCLong32 rv, rt;
++	LPSCARD_READERSTATE rgReaderStates;
++	MSCTokenInfo tokenInfo;
++	int i;
++
++	rgReaderStates = 0;
++
++	/*
++	 * Allocate array of SCARD_READERSTATE structures, set UNAWARE on
++	 * all of the structures to get the current status and then send them
++	 * to GetStatusChange for blocking event 
++	 */
++
++	if (arraySize == 0)
++	{
++		return MSC_SUCCESS;
++	} else if (arraySize > MSC_MAXSIZE_TOKENARRAY)
++	{
++		return MSC_INSUFFICIENT_BUFFER;
++	}
++
++	/*
++	 * Set up the initial connection to the resource manager 
++	 */
++
++	mscLockThread();
++	if (localHContext == 0)
++	{
++		rv = SCardEstablishContext(SCARD_SCOPE_SYSTEM, 0, 0,
++			&localHContext);
++		if (pcscToMSC(rv) != MSC_SUCCESS)
++		{
++			localHContext = 0;
++			mscUnLockThread();
++			return pcscToMSC(rv);
++		}
++	}
++	mscUnLockThread();
++
++	rgReaderStates = (LPSCARD_READERSTATE)
++		malloc(sizeof(SCARD_READERSTATE) * arraySize);
++
++	if (rgReaderStates == 0)
++	{
++		return MSC_INTERNAL_ERROR;
++	}
++
++	for (i = 0; i < arraySize; i++)
++	{
++		/*
++		 * Make sure they don't pass an empty structure 
++		 */
++		if (strlen(tokenArray[i].slotName) == 0)
++		{
++			free(rgReaderStates);
++			return MSC_INVALID_PARAMETER;
++		}
++
++		rgReaderStates[i].szReader = tokenArray[i].slotName;
++		rgReaderStates[i].dwCurrentState = SCARD_STATE_UNAWARE;
++		rgReaderStates[i].dwEventState = 0;
++	}
++
++	rv = SCardGetStatusChange(localHContext, timeoutValue,
++		rgReaderStates, arraySize);
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		free(rgReaderStates);
++		return pcscToMSC(rv);
++	}
++
++	for (i = 0; i < arraySize; i++)
++	{
++		if (tokenArray[i].tokenState == 0)
++		{
++			rgReaderStates[i].dwCurrentState =
++				rgReaderStates[i].dwEventState;
++		} else if (tokenArray[i].tokenState == MSC_STATE_UNAWARE)
++		{
++			rgReaderStates[i].dwCurrentState = SCARD_STATE_UNAWARE;
++		} else
++		{
++			rgReaderStates[i].dwCurrentState = tokenArray[i].tokenState;
++		}
++		rgReaderStates[i].dwEventState = 0;
++	}
++
++	rv = SCardGetStatusChange(localHContext, timeoutValue,
++		rgReaderStates, arraySize);
++
++	for (i = 0; i < arraySize; i++)
++	{
++		tokenArray[i].tokenState = rgReaderStates[i].dwEventState;
++
++		if (tokenArray[i].tokenState & MSC_STATE_CHANGED)
++		{
++			/*
++			 * If it is removed, we need to update the names/etc 
++			 */
++			if (tokenArray[i].tokenState & MSC_STATE_EMPTY)
++			{
++				memset(tokenArray[i].tokenId, 0x00, MAX_ATR_SIZE);
++				tokenArray[i].tokenIdLength = 0;
++				tokenArray[i].tokenType = MSC_TOKEN_TYPE_REMOVED;
++				strncpy(tokenArray[i].tokenName, MSC_TOKEN_EMPTY_STR,
++					MSC_MAXSIZE_TOKENAME);
++			} else if (tokenArray[i].tokenState & MSC_STATE_PRESENT)
++			{
++				memcpy(tokenArray[i].tokenId, rgReaderStates[i].rgbAtr,
++					rgReaderStates[i].cbAtr);
++				tokenArray[i].tokenIdLength = rgReaderStates[i].cbAtr;
++
++				rt = TPSearchBundlesForAtr(rgReaderStates[i].rgbAtr,
++					rgReaderStates[i].cbAtr, &tokenInfo);
++				/*
++				 * Successfully found 
++				 */
++				if (rt == 0)
++				{
++					tokenArray[i].tokenType = MSC_TOKEN_TYPE_KNOWN;
++					strncpy(tokenArray[i].tokenName, tokenInfo.tokenName,
++						MSC_MAXSIZE_TOKENAME);
++				} else
++				{
++					tokenArray[i].tokenType = MSC_TOKEN_TYPE_UNKNOWN;
++					strncpy(tokenArray[i].tokenName, MSC_TOKEN_UNKNOWN_STR,
++						MSC_MAXSIZE_TOKENAME);
++				}
++			}
++		}
++	}
++
++	free(rgReaderStates);
++	return pcscToMSC(rv);
++}
++
++MSC_RV MSCCancelEventWait(void)
++{
++
++	MSCLong32 rv;
++
++	rv = SCardCancel(localHContext);
++
++	return pcscToMSC(rv);
++}
++
++/************************ Start of Callbacks ****************************/
++#ifdef USE_THREAD_SAFETY
++void *_MSCEventThread(void *arg)
++{
++
++	MSCLong32 rv;
++	MSCLPEventWaitInfo evlist;
++	MSCLong32 curToken;
++
++	if (arg == NULL)
++	{
++		SYS_ThreadExit(NULL);
++	}
++
++	evlist = (MSCLPEventWaitInfo) arg;
++	blockingContext = MSC_BLOCKSTATUS_BLOCKING;
++
++	while (1)
++	{
++		rv = MSCWaitForTokenEvent(evlist->tokenArray, 
++					  evlist->arraySize,
++					  MSC_NO_TIMEOUT);
++
++		if (rv == MSC_SUCCESS)
++		{
++		       (evlist->callBack) (evlist->tokenArray, 
++					   evlist->arraySize,
++					   evlist->appData);
++		} else {
++		       break;
++
++		}
++		
++		if (blockingContext == MSC_BLOCKSTATUS_CANCELLING)
++		{
++		        break;
++		}
++	}
++
++	for (curToken = 0; curToken < evlist->arraySize; curToken++)
++	{
++	        if (evlist->tokenArray[curToken].addParams)
++	        {
++		        free(evlist->tokenArray[curToken].addParams);
++	        }
++	}
++	
++
++	free(evlist);
++	blockingContext = MSC_BLOCKSTATUS_RESUME;
++	SYS_ThreadExit(&rv);
++
++	return NULL;
++}
++
++MSC_RV MSCCallbackForTokenEvent(MSCLPTokenInfo tokenArray,
++				MSCULong32 arraySize, 
++				MSCCallBack callBack, 
++				MSCPVoid32 appData)
++{
++	MSCLPEventWaitInfo evlist;
++	MSCULong32 curToken;
++
++	/*
++	 * Create the event wait list 
++	 */
++	evlist = (MSCLPEventWaitInfo) malloc(sizeof(MSCEventWaitInfo));
++
++	if (evlist == NULL)
++	{
++		return MSC_INTERNAL_ERROR;
++	}
++
++	evlist->arraySize = arraySize;
++	evlist->tokenArray = malloc(sizeof(MSCTokenInfo) * arraySize);
++	evlist->appData = appData;
++	evlist->callBack = callBack;
++
++	if (evlist->tokenArray == NULL)
++	{
++		free(evlist);
++		return MSC_INTERNAL_ERROR;
++	}
++
++	mscLockThread();
++	memcpy(evlist->tokenArray, tokenArray,
++		sizeof(MSCTokenInfo) * arraySize);
++
++	/*
++	 * Copy the "extra" data 
++	 */
++	for (curToken = 0; curToken < arraySize; curToken++)
++	{
++		if (tokenArray[curToken].addParams != NULL)
++		{
++			evlist->tokenArray[curToken].addParams =
++				malloc(evlist->tokenArray[curToken].addParamsSize);
++			memcpy((void *) (evlist->tokenArray[curToken].addParams),
++				&tokenArray[curToken],
++				evlist->tokenArray[curToken].addParamsSize);
++
++		}
++	}
++	mscUnLockThread();
++
++	if (SYS_ThreadCreate(&callbackThread, THREAD_ATTR_DEFAULT, _MSCEventThread, 
++			     (void *) evlist) == 0)
++	{
++		return MSC_INTERNAL_ERROR;
++	}
++
++	return MSC_SUCCESS;
++}
++
++MSC_RV MSCCallbackCancelEvent()
++{
++
++        LONG rv;
++
++        /* Release the thread and stop the GetStatusChange */
++        if (blockingContext == MSC_BLOCKSTATUS_BLOCKING)
++	{  
++                blockingContext = MSC_BLOCKSTATUS_CANCELLING;
++	        rv = MSCCancelEventWait();
++
++		SYS_ThreadJoin(&callbackThread, 0);
++
++	} 
++
++      return MSC_SUCCESS;
++}
++
++#endif
++/************************** End of Callbacks *****************************/
++
++MSC_RV MSCBeginTransaction(MSCLPTokenConnection pConnection)
++{
++
++	MSCLong32 rv;
++	MSCLong32 ret;
++
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	while (1)
++	{
++		rv = SCardBeginTransaction(pConnection->hCard);
++		ret = pcscToMSC(rv);
++
++		if (ret == MSC_SUCCESS)
++			break;
++		if (ret == MSC_TOKEN_RESET)
++		{
++		        pConnection->tokenInfo.tokenType |= 
++			  MSC_TOKEN_TYPE_RESET;
++			ret = MSCReEstablishConnection(pConnection);
++			if (ret != MSC_SUCCESS)
++				break;
++			continue;
++		} else if (ret == MSC_TOKEN_REMOVED)
++		{
++		        pConnection->tokenInfo.tokenType = 
++			  MSC_TOKEN_TYPE_REMOVED;
++			return ret;
++		}
++	}
++
++	return ret;
++}
++
++MSC_RV MSCEndTransaction(MSCLPTokenConnection pConnection,
++	MSCULong32 endAction)
++{
++
++	MSCLong32 rv;
++	MSCLong32 ret;
++
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	while (1)
++	{
++		rv = SCardEndTransaction(pConnection->hCard, endAction);
++		ret = pcscToMSC(rv);
++
++		if (ret == MSC_SUCCESS)
++			break;
++		if (ret == MSC_TOKEN_RESET)
++		{
++		        pConnection->tokenInfo.tokenType |= 
++			  MSC_TOKEN_TYPE_RESET;
++			ret = MSCReEstablishConnection(pConnection);
++			if (ret != MSC_SUCCESS)
++				break;
++			continue;
++		} else if (ret == MSC_TOKEN_REMOVED)
++		{
++		        pConnection->tokenInfo.tokenType = 
++			  MSC_TOKEN_TYPE_REMOVED;
++			return ret;
++		}
++	}
++
++	return ret;
++}
++
++MSC_RV MSCWriteFramework(MSCLPTokenConnection pConnection,
++	MSCLPInitTokenParams pInitParams)
++{
++
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCWriteFramework) (MSCLPTokenConnection,
++		MSCLPInitTokenParams);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfWriteFramework;
++
++	if (vFunction != 0)
++	{
++		libMSCWriteFramework = (MSCLong32(*)(MSCLPTokenConnection,
++				MSCLPInitTokenParams)) vFunction;
++		rv = (*libMSCWriteFramework) (pConnection, pInitParams);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++/*
++ * Real MSC functions 
++ */
++
++MSC_RV MSCGetStatus(MSCLPTokenConnection pConnection,
++	MSCLPStatusInfo pStatusInfo)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCGetStatus) (MSCLPTokenConnection, MSCLPStatusInfo);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfGetStatus;
++
++	if (vFunction != 0)
++	{
++		libMSCGetStatus = (MSCLong32(*)(MSCLPTokenConnection,
++				MSCLPStatusInfo)) vFunction;
++		rv = (*libMSCGetStatus) (pConnection, pStatusInfo);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCGetCapabilities(MSCLPTokenConnection pConnection, MSCULong32 Tag,
++	MSCPUChar8 Value, MSCPULong32 Length)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCGetCapabilities) (MSCLPTokenConnection, MSCULong32,
++		MSCPUChar8, MSCPULong32);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfGetCapabilities;
++
++	if (vFunction != 0)
++	{
++		libMSCGetCapabilities =
++			(MSCLong32(*)(MSCLPTokenConnection, MSCULong32, MSCPUChar8,
++				MSCPULong32)) vFunction;
++		rv = (*libMSCGetCapabilities) (pConnection, Tag, Value, Length);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCExtendedFeature(MSCLPTokenConnection pConnection,
++	MSCULong32 extFeature, MSCPUChar8 outData,
++	MSCULong32 outLength, MSCPUChar8 inData, MSCPULong32 inLength)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCExtendedFeature) (MSCLPTokenConnection, MSCULong32,
++		MSCPUChar8, MSCULong32, MSCPUChar8, MSCPULong32);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfExtendedFeature;
++
++	if (vFunction != 0)
++	{
++		libMSCExtendedFeature =
++			(MSCLong32(*)(MSCLPTokenConnection, MSCULong32, MSCPUChar8,
++				MSCULong32, MSCPUChar8, MSCPULong32)) vFunction;
++		rv = (*libMSCExtendedFeature) (pConnection, extFeature, outData,
++			outLength, inData, inLength);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCGenerateKeys(MSCLPTokenConnection pConnection,
++	MSCUChar8 prvKeyNum, MSCUChar8 pubKeyNum, MSCLPGenKeyParams pParams)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCGenerateKeys) (MSCLPTokenConnection, MSCUChar8,
++		MSCUChar8, MSCLPGenKeyParams);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfGenerateKeys;
++
++	if (vFunction != 0)
++	{
++		libMSCGenerateKeys = (MSCLong32(*)(MSCLPTokenConnection,
++						   MSCUChar8, MSCUChar8, 
++						   MSCLPGenKeyParams)) 
++		  vFunction;
++		rv = (*libMSCGenerateKeys) (pConnection, prvKeyNum, pubKeyNum,
++					    pParams);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCImportKey(MSCLPTokenConnection pConnection, MSCUChar8 keyNum,
++                    MSCLPKeyACL pKeyACL, MSCPUChar8 pKeyBlob,MSCULong32 keyBlobSize, 
++		    MSCLPKeyPolicy keyPolicy, MSCPVoid32 pAddParams, 
++		    MSCUChar8 addParamsSize)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCImportKey) (MSCLPTokenConnection, MSCUChar8, 
++                                     MSCLPKeyACL, MSCPUChar8, 
++				     MSCULong32, MSCLPKeyPolicy, MSCPVoid32,
++				     MSCUChar8);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfImportKey;
++
++	if (vFunction != 0)
++	{
++		libMSCImportKey = (MSCLong32(*)(MSCLPTokenConnection, 
++						MSCUChar8, 
++						MSCLPKeyACL, MSCPUChar8, 
++						MSCULong32, MSCLPKeyPolicy, 
++						MSCPVoid32, MSCUChar8)) 
++		  vFunction;
++
++		rv = (*libMSCImportKey) (pConnection, keyNum,  
++					 pKeyACL, pKeyBlob, keyBlobSize, 
++					 keyPolicy, pAddParams, addParamsSize);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCExportKey(MSCLPTokenConnection pConnection, MSCUChar8 keyNum,
++		    MSCPUChar8 pKeyBlob, MSCPULong32 keyBlobSize,
++		    MSCPVoid32 pAddParams, MSCUChar8 addParamsSize)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCExportKey) (MSCLPTokenConnection, MSCUChar8,
++		MSCPUChar8, MSCPULong32, MSCPVoid32, MSCUChar8);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfExportKey;
++
++	if (vFunction != 0)
++	{
++		libMSCExportKey = (MSCLong32(*)(MSCLPTokenConnection, 
++						MSCUChar8, MSCPUChar8, 
++						MSCPULong32, MSCPVoid32, 
++						MSCUChar8)) vFunction;
++
++		rv = (*libMSCExportKey) (pConnection, keyNum, pKeyBlob,
++			keyBlobSize, pAddParams, addParamsSize);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCComputeCrypt(MSCLPTokenConnection pConnection,
++		       MSCLPCryptInit cryptInit, MSCPUChar8 pInputData,
++		       MSCULong32 inputDataSize, MSCPUChar8 pOutputData,
++		       MSCPULong32 outputDataSize)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCComputeCrypt) (MSCLPTokenConnection, MSCLPCryptInit,
++					MSCPUChar8, MSCULong32, MSCPUChar8, 
++					MSCPULong32);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfComputeCrypt;
++
++	if (vFunction != 0)
++	{
++		libMSCComputeCrypt =
++			(MSCLong32(*)(MSCLPTokenConnection, MSCLPCryptInit, 
++				      MSCPUChar8, MSCULong32, MSCPUChar8, 
++				      MSCPULong32)) vFunction;
++		rv = (*libMSCComputeCrypt) (pConnection, cryptInit, pInputData,
++					    inputDataSize, pOutputData, 
++					    outputDataSize);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCExtAuthenticate(MSCLPTokenConnection pConnection,
++			  MSCUChar8 keyNum, MSCUChar8 cipherMode, 
++			  MSCUChar8 cipherDirection,
++			  MSCPUChar8 pData, MSCULong32 dataSize)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCExtAuthenticate) (MSCLPTokenConnection, MSCUChar8,
++					   MSCUChar8, MSCUChar8, MSCPUChar8, 
++					   MSCULong32);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfExtAuthenticate;
++
++	if (vFunction != 0)
++	{
++		libMSCExtAuthenticate =
++			(MSCLong32(*)(MSCLPTokenConnection, MSCUChar8, 
++				      MSCUChar8, MSCUChar8, MSCPUChar8, 
++				      MSCULong32)) vFunction;
++		rv = (*libMSCExtAuthenticate) (pConnection, keyNum, cipherMode,
++			cipherDirection, pData, dataSize);
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCListKeys(MSCLPTokenConnection pConnection, MSCUChar8 seqOption,
++		   MSCLPKeyInfo pKeyInfo)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCListKeys) (MSCLPTokenConnection, MSCUChar8,
++		MSCLPKeyInfo);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfListKeys;
++
++	if (vFunction != 0)
++	{
++		libMSCListKeys = (MSCLong32(*)(MSCLPTokenConnection, MSCUChar8,
++					       MSCLPKeyInfo)) vFunction;
++		rv = (*libMSCListKeys) (pConnection, seqOption, pKeyInfo);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCCreatePIN(MSCLPTokenConnection pConnection, MSCUChar8 pinNum,
++	MSCUChar8 pinAttempts, MSCPUChar8 pPinCode,
++	MSCULong32 pinCodeSize, MSCPUChar8 pUnblockCode,
++	MSCUChar8 unblockCodeSize)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCCreatePIN) (MSCLPTokenConnection, MSCUChar8,
++		MSCUChar8, MSCPUChar8, MSCULong32, MSCPUChar8, MSCUChar8);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfCreatePIN;
++
++	if (vFunction != 0)
++	{
++		libMSCCreatePIN = (MSCLong32(*)(MSCLPTokenConnection, MSCUChar8,
++				MSCUChar8, MSCPUChar8,
++				MSCULong32, MSCPUChar8, MSCUChar8)) vFunction;
++		rv = (*libMSCCreatePIN) (pConnection, pinNum, pinAttempts,
++			pPinCode, pinCodeSize, pUnblockCode, unblockCodeSize);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCVerifyPIN(MSCLPTokenConnection pConnection, MSCUChar8 pinNum,
++	MSCPUChar8 pPinCode, MSCULong32 pinCodeSize)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCVerifyPIN) (MSCLPTokenConnection, MSCUChar8,
++		MSCPUChar8, MSCULong32);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfVerifyPIN;
++
++	if (vFunction != 0)
++	{
++		libMSCVerifyPIN = (MSCLong32(*)(MSCLPTokenConnection, MSCUChar8,
++				MSCPUChar8, MSCULong32)) vFunction;
++		rv = (*libMSCVerifyPIN) (pConnection, pinNum, pPinCode,
++			pinCodeSize);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCChangePIN(MSCLPTokenConnection pConnection, MSCUChar8 pinNum,
++	MSCPUChar8 pOldPinCode, MSCUChar8 oldPinCodeSize,
++	MSCPUChar8 pNewPinCode, MSCUChar8 newPinCodeSize)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCChangePIN) (MSCLPTokenConnection, MSCUChar8,
++		MSCPUChar8, MSCUChar8, MSCPUChar8, MSCUChar8);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfChangePIN;
++
++	if (vFunction != 0)
++	{
++		libMSCChangePIN = (MSCLong32(*)(MSCLPTokenConnection, MSCUChar8,
++				MSCPUChar8, MSCUChar8, MSCPUChar8, MSCUChar8)) vFunction;
++		rv = (*libMSCChangePIN) (pConnection, pinNum, pOldPinCode,
++			oldPinCodeSize, pNewPinCode, newPinCodeSize);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCUnblockPIN(MSCLPTokenConnection pConnection, MSCUChar8 pinNum,
++	MSCPUChar8 pUnblockCode, MSCULong32 unblockCodeSize)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCUnblockPIN) (MSCLPTokenConnection, MSCUChar8,
++		MSCPUChar8, MSCULong32);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfUnblockPIN;
++
++	if (vFunction != 0)
++	{
++		libMSCUnblockPIN = (MSCLong32(*)(MSCLPTokenConnection,
++				MSCUChar8, MSCPUChar8, MSCULong32)) vFunction;
++		rv = (*libMSCUnblockPIN) (pConnection, pinNum, pUnblockCode,
++			unblockCodeSize);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCListPINs(MSCLPTokenConnection pConnection,
++	MSCPUShort16 pPinBitMask)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCListPINs) (MSCLPTokenConnection, MSCPUShort16);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfListPINs;
++
++	if (vFunction != 0)
++	{
++		libMSCListPINs = (MSCLong32(*)(MSCLPTokenConnection,
++				MSCPUShort16)) vFunction;
++		rv = (*libMSCListPINs) (pConnection, pPinBitMask);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCCreateObject(MSCLPTokenConnection pConnection,
++	MSCString objectID, MSCULong32 objectSize, MSCLPObjectACL pObjectACL)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCCreateObject) (MSCLPTokenConnection, MSCString,
++		MSCULong32, MSCLPObjectACL);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfCreateObject;
++
++	if (vFunction != 0)
++	{
++		libMSCCreateObject = (MSCLong32(*)(MSCLPTokenConnection, MSCString,
++				MSCULong32, MSCLPObjectACL)) vFunction;
++		rv = (*libMSCCreateObject) (pConnection, objectID, objectSize,
++			pObjectACL);
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCDeleteObject(MSCLPTokenConnection pConnection,
++	MSCString objectID, MSCUChar8 zeroFlag)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCDeleteObject) (MSCLPTokenConnection, MSCString,
++		MSCUChar8);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfDeleteObject;
++
++	if (vFunction != 0)
++	{
++		libMSCDeleteObject = (MSCLong32(*)(MSCLPTokenConnection, MSCString,
++				MSCUChar8)) vFunction;
++		rv = (*libMSCDeleteObject) (pConnection, objectID, zeroFlag);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCWriteObject(MSCLPTokenConnection pConnection,
++		      MSCString objectID, MSCULong32 offSet,
++		      MSCPUChar8 pInputData, MSCULong32 dataSize,
++		      LPRWEventCallback rwCallback, MSCPVoid32 addParams)
++{
++	MSC_RV rv = MSC_UNSPECIFIED_ERROR;
++	MSCULong32 objectSize;
++	int totalSteps, stepInterval;
++	MSC_RV(*callBackFunction) (void *, int);
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCWriteObject) (MSCLPTokenConnection, MSCString,
++		MSCULong32, MSCPUChar8, MSCUChar8);
++	int i;
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction        = pConnection->libPointers.pvfWriteObject;
++	callBackFunction = (MSC_RV(*)(void *, int)) rwCallback;
++	objectSize       = dataSize;
++
++	if (vFunction == 0)
++	{
++	        return MSC_UNSUPPORTED_FEATURE;
++        }
++
++	libMSCWriteObject = (MSCLong32(*)(MSCLPTokenConnection, MSCString,
++					  MSCULong32, MSCPUChar8, MSCUChar8)) 
++	  vFunction;
++
++	/*
++	 * Figure out the number of steps total and present this in a percent
++	 * step basis 
++	 */
++
++	totalSteps = objectSize / MSC_SIZEOF_KEYPACKET + 1;
++	stepInterval = MSC_PERCENT_STEPSIZE / totalSteps;
++
++	for (i = 0; i < objectSize / MSC_SIZEOF_KEYPACKET; i++)
++	{
++	  rv = (*libMSCWriteObject) (pConnection, objectID, 
++				     i * MSC_SIZEOF_KEYPACKET + offSet,
++				     &pInputData[i * MSC_SIZEOF_KEYPACKET], 
++				     MSC_SIZEOF_KEYPACKET);				     
++		if (rv != MSC_SUCCESS)
++		{
++			return rv;
++		}
++
++		if (rwCallback)
++		{
++			if ((*callBackFunction) (addParams,
++			      stepInterval * i) == MSC_CANCELLED)
++			{
++				return MSC_CANCELLED;
++			}
++		}
++	}
++
++	if (objectSize % MSC_SIZEOF_KEYPACKET)
++	{
++
++	  rv = (*libMSCWriteObject) (pConnection, objectID, 
++				     i * MSC_SIZEOF_KEYPACKET + offSet,
++				     &pInputData[i * MSC_SIZEOF_KEYPACKET], 
++				     objectSize % MSC_SIZEOF_KEYPACKET);
++
++		if (rv != MSC_SUCCESS)
++		{
++			return rv;
++		}
++	}
++
++	if (rwCallback)
++	{
++		(*callBackFunction) (addParams, MSC_PERCENT_STEPSIZE);
++	}
++
++	return rv;
++}
++
++MSC_RV MSCReadObject(MSCLPTokenConnection pConnection,
++		     MSCString objectID, MSCULong32 offSet,
++		     MSCPUChar8 pOutputData, MSCULong32 dataSize,
++		     LPRWEventCallback rwCallback, 
++		     MSCPVoid32 addParams)
++{
++
++        MSC_RV rv = MSC_UNSPECIFIED_ERROR;
++	MSCULong32 objectSize;
++	int totalSteps, stepInterval;
++	MSC_RV(*callBackFunction) (void *, int);
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCReadObject) (MSCLPTokenConnection, MSCString,
++		MSCULong32, MSCPUChar8, MSCUChar8);
++	int i;
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction        = pConnection->libPointers.pvfReadObject;
++	callBackFunction = (MSC_RV(*)(void *, int)) rwCallback;
++	objectSize       = dataSize;
++
++	if (vFunction == 0)
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	libMSCReadObject = (MSCLong32(*)(MSCLPTokenConnection, 
++					 MSCString, MSCULong32, 
++					 MSCPUChar8, MSCUChar8)) 
++	  vFunction;
++
++	/*
++	 * Figure out the number of steps total and present this in a percent
++	 * step basis 
++	 */
++
++	totalSteps = objectSize / MSC_SIZEOF_KEYPACKET + 1;
++	stepInterval = MSC_PERCENT_STEPSIZE / totalSteps;
++
++	for (i = 0; i < objectSize / MSC_SIZEOF_KEYPACKET; i++)
++	{
++	        rv = (*libMSCReadObject) (pConnection, objectID, 
++				    i * MSC_SIZEOF_KEYPACKET + offSet,
++				    &pOutputData[i * MSC_SIZEOF_KEYPACKET], 
++				    MSC_SIZEOF_KEYPACKET);
++
++		if (rv != MSC_SUCCESS)
++		{
++			return rv;
++		}
++
++		if (rwCallback)
++		{
++			if ((*callBackFunction) (addParams,
++					stepInterval * i) == MSC_CANCELLED)
++			{
++				return MSC_CANCELLED;
++			}
++		}
++	}
++
++	if (objectSize % MSC_SIZEOF_KEYPACKET)
++	{
++	        rv = (*libMSCReadObject) (pConnection, objectID, 
++				    i * MSC_SIZEOF_KEYPACKET + offSet,
++				    &pOutputData[i * MSC_SIZEOF_KEYPACKET], 
++				    objectSize % MSC_SIZEOF_KEYPACKET);
++
++		if (rv != MSC_SUCCESS)
++		{
++			return rv;
++		}
++	}
++
++	if (rwCallback)
++	{
++		(*callBackFunction) (addParams, MSC_PERCENT_STEPSIZE);
++	}
++
++	return rv;
++}
++
++MSC_RV MSCListObjects(MSCLPTokenConnection pConnection,
++	MSCUChar8 seqOption, MSCLPObjectInfo pObjectInfo)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCListObjects) (MSCLPTokenConnection, MSCUChar8,
++		MSCLPObjectInfo);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfListObjects;
++
++	if (vFunction != 0)
++	{
++		libMSCListObjects = (MSCLong32(*)(MSCLPTokenConnection, MSCUChar8,
++				MSCLPObjectInfo)) vFunction;
++		rv = (*libMSCListObjects) (pConnection, seqOption, pObjectInfo);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCLogoutAll(MSCLPTokenConnection pConnection)
++{
++
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCLogoutAll) (MSCLPTokenConnection);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfLogoutAll;
++
++	if (vFunction != 0)
++	{
++		libMSCLogoutAll = (MSCLong32(*)(MSCLPTokenConnection)) vFunction;
++		rv = (*libMSCLogoutAll) (pConnection);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCGetChallenge(MSCLPTokenConnection pConnection, MSCPUChar8 pSeed,
++	MSCUShort16 seedSize, MSCPUChar8 pRandomData,
++	MSCUShort16 randomDataSize)
++{
++	MSCLong32 rv;
++	MSCPVoid32 vFunction;
++	MSCLong32(*libMSCGetChallenge) (MSCLPTokenConnection, MSCPUChar8,
++		MSCUShort16, MSCPUChar8, MSCUShort16);
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	vFunction = pConnection->libPointers.pvfGetChallenge;
++
++	if (vFunction != 0)
++	{
++		libMSCGetChallenge = (MSCLong32(*)(MSCLPTokenConnection,
++				MSCPUChar8, MSCUShort16,
++				MSCPUChar8, MSCUShort16)) vFunction;
++		rv = (*libMSCGetChallenge) (pConnection, pSeed, seedSize,
++			pRandomData, randomDataSize);
++
++	} else
++	{
++		return MSC_UNSUPPORTED_FEATURE;
++	}
++
++	return rv;
++}
++
++MSC_RV MSCGetKeyAttributes(MSCLPTokenConnection pConnection,
++			   MSCUChar8 keyNumber, MSCLPKeyInfo pKeyInfo)
++{
++
++	MSC_RV rv;
++	MSCKeyInfo keyInfo;
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	rv = MSCListKeys(pConnection, MSC_SEQUENCE_RESET, &keyInfo);
++
++	if (rv != MSC_SEQUENCE_END && rv != MSC_SUCCESS)
++	{
++		return rv;
++	}
++
++	if (rv == MSC_SEQUENCE_END)
++	{
++		return MSC_INVALID_PARAMETER;
++	}
++
++	if (keyNumber == keyInfo.keyNum)
++	{
++		pKeyInfo->keyNum = keyInfo.keyNum;
++		pKeyInfo->keyType = keyInfo.keyType;
++		pKeyInfo->keySize = keyInfo.keySize;
++
++		pKeyInfo->keyPolicy.cipherMode = keyInfo.keyPolicy.cipherMode;
++		pKeyInfo->keyPolicy.cipherDirection =
++			keyInfo.keyPolicy.cipherDirection;
++
++		pKeyInfo->keyACL.readPermission = 
++		  keyInfo.keyACL.readPermission;
++		pKeyInfo->keyACL.writePermission = 
++		  keyInfo.keyACL.writePermission;
++		pKeyInfo->keyACL.usePermission = 
++		  keyInfo.keyACL.usePermission;
++
++		return MSC_SUCCESS;
++	}
++
++	do
++	{
++		rv = MSCListKeys(pConnection, MSC_SEQUENCE_NEXT, &keyInfo);
++		if (keyNumber == keyInfo.keyNum)
++			break;
++	}
++	while (rv == MSC_SUCCESS);
++
++	if (rv != MSC_SEQUENCE_END && rv != MSC_SUCCESS)
++	{
++		return rv;
++	}
++
++	if (rv == MSC_SEQUENCE_END)
++	{
++		return MSC_INVALID_PARAMETER;
++	}
++
++	pKeyInfo->keyNum = keyInfo.keyNum;
++	pKeyInfo->keyType = keyInfo.keyType;
++	pKeyInfo->keySize = keyInfo.keySize;
++
++	pKeyInfo->keyPolicy.cipherMode = keyInfo.keyPolicy.cipherMode;
++	pKeyInfo->keyPolicy.cipherDirection =
++		keyInfo.keyPolicy.cipherDirection;
++
++	pKeyInfo->keyACL.readPermission = keyInfo.keyACL.readPermission;
++	pKeyInfo->keyACL.writePermission = keyInfo.keyACL.writePermission;
++	pKeyInfo->keyACL.usePermission = keyInfo.keyACL.usePermission;
++
++	return MSC_SUCCESS;
++}
++
++MSC_RV MSCGetObjectAttributes(MSCLPTokenConnection pConnection,
++	MSCString objectID, MSCLPObjectInfo pObjectInfo)
++{
++
++	MSC_RV rv;
++	MSCObjectInfo objInfo;
++
++	if (pConnection == NULL)
++		return MSC_INVALID_PARAMETER;
++	if (localHContext == 0)
++		return MSC_INTERNAL_ERROR;
++
++	rv = MSCListObjects(pConnection, MSC_SEQUENCE_RESET, &objInfo);
++
++	if (rv != MSC_SEQUENCE_END && rv != MSC_SUCCESS)
++	{
++		return rv;
++	}
++
++	if (rv == MSC_SEQUENCE_END)
++	{
++		return MSC_OBJECT_NOT_FOUND;
++	}
++
++	if (strncmp(objectID, objInfo.objectID, MSC_MAXSIZE_OBJID) == 0)
++	{
++		pObjectInfo->objectSize = objInfo.objectSize;
++		pObjectInfo->objectACL.readPermission =
++			objInfo.objectACL.readPermission;
++		pObjectInfo->objectACL.writePermission =
++			objInfo.objectACL.writePermission;
++		pObjectInfo->objectACL.deletePermission =
++			objInfo.objectACL.deletePermission;
++		strncpy(pObjectInfo->objectID, objectID, MSC_MAXSIZE_OBJID);
++		return MSC_SUCCESS;
++	}
++
++	do
++	{
++		rv = MSCListObjects(pConnection, MSC_SEQUENCE_NEXT, &objInfo);
++		if (strncmp(objectID, objInfo.objectID, MSC_MAXSIZE_OBJID) == 0)
++			break;
++	}
++	while (rv == MSC_SUCCESS);
++
++	if (rv != MSC_SEQUENCE_END && rv != MSC_SUCCESS)
++	{
++		return rv;
++	}
++
++	if (rv == MSC_SEQUENCE_END)
++	{
++		return MSC_OBJECT_NOT_FOUND;
++	}
++
++	pObjectInfo->objectSize = objInfo.objectSize;
++	pObjectInfo->objectACL.readPermission =
++		objInfo.objectACL.readPermission;
++	pObjectInfo->objectACL.writePermission =
++		objInfo.objectACL.writePermission;
++	pObjectInfo->objectACL.deletePermission =
++		objInfo.objectACL.deletePermission;
++	strncpy(pObjectInfo->objectID, objectID, MSC_MAXSIZE_OBJID);
++
++	return MSC_SUCCESS;
++}
++
++MSC_RV MSCReadAllocateObject(MSCLPTokenConnection pConnection,
++			     MSCString objectID, MSCPUChar8 * pOutputData,
++			     MSCPULong32 dataSize, 
++			     LPRWEventCallback rwCallback, 
++			     MSCPVoid32 addParams)
++{
++    MSC_RV rv;
++    MSCObjectInfo objInfo;
++    MSCULong32 objectSize;
++    MSCPUChar8  data = NULL;
++    
++    if (pConnection == NULL)
++        return MSC_INVALID_PARAMETER;
++     if (localHContext == 0)
++         return MSC_INTERNAL_ERROR;
++
++    if (pOutputData == 0)
++    {
++        return MSC_INVALID_PARAMETER;
++    }
++
++    *dataSize = 0;
++    *pOutputData = 0;
++
++    rv = MSCGetObjectAttributes(pConnection, objectID, &objInfo);
++    if (rv == MSC_SUCCESS) 
++    {
++        objectSize = objInfo.objectSize;
++        data = (MSCPUChar8) malloc(sizeof(MSCUChar8) * objectSize);
++        if(data)
++        {
++            rv =  MSCReadObject(pConnection, objectID, 0, data,
++                     objectSize, rwCallback, addParams);
++            
++            if (rv == MSC_SUCCESS)
++            {
++                *dataSize = objectSize;
++                *pOutputData = data;
++            }
++            else
++            {
++                rv = MSC_INTERNAL_ERROR;
++                free(data);
++            }
++        }
++    }
++
++    return rv;
++}
++
++
++MSC_RV pcscToMSC(MSCLong32 pcscCode)
++{
++
++	switch (pcscCode)
++	{
++	case SCARD_S_SUCCESS:
++		return MSC_SUCCESS;
++	case SCARD_E_INVALID_HANDLE:
++		return MSC_INVALID_HANDLE;
++	case SCARD_E_SHARING_VIOLATION:
++		return MSC_SHARING_VIOLATION;
++	case SCARD_W_REMOVED_CARD:
++		return MSC_TOKEN_REMOVED;
++	case SCARD_E_NO_SMARTCARD:
++		return MSC_TOKEN_REMOVED;
++	case SCARD_W_RESET_CARD:
++		return MSC_TOKEN_RESET;
++	case SCARD_W_INSERTED_CARD:
++		return MSC_TOKEN_INSERTED;
++	case SCARD_E_NO_SERVICE:
++		return MSC_SERVICE_UNRESPONSIVE;
++	case SCARD_E_UNKNOWN_CARD:
++	case SCARD_W_UNSUPPORTED_CARD:
++	case SCARD_E_CARD_UNSUPPORTED:
++		return MSC_UNRECOGNIZED_TOKEN;
++	case SCARD_E_INVALID_PARAMETER:
++	case SCARD_E_INVALID_VALUE:
++	case SCARD_E_UNKNOWN_READER:
++	case SCARD_E_PROTO_MISMATCH:
++	case SCARD_E_READER_UNAVAILABLE:
++		return MSC_INVALID_PARAMETER;
++	case SCARD_E_CANCELLED:
++		return MSC_CANCELLED;
++	case SCARD_E_TIMEOUT:
++		return MSC_TIMEOUT_OCCURRED;
++
++	default:
++		return MSC_INTERNAL_ERROR;
++	}
++}
++
++char *msc_error(unsigned long int errorCode)	//MSC_RV
++{
++
++	static char message[500];
++
++	switch (errorCode)
++	{
++	case MSC_SUCCESS:
++		strncpy(message, "Successful", sizeof(message));
++		break;
++	case MSC_NO_MEMORY_LEFT:
++		strncpy(message, "No more memory", sizeof(message));
++		break;
++	case MSC_AUTH_FAILED:
++		strncpy(message, "Authentication failed", sizeof(message));
++		break;
++	case MSC_OPERATION_NOT_ALLOWED:
++		strncpy(message, "Operation not allowed", sizeof(message));
++		break;
++	case MSC_INCONSISTENT_STATUS:
++		strncpy(message, "Inconsistent status", sizeof(message));
++		break;
++	case MSC_UNSUPPORTED_FEATURE:
++		strncpy(message, "Feature unsupported", sizeof(message));
++		break;
++	case MSC_UNAUTHORIZED:
++		strncpy(message, "Unauthorized usage", sizeof(message));
++		break;
++	case MSC_OBJECT_NOT_FOUND:
++		strncpy(message, "Object not found", sizeof(message));
++		break;
++	case MSC_OBJECT_EXISTS:
++		strncpy(message, "Object already exists", sizeof(message));
++		break;
++	case MSC_INCORRECT_ALG:
++		strncpy(message, "Incorrect algorithm", sizeof(message));
++		break;
++	case MSC_SIGNATURE_INVALID:
++		strncpy(message, "Invalid signature", sizeof(message));
++		break;
++	case MSC_IDENTITY_BLOCKED:
++		strncpy(message, "Identity is blocked", sizeof(message));
++		break;
++	case MSC_UNSPECIFIED_ERROR:
++		strncpy(message, "Unspecified error", sizeof(message));
++		break;
++	case MSC_TRANSPORT_ERROR:
++		strncpy(message, "Transport error", sizeof(message));
++		break;
++	case MSC_INVALID_PARAMETER:
++		strncpy(message, "Invalid parameter", sizeof(message));
++		break;
++	case MSC_SEQUENCE_END:
++		strncpy(message, "End of sequence", sizeof(message));
++		break;
++	case MSC_INTERNAL_ERROR:
++		strncpy(message, "Internal Error", sizeof(message));
++		break;
++	case MSC_CANCELLED:
++		strncpy(message, "Operation Cancelled", sizeof(message));
++		break;
++	case MSC_INSUFFICIENT_BUFFER:
++		strncpy(message, "Buffer is too small", sizeof(message));
++		break;
++	case MSC_UNRECOGNIZED_TOKEN:
++		strncpy(message, "Token is unsupported", sizeof(message));
++		break;
++	case MSC_SERVICE_UNRESPONSIVE:
++		strncpy(message, "Service is not running", sizeof(message));
++		break;
++	case MSC_TIMEOUT_OCCURRED:
++		strncpy(message, "Timeout has occurred", sizeof(message));
++		break;
++	case MSC_TOKEN_REMOVED:
++		strncpy(message, "Token was removed", sizeof(message));
++		break;
++	case MSC_TOKEN_RESET:
++		strncpy(message, "Token was reset", sizeof(message));
++		break;
++	case MSC_TOKEN_INSERTED:
++		strncpy(message, "Token was inserted", sizeof(message));
++		break;
++	case MSC_TOKEN_UNRESPONSIVE:
++		strncpy(message, "Token is unresponsive", sizeof(message));
++		break;
++	case MSC_INVALID_HANDLE:
++		strncpy(message, "Handle is invalid", sizeof(message));
++		break;
++	case MSC_SHARING_VIOLATION:
++		strncpy(message, "Sharing violation", sizeof(message));
++		break;
++
++	default:
++		sprintf(message, "Unknown SW: %04lu", errorCode);
++		break;
++	}
++
++	return message;
++}
++
++MSC_RV MSCReEstablishConnection(MSCLPTokenConnection pConnection)
++{
++
++	MSC_RV rv;
++	MSCPVoid32 vInitFunction, vFinFunction, vIdFunction;
++	MSCULong32 dwActiveProtocol;
++	MSCLong32(*libPL_MSCInitializePlugin) (MSCLPTokenConnection);
++	MSCLong32(*libPL_MSCFinalizePlugin) (MSCLPTokenConnection);
++        MSCLong32 (*libPL_MSCIdentifyToken)(MSCLPTokenConnection);
++
++	vInitFunction = 0;
++	vFinFunction  = 0;
++	vIdFunction   = 0;
++
++	/*
++	 * Select the AID or initialization routine for the card 
++	 */
++	vInitFunction = pConnection->libPointers.pvfInitializePlugin;
++	vFinFunction  = pConnection->libPointers.pvfFinalizePlugin;
++	vIdFunction   = pConnection->libPointers.pvfIdentifyToken;
++
++	if (vInitFunction == 0)
++	{
++		DebugLogB("Error: Card service failure: %s\n",
++			"InitializePlugin function missing");
++		return MSC_INTERNAL_ERROR;
++	}
++
++	if (vFinFunction == 0)
++	{
++		DebugLogB("Error: Card service failure: %s\n",
++			"FinalizePlugin function missing");
++		return MSC_INTERNAL_ERROR;
++	}
++
++	if ( vIdFunction == 0 ) 
++	{
++	        DebugLogB("Error: Card service failure: %s\n", 
++			  "IdentifyToken function missing");
++		return MSC_INTERNAL_ERROR;
++	}
++
++	libPL_MSCInitializePlugin = (MSCLong32(*)(MSCLPTokenConnection))
++		vInitFunction;
++
++	libPL_MSCFinalizePlugin = (MSCLong32(*)(MSCLPTokenConnection))
++		vFinFunction;
++
++	libPL_MSCIdentifyToken = (MSCLong32 (*)(MSCLPTokenConnection))
++	        vIdFunction;
++
++	rv = SCardReconnect(pConnection->hCard, pConnection->shareMode,
++		SCARD_PROTOCOL_T0 | SCARD_PROTOCOL_T1,
++		SCARD_LEAVE_CARD, &dwActiveProtocol);
++
++	if (rv != SCARD_S_SUCCESS)
++		return pcscToMSC(rv);
++
++	/*
++	 * Stop the plugin and start it up again 
++	 */
++	rv = (*libPL_MSCFinalizePlugin) (pConnection);
++
++	/*
++	 * Use the default AID given by the Info.plist 
++	 */
++	rv = (*libPL_MSCInitializePlugin) (pConnection);
++
++	/* 
++	 * Use the default AID given by the Info.plist 
++	 */
++	rv = (*libPL_MSCIdentifyToken)(pConnection);
++
++	if (rv != MSC_SUCCESS)
++		return rv;
++
++	return MSC_SUCCESS;
++}
++
++MSCUChar8 MSCIsTokenReset(MSCLPTokenConnection pConnection)
++{
++        MSCULong32 rv;
++	char slotName[MAX_READERNAME];
++	MSCULong32 slotNameSize, slotState, slotProtocol;
++	MSCUChar8 tokenId[MAX_ATR_SIZE];
++	MSCULong32 tokenIdLength;
++
++	rv = SCardStatus(pConnection->hCard, slotName,
++			 &slotNameSize, &slotState, &slotProtocol, 
++			 tokenId, &tokenIdLength);
++
++	if (rv == SCARD_W_RESET_CARD)
++	{
++	        return 1;
++	} 
++
++	if (pConnection->tokenInfo.tokenType & MSC_TOKEN_TYPE_RESET)
++	{
++		return 1;
++	} else
++	{
++		return 0;
++	}
++}
++
++MSCUChar8 MSCClearReset(MSCLPTokenConnection pConnection)
++{
++	pConnection->tokenInfo.tokenType &= ~MSC_TOKEN_TYPE_RESET;
++	return 1;
++}
++
++MSCUChar8 MSCIsTokenMoved(MSCLPTokenConnection pConnection)
++{
++        MSCULong32 rv;
++	char slotName[MAX_READERNAME];
++	MSCULong32 slotNameSize, slotState, slotProtocol;
++	MSCUChar8 tokenId[MAX_ATR_SIZE];
++	MSCULong32 tokenIdLength;
++
++
++	rv = SCardStatus(pConnection->hCard, slotName,
++			 &slotNameSize, &slotState, &slotProtocol, 
++			 tokenId, &tokenIdLength);
++
++	if (rv == SCARD_W_REMOVED_CARD)
++	{
++	        return 1;
++	} else if (rv == SCARD_W_INSERTED_CARD)
++	{
++	        return 1;
++	} else if (slotState & SCARD_ABSENT)
++	{
++	        return 1;
++	}
++
++
++	if (pConnection->tokenInfo.tokenType & MSC_TOKEN_TYPE_REMOVED)
++	{
++		return 1;
++	} else
++	{
++		return 0;
++	}
++}
++
++MSCUChar8 MSCIsTokenChanged(MSCLPTokenConnection pConnection)
++{
++	if (MSCIsTokenMoved(pConnection))
++	{
++		return 1;
++	} else if (MSCIsTokenReset(pConnection)) 
++	{
++		return 1;
++	} else {
++	        return 0;
++	}
++}
++
++MSCUChar8 MSCIsTokenKnown(MSCLPTokenConnection pConnection)
++{
++	if (pConnection->tokenInfo.tokenType & MSC_TOKEN_TYPE_KNOWN)
++	{
++		return 1;
++	} else
++	{
++		return 0;
++	}
++}
+--- /dev/null	2023-04-21 18:08:40.925208000 +0800
++++ src/readerstate.cpp	2023-04-20 19:18:49.487292630 +0800
+@@ -0,0 +1,108 @@
++/*
++ * Copyright (c) 2007 Apple Computer, Inc. All Rights Reserved.
++ * 
++ * @APPLE_LICENSE_HEADER_START@
++ * 
++ * This file contains Original Code and/or Modifications of Original Code
++ * as defined in and that are subject to the Apple Public Source License
++ * Version 2.0 (the 'License'). You may not use this file except in
++ * compliance with the License. Please obtain a copy of the License at
++ * http://www.opensource.apple.com/apsl/ and read it before using this
++ * file.
++ * 
++ * The Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
++ * Please see the License for the specific language governing rights and
++ * limitations under the License.
++ * 
++ * @APPLE_LICENSE_HEADER_END@
++ */
++
++/*
++ *  readerstate.cpp
++ *  SmartCardServices
++*/
++
++#include "readerstate.h"
++#include "pcsclite.h"
++#include "eventhandler.h"
++#include <security_utilities/debugging.h>
++
++DWORD SharedReaderState_State(READER_STATE *rs)
++{
++	PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++	return srs->xreaderState();
++}
++
++DWORD SharedReaderState_Protocol(READER_STATE *rs)
++{
++	PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++	return srs->xcardProtocol();
++}
++
++DWORD SharedReaderState_Sharing(READER_STATE *rs)
++{
++	PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++	return srs->sharing();
++}
++
++size_t SharedReaderState_CardAtrLength(READER_STATE *rs)
++{
++	PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++	return srs->xcardAtrLength();
++}
++
++LONG SharedReaderState_ReaderID(READER_STATE *rs)
++{
++	PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++	return srs->xreaderID();
++}
++
++const unsigned char *SharedReaderState_CardAtr(READER_STATE *rs)
++{
++	PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++	return srs->xcardAtr();
++}
++
++const char *SharedReaderState_ReaderName(READER_STATE *rs)
++{
++	PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++	return srs->xreaderName();
++}
++
++int SharedReaderState_ReaderNameIsEqual(READER_STATE *rs, const char *otherName)
++{
++	if (otherName)
++	{
++		PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++		return (strcmp(otherName, srs->xreaderName()) == 0);
++	}
++	else
++		return 0;
++}
++
++void SharedReaderState_SetState(READER_STATE *rs, DWORD state)
++{
++	PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++	srs->xreaderState(state);
++}
++
++void SharedReaderState_SetProtocol(READER_STATE *rs, DWORD newprotocol)
++{
++	PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++	srs->xcardProtocol(newprotocol);
++}
++
++void SharedReaderState_SetCardAtrLength(READER_STATE *rs, size_t len)
++{
++	PCSCD::SharedReaderState *srs = PCSCD::SharedReaderState::overlay(rs);
++	srs->xcardAtrLength(len);
++}
++
++
++#pragma mark ---------- C Interface ----------
++
++
+--- /dev/null	2023-04-21 18:08:53.349649000 +0800
++++ src/tokenfactory.c	2023-04-20 20:30:31.080734980 +0800
+@@ -0,0 +1,788 @@
++/*
++ * Copyright (c) 2000-2002 Apple Computer, Inc. All Rights Reserved.
++ * The contents of this file constitute Original Code as defined in and are
++ * subject to the Apple Public Source License Version 1.2 (the 'License').
++ * You may not use this file except in compliance with the License. Please
++ * obtain a copy of the License at http://www.apple.com/publicsource and
++ * read it before using this file.
++ *
++ * This Original Code and all software distributed under the License are
++ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
++ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
++ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, FITNESS
++ * FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT. Please
++ * see the License for the specific language governing rights and
++ * limitations under the License.
++ */
++
++/******************************************************************
++
++	MUSCLE SmartCard Development ( http://www.linuxnet.com )
++		Title  : tokenfactory.c
++		Package: pcsc lite
++		Author : David Corcoran
++		Date   : 01/01/00
++		Purpose: This handles card abstraction attachment. 
++
++ $Id: tokenfactory.c 123 2010-03-27 10:50:42Z ludovic.rousseau@gmail.com $
++
++*******************************************************************/
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/types.h>
++
++#ifndef WIN32
++#include <dirent.h>
++#include "config.h"
++#else
++#include "../win32/win32_config.h"
++#endif
++
++#include "debuglog.h"
++#include "dyn_generic.h"
++#include "tokenfactory.h"
++
++#define MSC_MANUMSC_KEY_NAME                "spVendorName"
++#define MSC_PRODMSC_KEY_NAME                "spProductName"
++#define MSC_ATRMSC_KEY_NAME                 "spAtrValue"
++#define MSC_LIBRMSC_KEY_NAME                "CFBundleExecutable"
++#define MSC_DEFAULTAPP_NAME                 "spDefaultApplication"
++
++extern int LTPBundleFindValueWithKey(char *, char *, char *, int);
++
++int atrToString(MSCPUChar8 Atr, MSCULong32 Length, char *outAtr)
++{
++
++	int i;
++	int j;
++
++	j = 0;
++
++	for (i = 0; i < Length; i++)
++	{
++		if ((Atr[i] / 16) > 9)
++		{
++			outAtr[j] = ((Atr[i] / 16) - 10) + 'A';
++		} else
++		{
++			outAtr[j] = (Atr[i] / 16) + '0';
++		}
++
++		j += 1;
++
++		if ((Atr[i] % 16) > 9)
++		{
++			outAtr[j] = ((Atr[i] % 16) - 10) + 'A';
++		} else
++		{
++			outAtr[j] = (Atr[i] % 16) + '0';
++		}
++
++		j += 1;
++
++	}
++
++	outAtr[j] = 0;	/* Add the NULL */
++
++	return 0;
++}
++
++int stringToBytes(char *inStr, MSCPUChar8 Buffer, MSCPULong32 Length)
++{
++
++	int i;
++	int j;
++	int inLen;
++
++	j = 0;
++	inLen = 0;
++
++	inLen = strlen(inStr);
++
++	if (inLen > MSC_MAXSIZE_AID)
++	{
++		return -1;
++	}
++
++	for (i = 0; i < inLen; i += 2)
++	{
++		if (inStr[i] <= '9' && inStr[i] >= '0')
++		{
++			Buffer[j] = (inStr[i] - '0') * 16;
++		} else if (inStr[i] <= 'F' && inStr[i] >= 'A')
++		{
++			Buffer[j] = (inStr[i] - 'A' + 10) * 16;
++		}
++
++		if (inStr[i + 1] <= '9' && inStr[i + 1] >= '0')
++		{
++			Buffer[j] += inStr[i + 1] - '0';
++		} else if (inStr[i + 1] <= 'F' && inStr[i + 1] >= 'A')
++		{
++			Buffer[j] += inStr[i + 1] - 'A' + 10;
++		}
++
++		j += 1;
++	}
++
++	*Length = j;
++
++	return 0;
++}
++
++MSCLong32 TPSearchBundlesForAtr(MSCPUChar8 Atr, MSCULong32 Length,
++	MSCLPTokenInfo tokenInfo)
++{
++
++	MSCLong32 rv;
++
++#ifndef WIN32
++	DIR *hpDir = 0;
++	struct dirent *currFP = 0;
++#else
++	HANDLE hFind;
++	WIN32_FIND_DATA findData;
++	char findPath[200];
++#endif
++
++	char atrString[100];
++	char fullPath[200];
++	char fullLibPath[250];
++	char keyValue[200];
++	int atrIndex;
++
++	rv = 0;
++	atrIndex = 0;
++
++	atrToString(Atr, Length, atrString);
++
++#ifndef WIN32
++	
++	hpDir = opendir(MSC_SVC_DROPDIR);
++
++	if (hpDir == 0)
++#else
++	sprintf(findPath, "%s\\*.bundle", MSC_SVC_DROPDIR);
++	hFind = FindFirstFile(findPath, &findData);
++
++	if (hFind == INVALID_HANDLE_VALUE)
++#endif
++	{
++		DebugLogA("Cannot open PC/SC token drivers directory.\n");
++
++		return -1;
++	}
++
++#ifndef WIN32
++	while ((currFP = readdir(hpDir)) != 0)
++	{
++		if (strstr(currFP->d_name, ".bundle") != 0)
++#else
++	do
++	{
++		if (strstr(findData.cFileName, ".bundle") != 0)
++#endif
++		{
++
++			/*
++			 * The bundle exists - let's form a full path name and get the
++			 * vendor and product ID's for this particular bundle 
++			 */
++#ifndef WIN32
++			sprintf(fullPath, "%s%s%s", MSC_SVC_DROPDIR, currFP->d_name,
++				"/Contents/Info.plist");
++#else
++			sprintf(fullPath, "%s%s%s", MSC_SVC_DROPDIR, findData.cFileName,
++				"\\Contents\\Info.plist");
++#endif
++
++			atrIndex = 0;
++
++#ifdef MSC_DEBUG
++			DebugLogB("ATR comparison: FILE: %s\n", fullPath);
++			DebugLogB("ATR comparison: Target Match: %s\n", atrString);
++#endif
++
++			while (1)
++			{
++				rv = LTPBundleFindValueWithKey(fullPath,
++					MSC_ATRMSC_KEY_NAME, keyValue, atrIndex);
++				if (rv != 0)
++				{
++					break;	/* No aliases found, break out of search
++							 * aliases loop */
++				}
++#ifdef MSC_DEBUG
++				DebugLogB("ATR comparison: Source: %s\n", keyValue);
++#endif
++
++				if (strcmp(keyValue, atrString) != 0)
++				{
++					/*
++					 * Go back and see if there are any aliases 
++					 */
++					atrIndex += 1;
++					continue;
++				}
++#ifdef MSC_DEBUG
++				DebugLogB("Match found at ATR alias %d\n", atrIndex);
++#endif
++
++				/*
++				 * See if this bundle has a special name for this ATR 
++				 */
++				rv = LTPBundleFindValueWithKey(fullPath,
++					MSC_PRODMSC_KEY_NAME, keyValue, atrIndex);
++				if (rv != 0)
++				{
++					rv = LTPBundleFindValueWithKey(fullPath,
++						MSC_PRODMSC_KEY_NAME, keyValue, 0);
++					if (rv != 0)
++					{
++						DebugLogA
++							("Match found, failed due to no product name.\n");
++#ifndef WIN32
++						closedir(hpDir);
++#endif
++						return -1;
++					}
++				}
++#ifdef MSC_DEBUG
++				DebugLogB("Product name: %s\n", keyValue);
++#endif
++				strcpy(tokenInfo->tokenName, keyValue);
++
++				/*
++				 * See if this bundle has a special driver for this card 
++				 */
++				rv = LTPBundleFindValueWithKey(fullPath,
++					MSC_LIBRMSC_KEY_NAME, keyValue, atrIndex);
++				if (rv != 0)
++				{
++					rv = LTPBundleFindValueWithKey(fullPath,
++						MSC_LIBRMSC_KEY_NAME, keyValue, 0);
++					if (rv != 0)
++					{
++						DebugLogA
++							("Match found, failed due to no library path.\n");
++#ifndef WIN32
++						closedir(hpDir);
++#endif
++						return -1;
++					}
++				}
++#ifdef WIN32
++				sprintf(fullLibPath, "%s%s%s%s", MSC_SVC_DROPDIR,
++					findData.cFileName, "\\Contents\\Win32\\", keyValue);
++#else
++#ifdef MSC_TARGET_LINUX
++				sprintf(fullLibPath, "%s%s%s%s", MSC_SVC_DROPDIR,
++					currFP->d_name, "/Contents/Linux/", keyValue);
++#else
++#ifdef MSC_TARGET_OSX
++				sprintf(fullLibPath, "%s%s", MSC_SVC_DROPDIR,
++					currFP->d_name);
++
++#else
++#ifdef MSC_TARGET_BSD
++				sprintf(fullLibPath, "%s%s%s%s", MSC_SVC_DROPDIR,
++					currFP->d_name, "/Contents/BSD/", keyValue);
++
++#else
++#ifdef MSC_TARGET_SOLARIS
++				sprintf(fullLibPath, "%s%s%s%s", MSC_SVC_DROPDIR,
++					currFP->d_name, "/Contents/Solaris/", keyValue);
++
++#else
++#ifdef MSC_TARGET_HPUX
++				sprintf(fullLibPath, "%s%s%s%s", MSC_SVC_DROPDIR,
++					currFP->d_name, "/Contents/HPUX/", keyValue);
++
++#else
++#ifdef MSC_TARGET_TRU64
++				sprintf(fullLibPath, "%s%s%s%s", MSC_SVC_DROPDIR,
++					currFP->d_name, "/Contents/Tru64/", keyValue);
++
++#else
++#ifdef MSC_TARGET_CYGWIN
++				sprintf(fullLibPath, "%s%s%s%s", MSC_SVC_DROPDIR,
++					currFP->d_name, "/Contents/CygWin/", keyValue);
++#endif
++#endif
++#endif
++#endif
++#endif
++#endif
++#endif
++#endif
++
++				if (fullLibPath == NULL)
++				{
++					DebugLogA("No path to bundle library found !\n");
++					return -1;
++				}
++
++				/*
++				 * Copy the library path and return successfully 
++				 */
++				strcpy(tokenInfo->svProvider, fullLibPath);
++
++				/*
++				 * See if this bundle has a default AID 
++				 */
++				rv = LTPBundleFindValueWithKey(fullPath,
++					MSC_DEFAULTAPP_NAME, keyValue, atrIndex);
++				if (rv != 0)
++				{
++					rv = LTPBundleFindValueWithKey(fullPath,
++						MSC_DEFAULTAPP_NAME, keyValue, 0);
++				}
++
++				if (rv == 0)
++				{
++#ifdef MSC_DEBUG
++					DebugLogB("Default AID name: %s\n", keyValue);
++#endif
++					rv = stringToBytes(keyValue, tokenInfo->tokenApp,
++						&tokenInfo->tokenAppLen);
++					if (rv != 0)
++					{
++						DebugLogA
++							("Match found, failed due to malformed aid string.\n");
++#ifndef WIN32
++						closedir(hpDir);
++#endif
++						return -1;
++					}
++
++				} else
++				{
++					DebugLogA("No AID specified in bundle\n");
++					tokenInfo->tokenAppLen = 0;
++				}
++
++#ifndef WIN32
++				closedir(hpDir);
++#endif
++				return 0;
++
++			}	/* do ... while */
++		}	/* if .bundle */
++	}	/* while readdir */
++#ifdef WIN32
++	// This is part of a Do..While loop (see above)
++	while (FindNextFile(hFind, &findData) != 0);
++#endif
++
++#ifndef WIN32
++	closedir(hpDir);
++#endif
++	return -1;
++}
++
++__attribute__((visibility("default")))
++const char *TPSvcDropdir(void)
++{
++	const char *dropDir = getenv(MSC_SVC_DROPDIR_ENV);
++	if (dropDir)
++		return dropDir;
++
++	return MSC_SVC_DROPDIR_DEFAULT;
++}
++
++MSCLong32 TPLoadToken(MSCLPTokenConnection pConnection)
++{
++
++	MSCLong32 rv;
++
++	pConnection->libPointers.pvfWriteFramework = 0;
++	pConnection->libPointers.pvfInitializePlugin = 0;
++	pConnection->libPointers.pvfFinalizePlugin = 0;
++	pConnection->libPointers.pvfGetStatus = 0;
++	pConnection->libPointers.pvfGetCapabilities = 0;
++	pConnection->libPointers.pvfExtendedFeature = 0;
++	pConnection->libPointers.pvfGenerateKeys = 0;
++	pConnection->libPointers.pvfImportKey = 0;
++	pConnection->libPointers.pvfExportKey = 0;
++	pConnection->libPointers.pvfComputeCrypt = 0;
++	pConnection->libPointers.pvfExtAuthenticate = 0;
++	pConnection->libPointers.pvfListKeys = 0;
++	pConnection->libPointers.pvfCreatePIN = 0;
++	pConnection->libPointers.pvfVerifyPIN = 0;
++	pConnection->libPointers.pvfChangePIN = 0;
++	pConnection->libPointers.pvfUnblockPIN = 0;
++	pConnection->libPointers.pvfListPINs = 0;
++	pConnection->libPointers.pvfCreateObject = 0;
++	pConnection->libPointers.pvfDeleteObject = 0;
++	pConnection->libPointers.pvfWriteObject = 0;
++	pConnection->libPointers.pvfReadObject = 0;
++	pConnection->libPointers.pvfListObjects = 0;
++	pConnection->libPointers.pvfLogoutAll = 0;
++	pConnection->libPointers.pvfGetChallenge = 0;
++
++	/*
++	 * Find the Card's Library 
++	 */
++
++	rv = TPSearchBundlesForAtr(pConnection->tokenInfo.tokenId,
++		pConnection->tokenInfo.tokenIdLength, &pConnection->tokenInfo);
++
++	if (rv != 0)
++	{
++		DebugLogA("Error: Matching Token ATR Not Found.\n");
++		log_xxd(PCSC_LOG_INFO, "ATR  : ", pConnection->tokenInfo.tokenId,
++			pConnection->tokenInfo.tokenIdLength);
++
++		return SCARD_E_CARD_UNSUPPORTED;
++	}
++
++	/*
++	 * Load that library and store the handle in the SCARDCHANNEL
++	 * structure 
++	 */
++
++	rv = DYN_LoadLibrary(&pConnection->tokenLibHandle,
++		pConnection->tokenInfo.svProvider);
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		DebugLogA("Error: Could not load service library\n");
++		DebugLogB("->> %s\n", pConnection->tokenInfo.svProvider);
++		return SCARD_E_INVALID_TARGET;
++	} else
++	{
++		DebugLogB("Loading service library %s\n",
++			pConnection->tokenInfo.svProvider);
++	}
++
++	rv = TPBindFunctions(pConnection);
++
++	return rv;
++}
++
++MSCLong32 TPUnloadToken(MSCLPTokenConnection pConnection)
++{
++
++	MSCLong32 rv;
++
++	if (pConnection->tokenLibHandle == 0)
++	{
++		return SCARD_E_INVALID_VALUE;
++	}
++
++	rv = DYN_CloseLibrary(&pConnection->tokenLibHandle);
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		return rv;
++	}
++
++	pConnection->tokenLibHandle = 0;
++	return TPUnbindFunctions(pConnection);
++}
++
++MSCLong32 TPBindFunctions(MSCLPTokenConnection pConnection)
++{
++
++	MSCLong32 rv;
++
++	if (pConnection->tokenLibHandle == 0)
++	{
++		return SCARD_E_INVALID_TARGET;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfWriteFramework,
++		"PL_MSCWriteFramework");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfWriteFramework = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		/*
++		 * No big deal - this feature is just not supported 
++		 */
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfIdentifyToken, "PL_MSCIdentifyToken");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfIdentifyToken = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfInitializePlugin,
++		"PL_MSCInitializePlugin");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfInitializePlugin = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfFinalizePlugin,
++		"PL_MSCFinalizePlugin");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfFinalizePlugin = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfGetStatus, "PL_MSCGetStatus");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfGetStatus = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfGetCapabilities,
++		"PL_MSCGetCapabilities");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfGetCapabilities = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfExtendedFeature,
++		"PL_MSCExtendedFeature");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfExtendedFeature = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		/*
++		 * No big deal - there are no extended features 
++		 */
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfGenerateKeys, "PL_MSCGenerateKeys");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfGenerateKeys = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfImportKey, "PL_MSCImportKey");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfImportKey = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfExportKey, "PL_MSCExportKey");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfExportKey = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfComputeCrypt, "PL_MSCComputeCrypt");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfComputeCrypt = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfExtAuthenticate,
++		"PL_MSCExtAuthenticate");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfExtAuthenticate = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfListKeys, "PL_MSCListKeys");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfListKeys = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfCreatePIN, "PL_MSCCreatePIN");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfCreatePIN = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfVerifyPIN, "PL_MSCVerifyPIN");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfVerifyPIN = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfChangePIN, "PL_MSCChangePIN");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfChangePIN = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfUnblockPIN, "PL_MSCUnblockPIN");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfUnblockPIN = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfListPINs, "PL_MSCListPINs");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfListPINs = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfCreateObject, "PL_MSCCreateObject");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfCreateObject = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfDeleteObject, "PL_MSCDeleteObject");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfDeleteObject = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfWriteObject, "PL_MSCWriteObject");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfWriteObject = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfReadObject, "PL_MSCReadObject");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfReadObject = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfListObjects, "PL_MSCListObjects");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfListObjects = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfLogoutAll, "PL_MSCLogoutAll");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfLogoutAll = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	rv = DYN_GetAddress(pConnection->tokenLibHandle,
++		&pConnection->libPointers.pvfGetChallenge, "PL_MSCGetChallenge");
++
++	if (rv != SCARD_S_SUCCESS)
++	{
++		pConnection->libPointers.pvfGetChallenge = 0;
++		DebugLogA("TPBindFunctions: Missing functions");
++		return SCARD_F_INTERNAL_ERROR;
++	}
++
++	return SCARD_S_SUCCESS;
++}
++
++MSCLong32 TPUnbindFunctions(MSCLPTokenConnection pConnection)
++{
++
++	pConnection->libPointers.pvfWriteFramework = 0;
++	pConnection->libPointers.pvfInitializePlugin = 0;
++	pConnection->libPointers.pvfFinalizePlugin = 0;
++	pConnection->libPointers.pvfGetStatus = 0;
++	pConnection->libPointers.pvfGetCapabilities = 0;
++	pConnection->libPointers.pvfExtendedFeature = 0;
++	pConnection->libPointers.pvfGenerateKeys = 0;
++	pConnection->libPointers.pvfImportKey = 0;
++	pConnection->libPointers.pvfExportKey = 0;
++	pConnection->libPointers.pvfComputeCrypt = 0;
++	pConnection->libPointers.pvfExtAuthenticate = 0;
++	pConnection->libPointers.pvfListKeys = 0;
++	pConnection->libPointers.pvfCreatePIN = 0;
++	pConnection->libPointers.pvfVerifyPIN = 0;
++	pConnection->libPointers.pvfChangePIN = 0;
++	pConnection->libPointers.pvfUnblockPIN = 0;
++	pConnection->libPointers.pvfListPINs = 0;
++	pConnection->libPointers.pvfCreateObject = 0;
++	pConnection->libPointers.pvfDeleteObject = 0;
++	pConnection->libPointers.pvfWriteObject = 0;
++	pConnection->libPointers.pvfReadObject = 0;
++	pConnection->libPointers.pvfListObjects = 0;
++	pConnection->libPointers.pvfLogoutAll = 0;
++	pConnection->libPointers.pvfGetChallenge = 0;
++
++	return SCARD_S_SUCCESS;
++}
