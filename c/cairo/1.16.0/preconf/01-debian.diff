@@ -1,0 +1,184 @@
+--- cairo-1.16.0/boilerplate/cairo-boilerplate-constructors.c	2018-10-20 04:20:57.000000000 +0800
++++ ./boilerplate/cairo-boilerplate-constructors.c	2023-04-25 18:19:13.681468206 +0800
+@@ -7,6 +7,7 @@ void _cairo_boilerplate_register_all (vo
+ extern void _register_builtin (void);
+ extern void _register_xlib (void);
+ extern void _register_xcb (void);
++extern void _register_quartz (void);
+ extern void _register_script (void);
+ extern void _register_ps (void);
+ extern void _register_pdf (void);
+@@ -18,6 +19,7 @@ _cairo_boilerplate_register_all (void)
+     _register_builtin ();
+     _register_xlib ();
+     _register_xcb ();
++    _register_quartz ();
+     _register_script ();
+     _register_ps ();
+     _register_pdf ();
+--- cairo-1.16.0/build/configure.ac.features	2018-08-17 09:10:53.000000000 +0800
++++ ./build/configure.ac.features	2023-04-25 18:48:45.415019960 +0800
+@@ -409,6 +409,7 @@ AC_DEFUN([CAIRO_REPORT],
+ 	echo "The following features and utilities:"
+ 	echo "  cairo-trace:                $use_trace"
+ 	echo "  cairo-script-interpreter:   $use_interpreter"
++	echo "  cairo-perf-utils:           $use_perf_utils"
+ 	echo ""
+ 	echo "And the following internal features:"
+ 	echo "  pthread:       $use_pthread"
+--- cairo-1.16.0/configure.ac	2018-10-18 08:21:03.000000000 +0800
++++ ./configure.ac	2023-04-25 18:49:15.008604212 +0800
+@@ -15,6 +15,7 @@ AC_CHECK_HEADERS([unistd.h sys/ioctl.h])
+ AC_C_TYPEOF
+ 
+ AM_INIT_AUTOMAKE([1.11 foreign -Wall no-define no-dist-gzip dist-xz])
++AM_MAINTAINER_MODE
+ AM_SILENT_RULES([yes])
+ m4_ifdef([AM_PROG_AR], [AM_PROG_AR]) dnl Workaround for Automake 1.12
+ 
+@@ -873,6 +874,11 @@ dnl ====================================
+ PKG_CHECK_MODULES(gtk, "gtk+-2.0",have_gtk=yes, have_gtk=no)
+ AM_CONDITIONAL(HAVE_GTK, test "x$have_gtk" = "xyes")
+ 
++dnl ===========================================================================
++
++CAIRO_ENABLE(perf_utils, cairo-perf-utils, no, [use_perf_utils=yes])
++
++
+ AC_CONFIG_FILES([
+ Makefile
+ boilerplate/Makefile
+--- cairo-1.16.0/perf/Makefile.am	2018-08-17 09:10:53.000000000 +0800
++++ ./perf/Makefile.am	2023-04-25 18:48:45.417044464 +0800
+@@ -15,11 +15,25 @@ AM_LDFLAGS = $(CAIRO_LDFLAGS)
+ 
+ SUBDIRS = micro
+ 
++if CAIRO_HAS_PERF_UTILS
++bin_PROGRAMS = cairo-analyse-trace \
++	cairo-perf-micro \
++	cairo-perf-trace \
++	cairo-perf-diff-files \
++	cairo-perf-print \
++	cairo-perf-chart \
++	cairo-perf-compare-backends
++if HAVE_GTK
++bin_PROGRAMS += cairo-perf-graph-files
++endif
++
++else
+ noinst_PROGRAMS = \
+ 	cairo-analyse-trace \
+ 	cairo-perf-trace \
+ 	cairo-perf-micro \
+ 	$(NULL)
++endif
+ 
+ EXTRA_PROGRAMS += \
+ 	cairo-analyse-trace \
+--- cairo-1.16.0/src/Makefile.am	2018-08-17 09:10:53.000000000 +0800
++++ ./src/Makefile.am	2023-04-25 18:48:54.016044683 +0800
+@@ -44,7 +44,7 @@ libcairo_la_SOURCES = \
+ 	$(enabled_cairo_private) \
+ 	$(enabled_cairo_sources) \
+ 	$(NULL)
+-libcairo_la_LDFLAGS = $(AM_LDFLAGS) -version-info $(CAIRO_LIBTOOL_VERSION_INFO) -no-undefined $(export_symbols)
++libcairo_la_LDFLAGS = $(AM_LDFLAGS) -version-info $(CAIRO_LIBTOOL_VERSION_INFO) -no-undefined $(export_symbols) -export-symbols-regex \^cairo_.*
+ libcairo_la_LIBADD = $(CAIRO_LIBS) \
+ 	$(cairo_cxx_lib)
+ libcairo_la_DEPENDENCIES = $(cairo_def_dependency) $(cairo_cxx_lib)
+--- cairo-1.16.0/src/cairo-ft-font.c	2018-08-17 09:10:53.000000000 +0800
++++ ./src/cairo-ft-font.c	2023-04-25 18:48:34.016986279 +0800
+@@ -2393,7 +2393,11 @@ skip:
+ done:
+         free (coords);
+         free (current_coords);
++#if HAVE_FT_DONE_MM_VAR
++        FT_Done_MM_Var (face->glyph->library, ft_mm_var);
++#else
+         free (ft_mm_var);
++#endif
+     }
+ }
+ 
+--- cairo-1.16.0/src/cairo-pdf-surface.c	2018-10-17 00:53:00.000000000 +0800
++++ ./src/cairo-pdf-surface.c	2023-04-25 18:48:29.559543103 +0800
+@@ -7711,6 +7711,11 @@ _cairo_pdf_surface_mask (void			*abstrac
+      * and most common, case to handle. */
+     if (_cairo_pattern_is_constant_alpha (mask, &extents.bounded, &alpha) &&
+ 	_can_paint_pattern (source)) {
++
++	status = _cairo_pdf_operators_flush (&surface->pdf_operators);
++	if (unlikely (status))
++	    goto cleanup;
++
+ 	_cairo_output_stream_printf (surface->output, "q\n");
+ 	status = _cairo_pdf_surface_paint_pattern (surface,
+ 						   op,
+--- cairo-1.16.0/test/cairo-test-constructors.c	2018-10-20 04:20:57.000000000 +0800
++++ ./test/cairo-test-constructors.c	2023-04-25 18:19:20.339194938 +0800
+@@ -565,6 +565,7 @@ extern void _register_ft_show_glyphs_tab
+ extern void _register_ft_text_vertical_layout_type1 (void);
+ extern void _register_ft_text_vertical_layout_type3 (void);
+ extern void _register_ft_text_antialias_none (void);
++extern void _register_quartz_surface_source (void);
+ extern void _register_pdf_features (void);
+ extern void _register_pdf_mime_data (void);
+ extern void _register_pdf_surface_source (void);
+@@ -1147,6 +1148,7 @@ _cairo_test_runner_register_tests (void)
+     _register_ft_text_vertical_layout_type1 ();
+     _register_ft_text_vertical_layout_type3 ();
+     _register_ft_text_antialias_none ();
++    _register_quartz_surface_source ();
+     _register_pdf_features ();
+     _register_pdf_mime_data ();
+     _register_pdf_surface_source ();
+--- cairo-1.16.0/test/cairo-test-trace.c	2018-08-17 09:10:53.000000000 +0800
++++ ./test/cairo-test-trace.c	2023-04-25 18:48:57.504653082 +0800
+@@ -545,7 +545,11 @@ spawn_shm (const char *shm_path)
+ 
+     base = mmap (NULL, DATA_SIZE,
+ 		 PROT_READ | PROT_WRITE,
++#ifdef MAP_NORESERVE
+ 		 MAP_SHARED | MAP_NORESERVE,
++#else
++		 MAP_SHARED,
++#endif
+ 		 fd, 0);
+     close (fd);
+ 
+--- cairo-1.16.0/util/cairo-gobject/Makefile.am	2018-08-17 09:10:53.000000000 +0800
++++ ./util/cairo-gobject/Makefile.am	2023-04-25 18:48:54.016614810 +0800
+@@ -10,6 +10,6 @@ libcairo_gobject_la_SOURCES = \
+ 	$(NULL)
+ 
+ libcairo_gobject_la_CFLAGS = $(CAIRO_CFLAGS) $(GOBJECT_CFLAGS)
+-libcairo_gobject_la_LDFLAGS = -version-info $(CAIRO_LIBTOOL_VERSION_INFO) -no-undefined $(export_symbols)
++libcairo_gobject_la_LDFLAGS = -version-info $(CAIRO_LIBTOOL_VERSION_INFO) -no-undefined $(export_symbols) -export-symbols-regex \^cairo_.*
+ libcairo_gobject_la_LIBADD = $(top_builddir)/src/libcairo.la $(CAIRO_LIBS) $(GOBJECT_LIBS)
+ 
+--- cairo-1.16.0/util/cairo-script/Makefile.am	2018-08-17 09:10:53.000000000 +0800
++++ ./util/cairo-script/Makefile.am	2023-04-25 18:48:54.016940310 +0800
+@@ -14,7 +14,7 @@ libcairo_script_interpreter_la_SOURCES =
+ 	$(libcairo_script_interpreter_headers)	\
+ 	$(NULL)
+ libcairo_script_interpreter_la_CFLAGS = $(CAIRO_CFLAGS)
+-libcairo_script_interpreter_la_LDFLAGS = -version-info $(CAIRO_LIBTOOL_VERSION_INFO) -no-undefined $(export_symbols)
++libcairo_script_interpreter_la_LDFLAGS = -version-info $(CAIRO_LIBTOOL_VERSION_INFO) -no-undefined $(export_symbols) -export-symbols-regex \^cairo_.*
+ libcairo_script_interpreter_la_LIBADD = $(top_builddir)/src/libcairo.la $(CAIRO_LIBS) $(lzo_LIBS) -lz
+ 
+ csi_replay_SOURCES = csi-replay.c
+--- cairo-1.16.0/util/cairo-sphinx/sphinx.c	2018-08-17 09:10:53.000000000 +0800
++++ ./util/cairo-sphinx/sphinx.c	2023-04-25 18:48:57.506040960 +0800
+@@ -1337,7 +1337,11 @@ client_shm (const char *shm_path)
+ 
+     base = mmap (NULL, DATA_SIZE,
+ 		 PROT_READ | PROT_WRITE,
++#ifdef MAP_NORESERVE
+ 		 MAP_SHARED | MAP_NORESERVE,
++#else
++		 MAP_SHARED,
++#endif
+ 		 fd, 0);
+     close (fd);
+ 
