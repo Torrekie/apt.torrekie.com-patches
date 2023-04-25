@@ -56,7 +56,7 @@
      prefix, base_version, suffix = platform_tag.split("-")
      base_version = tuple(int(x) for x in base_version.split("."))
      base_version = base_version[:2]
-@@ -402,17 +406,31 @@ def calculate_macosx_platform_tag(archiv
+@@ -402,17 +406,29 @@ def calculate_macosx_platform_tag(archiv
          base_version = (base_version[0], 0)
      assert len(base_version) == 2
      if "MACOSX_DEPLOYMENT_TARGET" in os.environ:
@@ -74,9 +74,7 @@
 +        )
 +
 +    # Torrekie: for later formatted strings
-+    platform_deployment_string = "MACOSX_DEPLOYMENT_TARGET" if MACOSX else (
-+        "IPHONEOS_DEPLOYMENT_TARGET" if IPHONEOS else "Deployment target"
-+    )
++    platform_deployment_string = "MACOSX_DEPLOYMENT_TARGET" if MACOSX else ("IPHONEOS_DEPLOYMENT_TARGET" if IPHONEOS else "Deployment target")
 +
 +    if deploy_target:
          if deploy_target < base_version:
