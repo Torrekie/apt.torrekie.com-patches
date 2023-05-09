@@ -1,0 +1,296 @@
+--- a/man/xkbcomp.man	2022-12-08 10:02:02.000000000 +0800
++++ b/man/xkbcomp.man	2023-05-08 19:18:09.387093780 +0800
+@@ -1,118 +1,204 @@
+ .\"
+-.TH XKBCOMP 1 __xorgversion__
++.TH xkbcomp 1 __xorgversion__
+ .SH NAME
+ xkbcomp \- compile XKB keyboard description
+ .SH SYNOPSIS
+ .B xkbcomp
+-[option] source [ destination ]
++.RI [ option \ ...]
++.I source
++.RI [ destination ]
+ .SH DESCRIPTION
+-.PP
+ The
+-.I xkbcomp
++.B xkbcomp
+ keymap compiler converts a description of an XKB keymap into one of several
+-output formats.   The most common use for xkbcomp is to create a compiled
+-keymap file (.xkm extension) which can be read directly by XKB-capable X
+-servers or utilities.   The keymap compiler can also produce C header
+-files or XKB source files.  The C header files produced by xkbcomp can be
+-included by X servers or utilities that need a built-in default keymap.
+-The XKB source files produced by \fIxkbcomp\fP are fully resolved and can be
+-used to verify that the files which typically make up an XKB keymap
+-are merged correctly or to create a single file which contains a complete
+-description of the keymap.
++output formats.
++The most common use for
++.B xkbcomp
++is to create a compiled keymap file
++.RI (.xkm
++extension) which can be read directly by XKB\-capable X servers or
++utilities.
++The keymap compiler can also produce C header files or XKB source files.
++The C header files produced by
++.B xkbcomp
++can be included by X servers or utilities that need a built\-in default
++keymap.
++The XKB source files produced by
++.B xkbcomp
++are fully resolved and can be used to verify that the files which typically
++make up an XKB keymap are merged correctly or to create a single file which
++contains a complete description of the keymap.
+ .PP
+-The \fIsource\fP may specify an X display, or an \fI.xkb\fP or \fI.xkm\fP
+-file;  unless explicitly specified, the format of \fIdestination\fP
+-depends on the format of the source.   Compiling a \fI.xkb\fP (keymap source)
+-file generates a \fI.xkm\fP (compiled keymap file) by default.   If the
+-source is a \fI.xkm\fP file or an X display, \fIxkbcomp\fP generates a
+-keymap source file by default.
++.I source
++may specify an X display, an
++.I .xkb
++file, or an
++.I .xkm
++file; unless explicitly specified, the format of
++.I destination
++depends on the format of the source.
++Compiling a
++.I .xkb
++(keymap source) file generates a
++.I .xkm
++(compiled keymap file) by default.
++If the source is a
++.I .xkm
++file or an X display,
++.B xkbcomp
++generates a keymap source file by default.
+ .PP
+-If the \fIdestination\fP is an X display, the keymap for the display
+-is updated with the compiled keymap.
++If the
++.I destination
++is an X display, the keymap for the display is updated with the compiled
++keymap.
+ .PP
+-The name of the \fIdestination\fP is usually computed from the name
+-of the source, with the extension replaced as appropriate.  When compiling
+-a single map from a file which contains several maps, \fIxkbcomp\fP constructs
+-the destination file name by appending an appropriate extension to the
+-name of the map to be used.
++The name of the
++.I destination
++is usually computed from the name of the source, with the extension
++replaced as appropriate.
++When compiling a single map from a file which contains several maps,
++.B xkbcomp
++constructs the destination file name by appending an appropriate extension
++to the name of the map to be used.
+ .SH OPTIONS
+-.TP 8
++.TP
++.B \-?\fR, \fP-help
++Print a usage message and exit.
++.TP
+ .B \-a
+-Show all keyboard information, reporting implicit or derived information
+-as a comment.  Only affects \fI.xkb\fP format output.
+-.TP 8
++Show all keyboard information, reporting implicit or derived information as
++a comment; this option only affects
++.I .xkb
++format output.
++.TP
+ .B \-C
+-Produce a C header file as output (.h extension).
+-.TP 8
++Produce a C header file as output.
++.RI ( .h
++extension).
++.TP
++.B \-d
++Report debugging information (not supported in all builds).
++.TP
+ .B \-dflts
+ Compute defaults for any missing components, such as key names.
+-.TP 8
+-.B \-em1 \fImsg\fP
+-Print \fImsg\fP before printing first error message.
+-.TP 8
+-.B \-emp \fImsg\fP
+-Print \fImsg\fP at the start of each message line.
+-.TP 8
+-.B \-eml \fImsg\fP
+-If there were any errors, print \fImsg\fP before exiting.
+-.TP 8
+-.B \-help, -?
+-Show available options.
+-.TP 8
+-.B \-I\fIdir\fP
+-Specifies top-level directories to be searched for files included by the
+-keymap description.  After all directories specified by \-I options
+-have been searched, the current directory and finally, the default
+-xkb directory __xkbconfigroot__ will be searched.
++.TP
++.BI \-em1\  message
++Print
++.I message
++before displaying first error message (typically used by the X server).
++.TP
++.BI \-emp\  message
++Print
++.I message
++at the start of each error message line (typically used by the X server).
++.TP
++.BI \-eml\  message
++If there are any error messages, print
++.I message
++before exiting (typically used by the X server).
++.TP 8
++.BI \-I dir
++Search top\-level directory
++.I dir
++for files included by the keymap description.
++This option may be used multiple times.
++After all directories specified by
++.B \-I
++options have been searched, the current directory and finally, the default
++XKB data directory
++(usually
++.IR __xkbconfigroot__ )
++will be searched.
+ .sp
+-To prevent the current and default directories from being searched,
+-use the \-I option alone (i.e. without a directory), before any \-I
++To prevent the current and default directories from being searched, use the
++.B \-I
++option alone (i.e. without a directory), before any
++.B \-I
+ options that specify the directories you do want searched.
+-.TP 8
+-.B \-i\ \fIdeviceid\fP
+-If \fIsource\fP or \fIdestination\fP is a valid X display, load the keymap
+-from/into the device with the specified ID (not name).
+-.TP 8
++.TP
++.BI \-i\  deviceid
++If
++.I source
++or
++.I destination
++is a valid X display, load the keymap from/into the device with the specified
++ID (not name).
++.TP
+ .B \-l
+-List maps that specify the \fImap\fP pattern in any files listed on the
+-command line (not implemented yet).
+-.TP 8
+-.B \-m\ \fIname\fP
+-Specifies a map to be compiled from an file with multiple entries.
+-.TP 8
++List maps that specify the
++.I map
++pattern in any files listed on the command line (not implemented yet).
++.TP
++.BI \-m\  name\fR,\ \fP \-map\  name
++Compile map from the file
++.IR name ,
++which is expected to contain multiple entries.
++.TP
+ .B \-merge
+-Merge the compiled information with the map from the server (not implemented
+-yet).
+-.TP 8
+-.B \-o\ \fIname\fP
+-Specifies a name for the generated output file.  The default is the name of
+-the source file with an appropriate extension for the output format.
+-.TP 8
+-.B \-opt\ \fIparts\fP
+-Specifies a list of optional parts.  Compilation errors in any optional parts
+-are not fatal.  Parts may consist of any combination of the letters \fIc\fP,
+-\fIg\fP,\fIk\fP,\fIs\fP,\fIt\fP which specify the compatibility map, geometry,
+-keycodes, symbols and types, respectively.
+-.TP 8
+-.B -R\fIdir\fP
++Merge the compiled information with the map from the server (not
++implemented yet).
++.TP
++.BI \-o\  name
++Direct output to the file
++.IR name .
++The default is the name of the source file with an appropriate extension
++for the output format.
++Specifying \(oq\-\(cq as
++.I name
++indicates standard output.
++.TP 
++.BI \-opt\  parts\fR,\ \fP \-optional\  parts
++Compile keymap using a list of optional parts.
++Compilation errors in any optional parts are not fatal.
++.I parts
++may consist of any combination of the letters
++.BR c ,\  g ,\  k ,\  s ,\ and\  t
++which specify the compatibility map, geometry, keycodes, symbols and types,
++respectively.
++.TP
++.BI \-p\  count
++Strip
++.I count
++directories from filenames listed.
++.TP
++.BI \-R dir
+ Specifies the root directory for relative path names.
+-.TP 8
+-.B -synch
++.TP
++.B \-synch
+ Force synchronization for X requests.
+-.TP 8
++.TP
++.BI \-v\  flags
++Set level of detail for listing.
++.I flags
++are as for the
++.B \-l
++option.
++.TP
+ .B -version
+ Print version number.
+-.TP 8
+-.B \-w\ \fIlvl\fP
+-Controls the reporting of warnings during compilation.  A warning level
+-of 0 disables all warnings; a warning level of 10 enables them all.
+-.TP 8
++.TP
++.BI \-w\  level
++Set the threshold of warnings during compilation to the specified
++.IR level .
++A level of 0 disables all warnings; a level of 10 enables them all.
++.TP
+ .B \-xkb
+-Generate a source description of the keyboard as output (.xkb extension).
+-.TP 8
++Generate a source description of the keyboard as output
++.RI ( .xkb
++extension).
++.TP
+ .B \-xkm
+-Generate a compiled keymap file as output (.xkm extension).
++Generate a compiled keymap file as output
++.RI ( .xkm
++extension).
+ .SH "SEE ALSO"
+-X(__miscmansuffix__)
++.BR X (7),
++.BR setxkbmap (1),
++.BR xkbbell (1),
++.BR xkbevd (1),
++.BR xkbprint (1),
++.BR xkbvleds (1),
++.BR xkbwatch (1)
+ .SH AUTHOR
+ Erik Fortune, Silicon Graphics

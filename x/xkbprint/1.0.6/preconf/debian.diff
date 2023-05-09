@@ -1,0 +1,269 @@
+--- a/man/xkbprint.man	2022-10-16 01:28:38.000000000 +0800
++++ b/man/xkbprint.man	2023-05-09 16:54:29.597642987 +0800
+@@ -1,109 +1,191 @@
+ .\"
+-.TH XKBPRINT 1 __xorgversion__
++.TH xkbprint 1 __xorgversion__
+ .SH NAME
+ xkbprint \- print an XKB keyboard description
+ .SH SYNOPSIS
+ .B xkbprint
+-[options] source [ output_file ]
++.RI [ option \ ...]
++.I source
++.RI [ output_file ]
+ .SH DESCRIPTION
+-.PP
+ The
+-.I xkbprint
++.B xkbprint
+ command generates a printable or encapsulated PostScript description of the
+-XKB keyboard description specified by \fIsource\fP.  The \fIsource\fP can be
+-any compiled keymap (.xkm) file that includes a geometry description or an
+-X display specification.  If an \fIoutput_file\fP is specified, xkbprint
+-writes to it.  If no output file is specified, xkbprint creates replaces
+-the extension of the source file with \fI.ps\fP or \fI.eps\fP depending
+-on the requested format.  If the source is a non-local X display (e.g.:0),
+-xkbprint appends the appropriate prefix to the display specification,
+-replacing the colon with a dash.  For a local display, xkprint uses
+-server-\fIn\fP where \fIn\fP is the number of the display.
++XKB keyboard description specified by
++.IR source .
++.I source
++can be
++an X display specification or
++any compiled keymap
++.RI ( .xkm )
++file that includes a geometry description
++If
++.I output_file
++is specified,
++.B xkbprint
++writes to it.
++If no output file is specified, xkbprint creates a file of the name name as
++.IR source ,
++replacing the extension of the source file with
++.I .ps
++or
++.I .eps
++depending
++on the requested format.
++If
++.I source
++is a non\-local X display (e.g.,
++.BR :0 ),
++.B xkbprint
++appends the appropriate prefix to the display specification, replacing the
++colon with a dash.
++For a local display,
++.B xkprint
++uses
++.RI server\- n ,
++where
++.I n
++is the number of the display.
+ .SH OPTIONS
+-.TP 8
++.TP
+ .B \-?, \-help
+-Prints a usage message.
+-.TP 8
++Print a usage message and exit.
++.TP
+ .B \-color
+-Print using the colors specified in the geometry file;  by default, xkbprint
+-prints a black-and-white image of the keyboard.
+-.TP 8
++Print using the colors specified in the geometry file; by default,
++.B xkbprint
++prints a black\-and\-white image of the keyboard.
++.TP
++.B \-d
++Report debugging information.
++This option is only available if debugging support was compiled into
++.BR xkbprint .
++.TP
+ .B \-dflts
+ Attempt to compute default names for any missing components, such as keys.
+-.TP 8
++.TP
+ .B \-diffs
+ Show symbols only where they are explicitly bound.
+-.TP 8
++.TP
+ .B \-eps
+ Generate an encapsulated PostScript file.
+-.TP 8
++.TP
+ .B \-fit
+ Fit the keyboard image on the page (default).
+-.TP 8
++.TP
+ .B \-full
+ Print the keyboard at full size.
+-.TP 8
+-.B \-grid\ \fIres\fP
+-Print a grid with \fIres\fP\ mm resolution over the keyboard.
+-.TP 8
+-.B \-if\ \fIfontName\fP
+-Specifies an internal PostScript type 1 font to dump to the specified
+-output file or to \fIfontName\fP.pfa, if no output file is specified.
++.TP
++.BI \-grid\  res
++Print a grid over the keyboard with lines
++.IR res
++millimeters apart.
++.TP
++.BI \-I directory
++Use the specified directory (an absolute path) for include directives.
++This option may be specified multiple times, and is only available if
++debugging support was compiled into
++.BR xkbprint .
++.TP
++.BI \-if\  fontName
++Dump the specified font as an internal PostScript Type 1 font to the
++specified output file, or to
++.RI fontName .pfa
++if no output file is specified.
+ No keyboard description is printed if an internal font is dumped.
+-.TP 8
+-.B \-label\ \fItype\fP
+-Specifies the labels to be printed on keys;  valid types are: \fInone\fP,
+-\fIname\fP, \fIcode\fP, and \fIsymbols\fP.
+-.TP 8
+-.B \-lc\ \fI<locale>\fP
+-Specifies a locale in which KeySyms should be resolved.
+-.TP 8
++.TP
++.B \-kc
++Print keycodes, if possible.
++.TP
++.BI \-label\  type
++Print labels on the keys of the specified type;
++.BR none ,
++.BR name ,
++.BR code ,
++and
++.B symbols
++are accepted.
++.TP
++.BI \-lc\  locale
++Resolve keysyms in the specified locale.
++.TP
+ .B \-level1
+ Generate level 1 PostScript.
+-.TP 8
++.TP
+ .B \-level2
+ Generate level 2 PostScript.
+ .TP 8
+-.B \-lg\ \fIgroup\fP
+-Print symbols in keyboard groups starting from \fIgroup\fP.
+-.TP 8
+-.B \-ll\ \fIlevel\fP
+-Print symbols starting from shift level \fIlevel\fP.
+-.TP 8
++.BI \-lg\  group
++Print symbols in keyboard groups starting from
++.IR group .
++.TP
++.BI \-ll\  level
++Print symbols starting from shift level.
++.TP
+ .B \-mono
+-Generate black-and-white image of keyboard (default).
+-.TP 8
+-.B \-n\ \fInum\fP
+-Print \fInum\fP copies.
+-.TP 8
+-.B \-nkg\ \fInum\fP
+-Print the symbols in \fInum\fP keyboard groups.
+-.TP 8
+-.B \-npk\ \fInum\fP
+-Number of keyboard images to print on each page; for EPS files, this
+-specifies the total number of keyboard images to print.
+-.TP 8
+-.B \-o\ \fIfile\fP
+-Write output to \fIfile\fP.
+-.TP 8
+-.B \-R\fIdirectory\fP
+-Use \fIdirectory\fP as the root directory; all path names are interpreted
+-relative to \fIdirectory\fP.
+-.TP 8
+-.B \-pict \fIwhich\fP
+-Controls use of pictographs instead of keysym names where available.
+-\fIwhich\fP can be any of \fIall\fP, \fInone\fP, or \fIcommon\fP (default).
+-.TP 8
++Generate black\-and\-white image of keyboard (default).
++.TP
++.BI \-n\  num
++Print
++.I num
++copies.
++.TP
++.BI \-nkg\  num
++Print the symbols in
++.I num
++keyboard groups.
++.TP
++.B \-nokc
++Do not print keycodes, even if it is possible.
++.TP
++.BI \-npk\  num
++Print
++.I num
++keyboard images on each page; for EPS files, this specifies the total
++number of keyboard images to print.
++.TP
++.BI \-ntg\  num
++Print no more than
++.I num
++total groups.
++.TP
++.BI \-o\  file
++Write output to
++.IR file .
++.TP
++.BI \-R directory
++Use
++.I directory
++as the root directory; all path names are interpreted relative to
++.IR directory .
++.TP
++.BI \-pict\  which
++Use pictographs (where available) instead of keysym names according to the
++specified policy.
++.I which
++can be any of
++.IR all ,
++.IR none ,
++or
++.I common
++(default).
++.TP
+ .B \-synch
+-Forces synchronization for X requests.
+-.TP 8
++Force synchronization of X requests.
++.TP
+ .B \-version
+ Print out the program version and exit.
+-.TP 8
+-.B \-w\ \fIlevel\fP
+-Sets warning level (0 for no warning, 10 for all warnings).
++.TP
++.BI \-w\  level
++Set warning level to specified value (0 for no warning, 10 for all
++warnings).
+ .SH "SEE ALSO"
+-.BR X (__miscmansuffix__),
+-.BR xkbcomp (__appmansuffix__)
++.BR X (7),
++.BR setxkbmap (1),
++.BR xkbbell (1),
++.BR xkbcomp (1),
++.BR xkbevd (1),
++.BR xkbvleds (1),
++.BR xkbwatch (1)
+ .SH AUTHOR
+ Erik Fortune, Silicon Graphics

@@ -1,0 +1,224 @@
+--- a/man/xkbevd.man	2022-11-13 07:49:51.000000000 +0800
++++ b/man/xkbevd.man	2023-05-09 16:32:50.665106199 +0800
+@@ -1,96 +1,161 @@
+ .\"
+-.TH XKBEVD 1 __xorgversion__
++.TH xkbevd 1 __xorgversion__
+ .SH NAME
+ xkbevd \- XKB event daemon
+ .SH SYNOPSIS
+ .B xkbevd
+-[ options ]
++.RI [ option \ ...]
+ .SH DESCRIPTION
+-.PP
+ This command is very raw and is therefore only partially implemented; we
+-present it here as a rough prototype for developers, not as a general purpose
+-tool for end users.  Something like this might make a suitable replacement
+-for xev; I'm not signing up, mind you, but it's an interesting idea.
++present it here as a rough prototype for developers, not as a general
++purpose tool for end users.
++Something like this might make a suitable replacement for
++.BR xev (1);
++I'm not signing up, mind you, but it's an interesting
++idea.
+ .PP
+ The
+ .I xkbevd
+-event daemon listens for specified XKB events and executes requested commands
+-if they occur.  The configuration file consists of a list of event
+-specification/action pairs and/or variable definitions.
++event daemon listens for specified XKB events and executes requested
++commands if they occur.
++The configuration file consists of a list of event specification/action
++pairs and/or variable definitions.
+ .PP
+ An event specification consists of a short XKB event name followed by a
+ string or identifier which serves as a qualifier in parentheses; empty
+ parenthesis indicate no qualification and serve to specify the default
+ command which is applied to events which do not match any of the other
+-specifications.  The interpretation of the qualifier depends on the type
+-of the event: Bell events match using the name of the bell, message events
+-match on the contents of the message string and slow key events accept
+-any of \fIpress\fP, \fIrelease\fP, \fIaccept\fP, or \fIreject\fP.  No
+-other events are currently recognized.
++specifications.
++The interpretation of the qualifier depends on the type of the event: bell
++events match using the name of the bell; message events match on the
++contents of the message string; and slow key events accept any of
++.BR press ,
++.BR release ,
++.BR accept ,
++or
++.BR reject .
++No other events are currently recognized.
+ .PP
+ An action consists of an optional keyword followed by an optional string
+-argument.  Currently, \fIxkbev\fP recognizes the actions: \fInone\fP,
+-\fIignore\fP, \fIecho\fP, \fIprintEvent\fP, \fIsound\fP, and \fIshell\fP.
++argument.
++Currently,
++.B xkbevd
++recognizes the actions
++.BR none ,
++.BR ignore ,
++.BR echo ,
++.BR printEvent ,
++.BR sound ,
++and
++.BR shell .
+ If the action is not specified, the string is taken as the name of a sound
+ file to be played unless it begins with an exclamation point, in which case
+ it is taken as a shell command.
+ .PP
+ Variable definitions in the argument string are expanded with fields from
+ the event in question before the argument string is passed to the action
+-processor.  The general syntax for a variable is
+-either $\fIc\fP or $(\fIstr\fP), where \fIc\fP is a single character and
+-\fIstr\fP is a string of arbitrary length.  All parameters have both
+-single-character and long names.
++processor.
++The general syntax for a variable is either
++.RI $ c
++or
++.RI $( str ),
++where
++.I c
++is a single character and
++.I str
++is a string of arbitrary length.
++All parameters have both single\-character and long names.
+ .PP
+ The list of recognized parameters varies from event to event and is too long
+-to list here right now.  This is a developer release anyway, so you can
+-be expected to look at the source code (evargs.c is of particular interest).
+-.PP
+-The \fIignore\fP, \fIecho\fP, \fIprintEvent\fP, \fIsound\fP,and \fIshell\fP
+-actions do what you would expect commands named \fIignore\fP, \fIecho\fP,
+-\fIprintEvent\fP, \fIsound\fP, and \fIshell\fP to do, except that the sound
+-command has only been implemented and tested for SGI machines.  It launches
+-an external program right now, so it should be pretty easy to adapt,
+-especially if you like audio cues that arrive about a half-second after you
+-expect them.
++to list here right now.
++This is a developer release anyway, so you can be expected to look at the
++source code
++.RI ( evargs.c
++is of particular interest).
+ .PP
+-The only currently recognized variables are \fIsoundDirectory\fP and
+-\fIsoundCmd\fP.  I'm sure you can figure out what they do.
++The
++.BR ignore ,
++.BR echo ,
++.BR printEvent ,
++.BR sound ,
++and
++.B shell
++actions do what you would expect commands named
++.BR ignore ,
++.BR echo ,
++.BR printEvent ,
++.BR sound ,
++and
++.B shell
++to do, except that the
++.B sound
++command has only been implemented and tested for SGI machines.
++It launches an external program right now, so it should be pretty easy to
++adapt, especially if you like audio cues that arrive about a half\-second
++after you expect them.
++.PP
++The only currently recognized variables are
++.I soundDirectory 
++and
++.IR soundCmd .
++I'm sure you can figure out what they do.
+ .SH OPTIONS
+-.TP 8
+-.B \-help
+-Prints a usage message that is far more up-to-date than anything in this
+-man page.
+-.TP 8
+-.B \-cfg \fIfile\fP
+-Specifies the configuration file to read.  If no configuration file is
+-specified, \fIxkbevd\fP looks for ~/.xkb/xkbevd.cf and $(LIBDIR)/xkb/xkbevd.cf
+-in that order.
+-.TP 8
+-.B \-sc\ \fIcmd\fP
+-Specifies the command used to play sounds.
+-.TP 8
+-.B \-sd\ \fIdirectory\fP
+-Specifies a top-level directory for sound files.
+-.TP 8
+-.B \-display\ \fIdisplay\fP
+-Specifies the display to use.  If not present, \fIxkbevd\fP uses $DISPLAY.
+-.TP 8
++.TP
++.BR \-? ,\  \-help
++Print a usage message that is far more up\-to\-date than anything in this
++manpage (or not).
++.TP
+ .B \-bg
+-Tells \fIxkbevd\fP to fork itself (and run in the background).
+-.TP 8
+-.B \-synch
+-Forces synchronization of all X requests.  Slow.
+-.TP 8
++Fork and run in the background.
++.TP
++.BI \-cfg\  file
++Read the specified configuration file.
++If no configuration file is specified,
++.B xkbevd
++looks for
++.RI $HOME /.xkb/xkbevd.cf
++and
++/usr/lib/X11/xkb/xkbevd.cf ,
++in that order.
++.TP
++.BI \-d\  display\fR,\ \fP \-display\  display
++Connect to the X server at
++.IR display .
++If not specified,
++.B xkbevd
++.IR $DISPLAY .
++.TP
++.BR \-s ,\  \-synch
++Force synchronization of all X requests.
++Slow.
++.TP
++.BI \-sc\  cmd
++Use the command
++.I cmd
++to play sounds.
++.TP
++.BI \-sd\  directory
++Look for sound files at the file specification
++.I directory
++(should be an absolute path).
++.TP
++.B \-v
++Print more information, including debugging messages.
++Multiple specifications of
+ .B \-v
+-Print more information, including debugging messages.  Multiple
+-specifications of \fI-v\fP cause more output, to a point.
+-.TP 8
++cause more output, to a point.
++.TP
+ .B \-version
+ Prints the program version and exits.
+ .SH "SEE ALSO"
+ .BR xev (__appmansuffix__),
+ .BR xkbwatch (__appmansuffix__),
+-.BR X (__miscmansuffix__).
++.BR X (7),
++.BR setxkbmap (1),
++.BR xkbbell (1),
++.BR xkbcomp (1),
++.BR xkbprint (1),
++.BR xkbvleds (1),
++.BR xkbwatch (1)
+ .SH AUTHOR
+ Erik Fortune, Silicon Graphics

@@ -1,0 +1,328 @@
+--- a/man/setxkbmap.man	2022-04-04 04:45:37.000000000 +0800
++++ b/man/setxkbmap.man	2023-05-08 18:45:48.077758146 +0800
+@@ -1,144 +1,166 @@
+ .\"
+ .TH SETXKBMAP __appmansuffix__ __xorgversion__
+ .SH NAME
+-setxkbmap
+-\- set the keyboard using the X Keyboard Extension
++setxkbmap \- set the keyboard using the X Keyboard Extension
+ .SH SYNOPSIS
+-.B setxkbmap [
+-.I args
+-.B ] [
+-.I layout
+-.B [
+-.I variant
+-.B [
+-.I option  ...
+-.B ] ] ]
++.B setxkbmap
++.RI [ option \ ...]
++.RI [ layout
++.RI [ variant
++.RI [ xkboption \ ...]\ ]\ ]
+ .SH DESCRIPTION
+ The
+ .B setxkbmap
+-command maps the keyboard to use the layout determined by the options
+-specified on the command line.
+-.P
++command configures the keyboard to use the layout determined by the
++parameters specified on the command line.
+ An XKB keymap is constructed from a number of components which are compiled
+-only as needed.  The source for all of the components can be found in
++only as needed.
++The source for all of the components can be found in
+ .IR __xkbconfigroot__ .
++.PP
++If one or more non\-option arguments are provided, the first is interpreted
++as a layout.
++.PP
++If two or more non\-option arguments are provided, the second is
++interpreted as the variant.
++.PP
++If three or more non\-option arguments are provided, the third and
++subsequent ones are interpreted as XKB options.
+ .SH OPTIONS
+-.TP 8
+-.B \-compat \fIname\fP
+-Specifies the name of the compatibility map component used to construct
+-a keyboard layout.
+-.TP 8
+-.B \-config \fIfile\fP
+-Specifies the name of an XKB configuration file which describes the
+-keyboard to be used.
+-.TP 8
+-.B \-device \fIdevice\fP
++.TP
++.BI \-compat\  name
++Use the specified compatibility map component to construct a keyboard 
++layout.
++.TP
++.BI \-config\  file
++Use the specified XKB configuration file, which describes the keyboard to
++be used.
++.TP
++.BI \-device\ device
+ Specifies the numeric device id of the input device to be updated with
+ the new keyboard layout. If not specified, the core keyboard device of
+ the X server is updated.
+-.TP 8
+-.B \-display \fIdisplay\fP
+-Specifies the display to be updated with the new keyboard layout.
+-.TP 8
+-.B \-geometry \fIname\fP
+-Specifies the name of the geometry component used to construct
+-a keyboard layout.
+-.TP 8
+-.B \-help
+-Prints a message describing the valid input to \fIsetxkbmap\fP.
+-.TP 8
+-.B \-I \fIdirectory\fP
++.TP
++.BI \-display\  display
++Update the specified display with the new keyboard layout.
++.TP
++.BI \-geometry\  name
++Use the specified geometry component to construct a keyboard layout.
++.TP
++.BR \-? ,\  \-help
++Print a usage message and exit.
++.TP
++.BI \-I\  directory
+ Adds a directory to the list of directories to be used to search for
+ specified layout or rules files.
+-.TP 8
+-.B \-keycodes \fIname\fP
++.TP
++.BI \-keycodes\  name
+ Specifies the name of the keycodes component used to construct
+ a keyboard layout.
+-.TP 8
+-.B \-keymap \fIname\fP
+-Specifies the name of the keymap description used to construct
+-a keyboard layout.
+-.TP 8
+-.B \-layout \fIname\fP
+-Specifies the name of the layout used to determine the components which
+-make up the keyboard description. The \fI-layout\fP option may only be used
+-once. Multiple layouts can be specified as a comma-separated list.
+-.TP 8
+-.B \-model \fIname\fP
+-Specifies the name of the keyboard model used to determine the components
+-which make up the keyboard description.  Only one model may be specified
+-on the command line.
+-.TP 8
+-.B \-option \fIname\fP
+-Specifies the name of an option to determine the components which make up
+-the keyboard description;  multiple options may be specified, one per
+-\fI-option\fP flag. Note that
+-.B setxkbmap
+-adds options specified in the command line to the options that were set
+-before (as saved in root window properties). If you want to replace all
+-previously specified options, use the \fI-option\fP flag with an empty
+-argument first.
+-.TP 8
++.TP
++.BI \-keymap\  name
++Use the specified keymap description to construct a keyboard layout.
++.TP
++.BI \-layout\  name
++Use the specified layout to determine the components which make up the
++keyboard description.
++Only one layout is permitted.
++.TP
++.BI \-model\  name
++Use the specified keyboard model to determine the components which make up
++the keyboard description.
++Only one model is permitted.
++.TP
++.BI \-option\  name
++Use the specified option to determine the components which make up the
++keyboard description; multiple options may be specified, one per
++.B \-option
++flag.
++Note that
++.B setxkbmap
++does not replace, but merely adds to, any XKB options already set on the
++display (these are saved in root window properties).
++If you want
++.I only
++the specified options to be set, use the
++.B \-option
++flag with an empty argument first.
++.TP
+ .B \-print
+-With this option \fBsetxkbmap\fP just prints component names in a format
+-acceptable by \fBxkbcomp\fP (an XKB keymap compiler) and exits. The option
+-can be used for tests instead of a verbose option and in cases when one needs
+-to run both the \fBsetxkbmap\fP and the \fBxkbcomp\fP in chain (see below).
+-.TP 8
+-.B \-query
+-With this option \fBsetxkbmap\fP just prints the current rules, model,
+-layout, variant, and options, then exits.
+-.TP 8
+-.B \-rules \fIfile\fP
+-Specifies the name of the rules file used to resolve the requested layout
+-and model to a set of component names.
+-.TP 8
+-.B \-symbols \fIname\fP
+-Specifies the name of the symbols component used to construct
+-a keyboard layout.
+-.TP 8
++Print component names in a format
++acceptable by
++.BR xkbcomp (1)
++(an XKB keymap compiler) and exit.
++This option is useful for testing, or when one needs to run both
++.B setxkbmap
++and
++.B xkbcomp
++in a pipeline (see below).
++.TP
++.BI \-rules\  file
++Use the specified rules file to resolve the requested layout and model to a
++set of component names.
++Only one rules file is permitted.
++.TP
++.BI \-symbols\  name
++Use the specified symbols component to construct a keyboard layout.
++.TP
+ .B \-synch
+ Force synchronization for X requests.
+-.TP 8
+-.B \-types \fIname\fP
+-Specifies the name of the types component used to construct
+-a keyboard layout.
+-.TP 8
+-.B \-variant \fIname\fP
+-Specifies which variant of the keyboard layout should be used to determine
+-the components which make up the keyboard description. The \fI-variant\fP
+-option may only be used once. Multiple variants can be specified as a
+-comma-separated list and will be matched with the layouts specified with
+-\fI-layout\fP.
+-.TP 8
+-.B \-verbose|\-v [\fIlevel\fP]
+-Specifies level of verbosity in output messages.  Valid levels range from
+-0 (least verbose) to 10 (most verbose).  The default verbosity level is 5.
+-If no level is specified, each \fI-v\fP or \fI-verbose\fP flag raises the
+-level by 1.
+-.TP 8
++.TP
++.BI \-types\  name
++Use the specified types component to construct a keyboard layout.
++.TP
++.BI \-variant\  name
++Use the specified layout variant to determine which components will make up
++the keyboard description.
++Only one variant is permitted.
++.TP
++.BI \-v\  level\fR,\ \fP \-verbose\  level
++Set verbosity to specified level.
++.TP
+ .B \-version
+ Prints the program's version number.
+-.SH USING WITH xkbcomp
+-If you have an Xserver and a client shell running on different computers and
+-some XKB configuration files on those machines are different, you can get
+-problems specifying a keyboard map by model, layout, and options names.
+-This is because \fBsetxkbmap\fP converts its arguments to names of XKB
+-configuration files according to files that are on the client-side computer,
+-then sends these file names to the server where \fBxkbcomp\fP has to
+-compose a complete keyboard map using files which the server has.
+-Thus if the sets of files differ in some way, the names that
+-\fBsetxkbmap\fP generates can be unacceptable on the server side.  You can
+-solve this problem by running the \fBxkbcomp\fP on the client side too.
+-With the \fI-print\fP option \fBsetxkbmap\fP just prints the file names
+-in an appropriate format to its stdout and this output can be piped
+-directly to the \fBxkbcomp\fP input.  For example, the command
+-
+-\fBsetxkbmap us -print | xkbcomp - $DISPLAY\fP
+-
+-makes both steps run on the same (client) machine and loads a keyboard map into
+-the server.
+-
++.SH "USING WITH xkbcomp" 
++If an X server and X client are running on different computers and the XKB
++configuration files on those machines differ, problems may result when
++specifying a keyboard map.
++This is because
++.B setxkbmap
++converts the XKB component names to the names of XKB configuration files
++according to the XKB data on the client machine.
++It then sends the file names to the X server, where
++.B xkbcomp
++composes a complete keyboard map using
++.I its
++XKB configuration files.
++Thus, if the sets of files differ significantly, the names that
++.B setxkbmap
++generates on the client side may be unacceptable on the server side, or
++cause unexpected keyboard behavior.
++One way to solve this problem is by running
++.B xkbcomp
++on the client side as well.
++Use the
++.B \-print
++option of
++.B setxkbmap
++to print the XKB description
++in an appropriate format to standard output, and connect that to
++.BR xkbcomp 's
++standard input with a pipe.
++For example, the command
++.PP
++.nf
++.B setxkbmap \-print us | xkbcomp \- $DISPLAY
++.fi
++.PP
++generates both the XKB keyboard description
++.RB ( setxkbmap )
++and the compiled XKB keyboard map
++.RB ( xkbcomp )
++on the client side, and then uploads the map to the X server at
++.IR $DISPLAY .
+ .SH "XWAYLAND"
+ Xwayland is an X server that uses a Wayland Compositor as backend.
+ Xwayland acts as translation layer between the X protocol and the Wayland
+@@ -150,7 +172,21 @@ In most instances, using \fBsetxkbmap\fP
+ bug in a shell script and \fBsetxkbmap\fP will print a warning. Use the Wayland
+ Compositor's native XKB configuration methods instead.
+ 
+-.SH SEE ALSO
+-xkbcomp(__appmansuffix__), xkeyboard-config(__miscmansuffix__)
+ .SH FILES
+ .I __xkbconfigroot__
++.SH "SEE ALSO"
++.BR X (7),
++.BR xkbbell (1),
++.BR xkbcomp (1),
++.BR xkbevd (1),
++.BR xkbprint (1),
++.BR xkbvleds (1),
++.BR xkbwatch  (1)
++.SH COPYRIGHT
++Copyright 1994, Silicon Graphics Computer Systems and X Consortium, Inc.
++.br
++See
++.BR X (7)
++for a full statement of rights and permissions.
++.SH AUTHOR
++Erik Fortune, Silicon Graphics
+--- a/setxkbmap.c	2022-04-04 04:45:37.000000000 +0800
++++ b/setxkbmap.c	2023-05-08 18:19:56.510460674 +0800
+@@ -1090,9 +1090,12 @@ is_xwayland(void)
+         /* e.g. Xnest, but definitely not Xwayland */
+         goto out;
+     }
++    if (major < 1 || (major == 1 && minor < 3)) {
++        goto out;
++    }
+ 
+     resources = XRRGetScreenResourcesCurrent(dpy, DefaultRootWindow(dpy));
+-    if (!resources) {
++    if (!resources || resources->noutput < 1) {
+         goto out;
+     }
+ 
