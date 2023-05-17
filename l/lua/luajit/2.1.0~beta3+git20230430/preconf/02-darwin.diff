@@ -1,0 +1,115 @@
+--- a/src/Makefile	2023-05-17 16:00:56.950896167 +0800
++++ b/src/Makefile	2023-05-17 15:44:57.043867343 +0800
+@@ -71,14 +71,14 @@ CCWARN= -Wall
+ # as dynamic mode.
+ #
+ # Mixed mode creates a static + dynamic library and a statically linked luajit.
+-BUILDMODE= mixed
++#BUILDMODE= mixed
+ #
+ # Static mode creates a static library and a statically linked luajit.
+ #BUILDMODE= static
+ #
+ # Dynamic mode creates a dynamic library and a dynamically linked luajit.
+ # Note: this executable will only run when the library is installed!
+-#BUILDMODE= dynamic
++BUILDMODE= dynamic
+ #
+ ##############################################################################
+ 
+@@ -321,13 +321,14 @@ ifeq (Darwin,$(TARGET_SYS))
+   endif
+   TARGET_STRIP+= -x
+   TARGET_XCFLAGS+= -DLUAJIT_UNWIND_EXTERNAL
+-  TARGET_XSHLDFLAGS= -dynamiclib -single_module -undefined dynamic_lookup -fPIC
++  TARGET_XSHLDFLAGS= -dynamiclib -single_module -fPIC
+   TARGET_DYNXLDOPTS=
+   TARGET_XSHLDFLAGS+= -install_name $(TARGET_DYLIBPATH) -compatibility_version $(MAJVER).$(MINVER) -current_version $(MAJVER).$(MINVER).$(RELVER)
+ else
+ ifeq (iOS,$(TARGET_SYS))
+   TARGET_STRIP+= -x
+-  TARGET_XSHLDFLAGS= -dynamiclib -single_module -undefined dynamic_lookup -fPIC
++  TARGET_XCFLAGS+= -DLUAJIT_ENABLE_JIT
++  TARGET_XSHLDFLAGS= -dynamiclib -single_module -fPIC
+   TARGET_DYNXLDOPTS=
+   TARGET_XSHLDFLAGS+= -install_name $(TARGET_DYLIBPATH) -compatibility_version $(MAJVER).$(MINVER) -current_version $(MAJVER).$(MINVER).$(RELVER)
+   ifeq (arm64,$(TARGET_LJARCH))
+--- a/src/lib_os.c	2023-04-30 19:38:29.000000000 +0800
++++ b/src/lib_os.c	2023-05-17 15:51:10.350090187 +0800
+@@ -29,6 +29,11 @@
+ #include <stdio.h>
+ #endif
+ 
++#if LJ_TARGET_OSX || LJ_TARGET_IOS
++#include <spawn.h>
++#include <crt_externs.h>
++#endif
++
+ #if !LJ_TARGET_PSVITA
+ #include <locale.h>
+ #endif
+@@ -40,6 +45,34 @@
+ LJLIB_CF(os_execute)
+ {
+ #if LJ_NO_SYSTEM
++#if LJ_TARGET_OSX || LJ_TARGET_IOS
++  // Torrekie: Use posix_spawn, even we do have system()
++  // May require additional entitlements on iOS15+
++  char *argvp[4];
++  char **envp = *_NSGetEnviron();
++  pid_t pid;
++  int status;
++
++  // interp with a shell, then we can treat the whole command as an argument
++  // That's how Apple does, but seems slower
++  argvp[0] = "/bin/sh"; // Need to patch for rootless
++  argvp[1] = "-c";
++  argvp[2] = (char *)luaL_optstring(L, 1, NULL);
++  argvp[3] = NULL;
++
++  status = posix_spawn(&pid, argvp[0], NULL, NULL, argvp, envp);
++  if (status == 0) {
++    while (waitpid(pid, &status, 0) == -1 && (errno == EINTR));
++  }
++#if LJ_52
++  if (argvp[2])
++    return luaL_execresult(L, WEXITSTATUS(status));
++  setboolV(L->top++, 1);
++#else
++  setintV(L->top++, WEXITSTATUS(status));
++#endif
++  return 1;
++#else
+ #if LJ_52
+   errno = ENOSYS;
+   return luaL_fileresult(L, 0, NULL);
+@@ -47,6 +80,7 @@ LJLIB_CF(os_execute)
+   lua_pushinteger(L, -1);
+   return 1;
+ #endif
++#endif
+ #else
+   const char *cmd = luaL_optstring(L, 1, NULL);
+   int stat = system(cmd);
+--- a/src/jit/bcsave.lua	2023-05-17 16:49:50.291272325 +0800
++++ b/src/jit/bcsave.lua	2023-04-30 19:38:29.000000000 +0800
+@@ -534,7 +534,7 @@ typedef struct {
+   elseif ctx.arch == "arm" then
+     isfat, mobj = true, "mach_fat_obj"
+   elseif ctx.arch == "arm64" then
+-    is64, align, mobj = true, 8, "mach_obj_64"
++    is64, align, isfat, mobj = true, 8, true, "mach_fat_obj_64"
+   else
+     check(ctx.arch == "x86", "unsupported architecture for OSX")
+   end
+@@ -544,8 +544,8 @@ typedef struct {
+   -- Create Mach-O object and fill in header.
+   local o = ffi.new(mobj)
+   local mach_size = aligned(ffi.offsetof(o, "space")+#symname+2, align)
+-  local cputype = ({ x86={7}, x64={0x01000007}, arm={7,12}, arm64={0x0100000c} })[ctx.arch]
+-  local cpusubtype = ({ x86={3}, x64={3}, arm={3,9}, arm64={0} })[ctx.arch]
++  local cputype = ({ x86={7}, x64={0x01000007}, arm={7,12}, arm64={0x01000007,0x0100000c} })[ctx.arch]
++  local cpusubtype = ({ x86={3}, x64={3}, arm={3,9}, arm64={3,0} })[ctx.arch]
+   if isfat then
+     o.fat.magic = be32(0xcafebabe)
+     o.fat.nfat_arch = be32(#cpusubtype)
