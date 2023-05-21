@@ -1130,8 +1130,8 @@
 -"%{asm_macosx_version_min=*: -mmacosx-version-min=%* } \
 -   %<asm_macosx_version_min=* "
 +#define ASM_MIPHONEOS_VERSION_MIN_SPEC \
-+"%{asm_miphoneos_version_min=*: -miphoneos-version-min=%* } \
-+   %<asm_miphoneos_version_min=* "
++"%{asm_iphoneos_version_min=*: -miphoneos-version-min=%* } \
++   %<asm_iphoneos_version_min=* "
  #else
 -#define ASM_MMACOSX_VERSION_MIN_SPEC " %<asm_macosx_version_min=* "
 +#define ASM_MIPHONEOS_VERSION_MIN_SPEC " %<asm_iphoneos_version_min=* "
