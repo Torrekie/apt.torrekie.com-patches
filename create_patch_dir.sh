@@ -144,4 +144,6 @@ echo "Creating ${FINALDIR}"
 # preconf/postconf: Progress before/after configure
 # predest/postdest: Progress before/after destroot
 # prepatch/postpatch: Progress before/after patch
+# maintscript: Debian Maintainer Scripts (This should be in source packages I believe)
 mkdir -p "${FINALDIR}/"{pre,post}{conf,dest,patch}
+mkdir -p "${FINALDIR}/maintscript"
