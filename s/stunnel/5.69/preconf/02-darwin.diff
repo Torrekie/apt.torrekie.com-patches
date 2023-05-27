@@ -1,0 +1,45 @@
+--- a/configure.ac	2023-02-08 03:01:09.000000000 +0800
++++ b/configure.ac	2023-05-24 15:54:37.449916430 +0800
+@@ -18,8 +18,7 @@ AC_DEFINE_UNQUOTED(esc(OS_$host_os))
+ 
+ case "$host_os" in
+ *darwin*)
+-    # OSX does not declare ucontext without _XOPEN_SOURCE
+-    AC_DEFINE([_XOPEN_SOURCE], [500], [Use X/Open 5 with POSIX 1995])
++    # Assume Darwin shipped ucontext is broken, don't define XOPEN_SOURCE
+     # OSX does not declare chroot() without _DARWIN_C_SOURCE
+     AC_DEFINE([_DARWIN_C_SOURCE], [1], [Use Darwin source])
+     ;;
+@@ -55,6 +54,7 @@ AC_ARG_WITH(threads,
+ [
+     case "$withval" in
+         ucontext)
++            # Torrekie: Try detect libucontext when selecting this, but before that we use pthread instead
+             AC_MSG_NOTICE([UCONTEXT mode selected])
+             AC_DEFINE([USE_UCONTEXT], [1], [Define to 1 to select UCONTEXT mode])
+             ;;
+@@ -260,7 +260,7 @@ AC_INCLUDES_DEFAULT
+ #include <netdb.h>
+             ],
+             [
+-getaddrinfo(NULL, NULL, NULL, NULL);
++getaddrinfo(0, 0, 0, 0);
+             ],)],
+         [AC_MSG_RESULT([yes]); AC_DEFINE([HAVE_GETADDRINFO], [1], [Define to 1 if you have 'getaddrinfo' function.])],
+         [AC_MSG_RESULT([no])])
+--- a/src/client.c	2023-02-06 02:35:04.000000000 +0800
++++ b/src/client.c	2023-05-24 15:58:05.941545664 +0800
+@@ -37,6 +37,13 @@
+ 
+ #include "prototypes.h"
+ 
++#ifdef __has_include
++#if __has_include(<crt_externs.h>)
++#include <crt_externs.h>
++#define environ (*_NSGetEnviron ())
++#endif
++#endif
++
+ #ifndef SHUT_RD
+ #define SHUT_RD 0
+ #endif

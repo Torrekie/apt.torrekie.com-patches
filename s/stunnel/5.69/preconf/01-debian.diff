@@ -1,0 +1,71 @@
+--- a/tests/maketest.py	2022-12-21 03:19:43.000000000 +0800
++++ b/tests/maketest.py	2023-05-24 15:47:26.115682628 +0800
+@@ -363,11 +363,12 @@ class TestLogs(PrintLogs):
+             match = RE_OPENSSL_VERSION.match(line)
+             if match:
+                 openssl_version = match.group("version")
+-        if not openssl_version:
+-            raise Exception("Stunnel was compiled and run with different OpenSSL versions")
+-        """TLSv1.1 and TLSv1.2 available only with OpenSSL version 1.0.1 and later"""
+-        if openssl_version < "1.0.1":
+-            raise UnsupportedOpenSSL(f"OpenSSL version {openssl_version} is deprecated and not supported")
++        if not 'AUTOPKGTEST_TMP' in os.environ:
++            if not openssl_version:
++                raise Exception("Stunnel was compiled and run with different OpenSSL versions")
++            """TLSv1.1 and TLSv1.2 available only with OpenSSL version 1.0.1 and later"""
++            if openssl_version < "1.0.1":
++                raise UnsupportedOpenSSL(f"OpenSSL version {openssl_version} is deprecated and not supported")
+         if not (sys.version_info.major == 3 and sys.version_info.minor >= 7):
+             raise Exception("Python 3.7 or higher is required.\n"
+                 + "You are using Python {}.{}.".format(sys.version_info.major, sys.version_info.minor))
+--- a/tools/script.sh	2021-07-19 19:12:16.000000000 +0800
++++ b/tools/script.sh	2023-05-24 15:47:18.325303089 +0800
+@@ -2,7 +2,7 @@
+ 
+ REMOTE_HOST="www.mirt.net:443"
+ echo "client script connecting $REMOTE_HOST"
+-/usr/local/bin/stunnel -fd 10 \
++/usr/bin/stunnel -fd 10 \
+     11<&0 <<EOT 10<&0 0<&11 11<&-
+ client=yes
+ connect=$REMOTE_HOST
+--- a/tools/stunnel.conf-sample.in	2023-01-23 05:05:09.000000000 +0800
++++ b/tools/stunnel.conf-sample.in	2023-05-24 15:47:23.912458328 +0800
+@@ -8,8 +8,8 @@
+ ; **************************************************************************
+ 
+ ; It is recommended to drop root privileges if stunnel is started by root
+-;setuid = nobody
+-;setgid = @DEFAULT_GROUP@
++;setuid = stunnel
++;setgid = stunnel
+ 
+ ; PID file is created inside the chroot jail (if enabled)
+ ;pid = @localstatedir@/run/stunnel.pid
+@@ -64,7 +64,7 @@ client = yes
+ accept = 127.0.0.1:110
+ connect = pop.gmail.com:995
+ verifyChain = yes
+-CApath = /etc/ssl/certs
++CApath = @sysconfdir@/ssl/certs
+ checkHost = pop.gmail.com
+ OCSPaia = yes
+ 
+@@ -73,7 +73,7 @@ client = yes
+ accept = 127.0.0.1:143
+ connect = imap.gmail.com:993
+ verifyChain = yes
+-CApath = /etc/ssl/certs
++CApath = @sysconfdir@/ssl/certs
+ checkHost = imap.gmail.com
+ OCSPaia = yes
+ 
+@@ -82,7 +82,7 @@ client = yes
+ accept = 127.0.0.1:25
+ connect = smtp.gmail.com:465
+ verifyChain = yes
+-CApath = /etc/ssl/certs
++CApath = @sysconfdir@/ssl/certs
+ checkHost = smtp.gmail.com
+ OCSPaia = yes
+ 
