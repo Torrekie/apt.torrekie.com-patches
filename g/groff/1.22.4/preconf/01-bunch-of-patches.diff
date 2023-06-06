@@ -1,0 +1,2447 @@
+--- a/ChangeLog.116	2018-07-03 06:00:11.000000000 +0800
++++ b/ChangeLog.116	2023-06-01 16:51:45.834666655 +0800
+@@ -207,7 +207,7 @@ Version 1.16.1 released
+ 	src/roff/groff/groff.cc: Use it.
+ 	* Makefile.in, configure: Updated.
+ 
+-2000-06-07  Paco AndrÈs Verd˙  <pandres@dragonet.es>
++2000-06-07  Paco Andr√©s Verd√∫  <pandres@dragonet.es>
+ 
+ 	* src/devides/grolbp/lbp.h: Removed unused variables.
+ 
+@@ -701,7 +701,7 @@ Version 1.16 released
+ 
+ 	* src/roff/grog/grog.man: Updated copyright date.
+ 
+-2000-03-14  Francisco AndrÈs Verd˙  <pandres@dragonet.es>
++2000-03-14  Francisco Andr√©s Verd√∫  <pandres@dragonet.es>
+ 
+ 	* configure.in: Added test for strdup.
+ 
+@@ -786,7 +786,7 @@ Version 1.16 released
+ 	Implement it.
+ 	* src/roff/troff/env.h: Add prototype.
+ 
+-2000-03-05  Francisco AndrÈs Verd˙  <pandres@dragonet.es>
++2000-03-05  Francisco Andr√©s Verd√∫  <pandres@dragonet.es>
+ 
+ 	Adding strsep() -- Solaris 8 doesn't have it.
+ 
+@@ -810,7 +810,7 @@ Version 1.16 released
+ 
+ 	* tmac/troffrc: Add tmac.lbp.
+ 
+-2000-03-03  Francisco AndrÈs Verd˙  <pandres@dragonet.es>
++2000-03-03  Francisco Andr√©s Verd√∫  <pandres@dragonet.es>
+ 
+ 	* tmac/tmac.lbp: New file.
+ 	* src/devices/grolbp/grolbp.man: Add documentation of `lbpname'
+@@ -895,7 +895,7 @@ Version 1.16 released
+ 
+ 	Adding a new driver, grolbp, for Canon CAPSL printers (LBP-4 and
+ 	LBP-8 series laser printers).  This code has been contributed by
+-	Francisco AndrÈs Verd˙ <pandres@dragonet.es>.
++	Francisco Andr√©s Verd√∫ <pandres@dragonet.es>.
+ 
+ 	* src/devices/grolbp/*: The grolbp output device.
+ 	* font/devlpb/*: The font description files.
+--- a/ChangeLog.117	2018-07-03 06:08:51.000000000 +0800
++++ b/ChangeLog.117	2023-06-01 16:51:45.836030082 +0800
+@@ -1459,9 +1459,9 @@ Version 1.17 released
+ 
+ 	* man/groff_char.man: Use table header traps only conditionally.
+ 
+-2001-01-09  Bjarni Ingi GÌslason  <bjarniig@hi.is>
++2001-01-09  Bjarni Ingi G√≠slason  <bjarniig@hi.is>
+ 
+-	* man/groff_char.man: Add `˝' and `›' to the `acute' group.
++	* man/groff_char.man: Add `√Ω' and `√ù' to the `acute' group.
+ 
+ 2001-01-08  Werner LEMBERG  <wl@gnu.org>
+ 
+@@ -1972,7 +1972,7 @@ Version 1.17 released
+ 
+ 	* src/roff/troff/troff.man, NEWS, man/groff.man: Updated.
+ 
+-2000-09-22  Ricardo Soares Guimar„es  <ricardo@conectiva.com.br>
++2000-09-22  Ricardo Soares Guimar√£es  <ricardo@conectiva.com.br>
+ 
+ 	Adding a new option -P and new environment variable GROPS_PROLOGUE
+ 	to grops, selecting a different prologue file (minor modifications
+--- a/ChangeLog.118	2018-07-03 06:00:46.000000000 +0800
++++ b/ChangeLog.118	2023-06-01 16:51:45.838209073 +0800
+@@ -131,7 +131,7 @@ Version 1.18.1 released
+ 
+ 	* src/devices/grolbp/grolbp.man, NEWS, doc/webpage.ms: Updated.
+ 
+-2002-09-22  Paco AndrÈs Verd˙  <pandres@dragonet.es>
++2002-09-22  Paco Andr√©s Verd√∫  <pandres@dragonet.es>
+ 
+ 	Fixed a bug in the line thickness setting code.
+ 
+@@ -1782,7 +1782,7 @@ Version 1.18.0 released
+ 	included.
+ 	Handle CYGWIN properly.
+ 
+-2002-03-07  Paco AndrÈs Verd˙  <pandres@dragonet.es>
++2002-03-07  Paco Andr√©s Verd√∫  <pandres@dragonet.es>
+ 
+ 	* font/devlbp/Makefile.sub (DEVFILES): Add some missing fonts.
+ 	* tmac/lbp.tmac: Add some font translations.
+--- a/Makefile.am	2018-12-12 06:17:43.000000000 +0800
++++ b/Makefile.am	2023-06-01 16:32:37.219226334 +0800
+@@ -211,7 +211,7 @@ localtmacdir=$(dataprogramdir)/site-tmac
+ # directory will be always added.
+ # `troffrc' and `troffrc-end' (and `eqnrc') are searched neither in the
+ # current nor in the home directory.
+-tmacpath=$(systemtmacdir)$(RT_SEP)$(localtmacdir)$(RT_SEP)$(tmacdir)
++tmacpath=$(systemtmacdir)$(RT_SEP)$(localtmacdir)$(RT_SEP)$(tmacdir)$(if $(extratmacdirs),$(RT_SEP)$(extratmacdirs))
+ 
+ # sys_tmac_prefix
+ # `sys_tmac_prefix' is prefix (if any) for system macro packages.
+--- a/NEWS	2018-12-18 05:44:34.000000000 +0800
++++ b/NEWS	2023-06-01 16:54:02.871226946 +0800
+@@ -783,7 +783,7 @@ Tbl
+ ---
+ 
+ o New specifier `x' to make tbl call a user-defined macro on a table
+-  cell.  Patch by Heinz-J¸rgen Oertel <hj.oertel@surfeu.de>.
++  cell.  Patch by Heinz-J√ºrgen Oertel <hj.oertel@surfeu.de>.
+ 
+ Grap2graph
+ ----------
+--- a/contrib/eqn2graph/eqn2graph.sh	2018-10-11 05:44:56.000000000 +0800
++++ b/contrib/eqn2graph/eqn2graph.sh	2023-06-01 16:32:14.366299202 +0800
+@@ -1,4 +1,4 @@
+-#! /bin/sh
++#! /bin/bash
+ #
+ # eqn2graph -- compile EQN equation descriptions to bitmap images
+ #
+--- a/contrib/glilypond/glilypond.pl	2018-10-11 05:44:56.000000000 +0800
++++ b/contrib/glilypond/glilypond.pl	2023-06-01 16:32:40.670407489 +0800
+@@ -565,73 +565,81 @@ our $Read =
+     ); # end definition %lilypond_args
+ 
+ 
+- LILYPOND: foreach (<>) {
+-    chomp;
+-    my $line = $_;
+-
+-
+-    # now the lines with '.lilypond ...'
+-
+-    if ( /
+-	   ^
+-	   [.']
+-	   \s*
+-	   lilypond
+-	   (
+-	     .*
+-	   )
+-	   $
+-	 /x ) { # .lilypond ...
+-      my $args = $1;
+-      $args =~ s/
+-		  ^
+-		  \s*
+-		//x;
+-      $args =~ s/
+-		  \s*
+-		  $
+-		//x;
+-      $args =~ s/
+-		  ^
+-		  (
+-		    \S*
+-		  )
+-		  \s*
+-		//x;
+-      my $arg1 = $1; # 'start', 'end' or 'include'
+-      $args =~ s/["'`]//g;
+-      my $arg2 = $args; # file argument for '.lilypond include'
+-
+-      if ( exists $lilypond_args{$arg1} ) {
+-	$lilypond_args{$arg1}->($arg2);
+-	next;
+-      } else {
+-	# not a suitable argument of '.lilypond'
+-	$stderr->print( "Unknown command: '$arg1' '$arg2':  '$line'" );
+-      }
+-
+-      next LILYPOND;
+-    } # end if for .lilypond
+-
+-
+-    if ( $lilypond_mode ) { # do lilypond-mode
+-      # see '.lilypond start'
+-      $ly->print( $line );
+-      next LILYPOND;
+-    } # do lilypond-mode
+-
+-    # unknown line without lilypond
+-    unless ( /
+-	       ^
+-	       [.']
+-	       \s*
+-	       lilypond
+-	     /x ) { # not a '.lilypond' line
+-      $out->print($line);
+-      next LILYPOND;
++ LILYPOND: foreach my $filename (@ARGV) {
++    my $input;
++    if ($filename eq '-') {
++      $input = \*STDIN;
++    } elsif (not open $input, '<', $filename) {
++      warn $!;
++      next;
+     }
+-
+-  } # end foreach <>
++    while (<$input>) {
++      chomp;
++      my $line = $_;
++
++
++      # now the lines with '.lilypond ...'
++
++      if ( /
++	     ^
++	     [.']
++	     \s*
++	     lilypond
++	     (
++	       .*
++	     )
++	     $
++	   /x ) { # .lilypond ...
++	my $args = $1;
++	$args =~ s/
++		    ^
++		    \s*
++		  //x;
++	$args =~ s/
++		    \s*
++		    $
++		  //x;
++	$args =~ s/
++		    ^
++		    (
++		      \S*
++		    )
++		    \s*
++		  //x;
++	my $arg1 = $1; # 'start', 'end' or 'include'
++	$args =~ s/["'`]//g;
++	my $arg2 = $args; # file argument for '.lilypond include'
++
++	if ( exists $lilypond_args{$arg1} ) {
++	  $lilypond_args{$arg1}->($arg2);
++	  next;
++	} else {
++	  # not a suitable argument of '.lilypond'
++	  $stderr->print( "Unknown command: '$arg1' '$arg2':  '$line'" );
++	}
++
++	next LILYPOND;
++      } # end if for .lilypond
++
++
++      if ( $lilypond_mode ) { # do lilypond-mode
++	# see '.lilypond start'
++	$ly->print( $line );
++	next LILYPOND;
++      } # do lilypond-mode
++
++      # unknown line without lilypond
++      unless ( /
++		 ^
++		 [.']
++		 \s*
++		 lilypond
++	       /x ) { # not a '.lilypond' line
++	$out->print($line);
++	next LILYPOND;
++      }
++    } # end while <$input>
++  } # end foreach $filename
+ } # end Read
+ 
+ 
+--- a/contrib/gperl/gperl.pl	2018-10-11 05:44:56.000000000 +0800
++++ b/contrib/gperl/gperl.pl	2023-06-01 16:32:40.671358582 +0800
+@@ -132,114 +132,124 @@ my $out_file;
+ 
+ my $perl_mode = 0;
+ 
+-foreach (<>) {
+-  chomp;
+-  s/\s+$//;
+-  my $line = $_;
+-  my $is_dot_Perl = $line =~ /^[.']\s*Perl(|\s+.*)$/;
+-
+-  unless ( $is_dot_Perl ) {	# not a '.Perl' line
+-    if ( $perl_mode ) {		# is running in Perl mode
+-      print OUT $line;
+-    } else {			# normal line, not Perl-related
+-      print $line;
+-    }
++unshift @ARGV, '-' unless @ARGV;
++foreach my $filename (@ARGV) {
++  my $input;
++  if ($filename eq '-') {
++    $input = \*STDIN;
++  } elsif (not open $input, '<', $filename) {
++    warn $!;
+     next;
+   }
+-
+-
+-  ##########
+-  # now the line is a '.Perl' line
+-
+-  my $args = $line;
+-  $args =~ s/\s+$//;	# remove final spaces
+-  $args =~ s/^[.']\s*Perl\s*//;	# omit .Perl part, leave the arguments
+-
+-  my @args = split /\s+/, $args;
+-
+-  ##########
+-  # start Perl mode
+-  if ( @args == 0 || @args == 1 && $args[0] eq 'start' ) {
+-    # For '.Perl' no args or first arg 'start' means opening 'Perl' mode.
+-    # Everything else means an ending command.
+-    if ( $perl_mode ) {
+-      # '.Perl' was started twice, ignore
+-      print STDERR q('.Perl' starter was run several times);
+-      next;
+-    } else {	# new Perl start
+-      $perl_mode = 1;
+-      open OUT, '>', $out_file;
++  while (<$input>) {
++    chomp;
++    s/\s+$//;
++    my $line = $_;
++    my $is_dot_Perl = $line =~ /^[.']\s*Perl(|\s+.*)$/;
++
++    unless ( $is_dot_Perl ) {	# not a '.Perl' line
++      if ( $perl_mode ) {		# is running in Perl mode
++        print OUT $line;
++      } else {			# normal line, not Perl-related
++        print $line;
++      }
+       next;
+     }
+-  }
+ 
+-  ##########
+-  # now the line must be a Perl ending line (stop)
+ 
+-  unless ( $perl_mode ) {
+-    print STDERR 'gperl: there was a Perl ending without being in ' .
+-      'Perl mode:';
+-    print STDERR '    ' . $line;
+-    next;
+-  }
++    ##########
++    # now the line is a '.Perl' line
+ 
+-  $perl_mode = 0;	# 'Perl' stop calling is correct
+-  close OUT;		# close the storing of 'Perl' commands
++    my $args = $line;
++    $args =~ s/\s+$//;	# remove final spaces
++    $args =~ s/^[.']\s*Perl\s*//;	# omit .Perl part, leave the arguments
++
++    my @args = split /\s+/, $args;
++
++    ##########
++    # start Perl mode
++    if ( @args == 0 || @args == 1 && $args[0] eq 'start' ) {
++      # For '.Perl' no args or first arg 'start' means opening 'Perl' mode.
++      # Everything else means an ending command.
++      if ( $perl_mode ) {
++        # '.Perl' was started twice, ignore
++        print STDERR q('.Perl' starter was run several times);
++        next;
++      } else {	# new Perl start
++        $perl_mode = 1;
++        open OUT, '>', $out_file;
++        next;
++      }
++    }
+ 
+-  ##########
+-  # run this 'Perl' part, later on about storage of the result
+-  # array stores prints with \n
+-  my @print_res = `perl $out_file`;
++    ##########
++    # now the line must be a Perl ending line (stop)
+ 
+-  # remove 'stop' arg if exists
+-  shift @args if ( $args[0] eq 'stop' );
++    unless ( $perl_mode ) {
++      print STDERR 'gperl: there was a Perl ending without being in ' .
++        'Perl mode:';
++      print STDERR '    ' . $line;
++      next;
++    }
+ 
+-  if ( @args == 0 ) {
+-    # no args for saving, so @print_res doesn't matter
+-    next;
+-  }
++    $perl_mode = 0;	# 'Perl' stop calling is correct
++    close OUT;		# close the storing of 'Perl' commands
++
++    ##########
++    # run this 'Perl' part, later on about storage of the result
++    # array stores prints with \n
++    my @print_res = `perl $out_file`;
+ 
+-  my @var_names = ();
+-  my @mode_names = ();
++    # remove 'stop' arg if exists
++    shift @args if ( $args[0] eq 'stop' );
+ 
+-  my $mode = '.ds';
+-  for ( @args ) {
+-    if ( /^\.?ds$/ ) {
+-      $mode = '.ds';
++    if ( @args == 0 ) {
++      # no args for saving, so @print_res doesn't matter
+       next;
+     }
+-    if ( /^\.?nr$/ ) {
+-      $mode = '.nr';
+-      next;
++
++    my @var_names = ();
++    my @mode_names = ();
++
++    my $mode = '.ds';
++    for ( @args ) {
++      if ( /^\.?ds$/ ) {
++        $mode = '.ds';
++        next;
++      }
++      if ( /^\.?nr$/ ) {
++        $mode = '.nr';
++        next;
++      }
++      push @mode_names, $mode;
++      push @var_names, $_;
+     }
+-    push @mode_names, $mode;
+-    push @var_names, $_;
+-  }
+ 
+-  my $n_res = @print_res;
+-  my $n_vars = @var_names;
++    my $n_res = @print_res;
++    my $n_vars = @var_names;
+ 
+-  if ( $n_vars < $n_res ) {
+-    print STDERR 'gperl: not enough variables for Perl part: ' .
+-      $n_vars . ' variables for ' . $n_res . ' output lines.';
+-  } elsif ( $n_vars > $n_res ) {
+-    print STDERR 'gperl: too many variablenames for Perl part: ' .
+-      $n_vars . ' variables for ' . $n_res . ' output lines.';
+-  }
+-  if ( $n_vars < $n_res ) {
+-    print STDERR 'gperl: not enough variables for Perl part: ' .
+-      $n_vars . ' variables for ' . $n_res . ' output lines.';
+-  }
++    if ( $n_vars < $n_res ) {
++      print STDERR 'gperl: not enough variables for Perl part: ' .
++        $n_vars . ' variables for ' . $n_res . ' output lines.';
++    } elsif ( $n_vars > $n_res ) {
++      print STDERR 'gperl: too many variablenames for Perl part: ' .
++        $n_vars . ' variables for ' . $n_res . ' output lines.';
++    }
++    if ( $n_vars < $n_res ) {
++      print STDERR 'gperl: not enough variables for Perl part: ' .
++        $n_vars . ' variables for ' . $n_res . ' output lines.';
++    }
+ 
+-  my $n_min = $n_res;
+-  $n_min = $n_vars if ( $n_vars < $n_res );
+-  exit unless ( $n_min );
+-  $n_min -= 1; # for starting with 0
+-
+-  for my $i ( 0..$n_min ) {
+-    my $value = $print_res[$i];
+-    chomp $value;
+-    print $mode_names[$i] . ' ' . $var_names[$i] . ' ' . $value;
++    my $n_min = $n_res;
++    $n_min = $n_vars if ( $n_vars < $n_res );
++    exit unless ( $n_min );
++    $n_min -= 1; # for starting with 0
++
++    for my $i ( 0..$n_min ) {
++      my $value = $print_res[$i];
++      chomp $value;
++      print $mode_names[$i] . ' ' . $var_names[$i] . ' ' . $value;
++    }
+   }
+ }
+ 
+--- a/contrib/gpinyin/gpinyin.pl	2018-10-11 05:44:56.000000000 +0800
++++ b/contrib/gpinyin/gpinyin.pl	2023-06-01 16:32:40.671879148 +0800
+@@ -126,53 +126,63 @@ my @output_t =	# troff
+    '.el \\{\\',
+   );
+ 
+-foreach (<>) {	# get line from input
+-  chomp;
+-  s/\s+$//;		# remove final spaces
+-# &err('gpinyin: ' . $_);
+-
+-  my $line = $_;	# with starting blanks
+-
+-  # .pinyin start or begin line
+-  if ( $line =~ /^[.']\s*pinyin\s+(start|begin)$/ ) {
+-    if ( $pinyin_mode ) {
+-      # '.pinyin' was started twice, ignore
+-      &err( q['.pinyin' starter was run several times] );
+-    } else {	# new pinyin start
+-      $pinyin_mode = 1;
+-    }
++unshift @ARGV, '-' unless @ARGV;
++foreach my $filename (@ARGV) {
++  my $input;
++  if ($filename eq '-') {
++    $input = \*STDIN;
++  } elsif (not open $input, '<', $filename) {
++    warn $!;
+     next;
+   }
++  while (<$input>) {
++    chomp;
++    s/\s+$//;		# remove final spaces
++#   &err('gpinyin: ' . $_);
++
++    my $line = $_;	# with starting blanks
++
++    # .pinyin start or begin line
++    if ( $line =~ /^[.']\s*pinyin\s+(start|begin)$/ ) {
++      if ( $pinyin_mode ) {
++        # '.pinyin' was started twice, ignore
++        &err( q['.pinyin' starter was run several times] );
++      } else {	# new pinyin start
++        $pinyin_mode = 1;
++      }
++      next;
++    }
+ 
+-  # .pinyin stop or end line
+-  if ( $line =~ /^[.']\s*pinyin\s+(stop|end)$/ ) {
+-    if ( $pinyin_mode ) {		# normal stop
+-      $pinyin_mode = 0;
+-      &finish_pinyin_mode( \@output_n, \@output_t );
+-    } else {	# ignore
+-      &err( 'gpinyin: there was a .pinyin stop without ' .
+-	'being in pinyin mode' );
++    # .pinyin stop or end line
++    if ( $line =~ /^[.']\s*pinyin\s+(stop|end)$/ ) {
++      if ( $pinyin_mode ) {		# normal stop
++        $pinyin_mode = 0;
++        &finish_pinyin_mode( \@output_n, \@output_t );
++      } else {	# ignore
++        &err( 'gpinyin: there was a .pinyin stop without ' .
++          'being in pinyin mode' );
++      }
++      next;
+     }
+-    next;
+-  }
+ 
+-  # now not a .pinyin line
++    # now not a .pinyin line
+ 
+ 
+-  if ( $pinyin_mode ) {	# within Pinyin
+-    my $starting_blanks = '';
+-    $starting_blanks = $1 if ( s/^(s+)// );	# handle starting spaces
+-
+-    my %outline = &handle_line($starting_blanks, $line);
+-#&err('gpinyin outline n: ' . $outline{'n'} );
+-#&err('gpinyin outline t: ' . $outline{'t'} );
+-    push @output_n, $outline{'n'};
+-    push @output_t, $outline{'t'};
+-  } else {	# normal roff line, not within Pinyin
+-    print $line;
+-  }
+-  next;
+-}	# end of input line
++    if ( $pinyin_mode ) {	# within Pinyin
++      my $starting_blanks = '';
++      $starting_blanks = $1 if ( s/^(s+)// );	# handle starting spaces
++
++      my %outline = &handle_line($starting_blanks, $line);
++#     &err('gpinyin outline n: ' . $outline{'n'} );
++#     &err('gpinyin outline t: ' . $outline{'t'} );
++      push @output_n, $outline{'n'};
++      push @output_t, $outline{'t'};
++    } else {	# normal roff line, not within Pinyin
++      print $line;
++    }
++    next;
++  }	# end of input line
++}
+ 
+ 
+ ########################################################################
+--- a/contrib/grap2graph/grap2graph.sh	2018-10-11 05:44:56.000000000 +0800
++++ b/contrib/grap2graph/grap2graph.sh	2023-06-01 16:32:14.366734896 +0800
+@@ -1,4 +1,4 @@
+-#! /bin/sh
++#! /bin/bash
+ #
+ # grap2graph -- compile graph description descriptions to bitmap images
+ #
+--- a/contrib/hdtbl/groff_hdtbl.7.man	2018-11-30 06:36:34.000000000 +0800
++++ b/contrib/hdtbl/groff_hdtbl.7.man	2023-06-01 16:32:15.529208706 +0800
+@@ -24,6 +24,9 @@ groff_hdtbl \- Heidelberger table macros
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff/copyright.
+ .
+ .
+ .ig
+--- a/contrib/mm/ChangeLog	2018-10-11 05:44:56.000000000 +0800
++++ b/contrib/mm/ChangeLog	2023-06-01 16:51:45.842400350 +0800
+@@ -464,7 +464,7 @@ Thu Apr 12 00:00:00 2001 Ruslan Ermilov
+ 
+ 	* groff_mm.man: Fixing some typos.
+ 
+-Mon Mar 5 09:30:18 2001 Jˆrgen H‰gg (jh@axis.com)
++Mon Mar 5 09:30:18 2001 J√∂rgen H√§gg (jh@axis.com)
+ 
+ 	* S didn't reset to default point size
+ 	* (dummy line to force cvs update...)
+@@ -473,11 +473,11 @@ Sat Jan 06 10:30:00 2001 Werner LEMBERG
+ 
+ 	* Fixed assignment of page offset given as a command line argument.
+ 
+-Fri Nov 17 05:34:17 2000 Jˆrgen H‰gg (jh@axis.com)
++Fri Nov 17 05:34:17 2000 J√∂rgen H√§gg (jh@axis.com)
+ 
+ 	* Renamed tmac.m and tmac.mse to m.tmac and mse.tmac
+ 
+-Thu Sep 14 05:52:48 2000 Jˆrgen H‰gg (jh@axis.com)
++Thu Sep 14 05:52:48 2000 J√∂rgen H√§gg (jh@axis.com)
+ 
+ 	* New Changelog-format, it will show changes better.
+ 	  Easier for other to use. (Somehow I didn't really
+@@ -489,7 +489,7 @@ Mon Aug 28 00:00:00 2000 Bruno Haible (h
+ 	* Makefile.sub: New target 'all', makes all prerequisites of
+ 	'install'.
+ 
+-Thu Sep 7 06:17:42 2000 Jˆrgen H‰gg (jh at axis.com)
++Thu Sep 7 06:17:42 2000 J√∂rgen H√§gg (jh at axis.com)
+ 
+ 	* version 2.0
+ 	* Had to do something about my version numbering.
+@@ -509,13 +509,13 @@ Tue Mar 7 00:00:00 2000 OKAZAKI Tetsurou
+ 
+ 	* Makefile.sub: Use $(INSTALL_SCRIPT) for script files.
+ 
+-Sun Jan 30 22:52:20 2000 Jˆrgen H‰gg (jh at axis.com)
++Sun Jan 30 22:52:20 2000 J√∂rgen H√§gg (jh at axis.com)
+ 
+ 	* version 1.34
+ 	* Changed the version number in the CVS repository
+ 	* MC had a bug in column calculation, (thanks to T. Kurt Bond)
+ 
+-Fri Sep 3 07:33:14 1999 Jˆrgen H‰gg (jh at axis.com)
++Fri Sep 3 07:33:14 1999 J√∂rgen H√§gg (jh at axis.com)
+ 
+ 	* version 1.33
+ 	* At last! I finally tracked down the PGFORM bug!
+@@ -536,7 +536,7 @@ Fri Sep 3 07:33:14 1999 Jˆrgen H‰gg (jh
+ 	* Added test for missing abstract in 4.MT
+ 	* Updated Makefile.sub, using tmac_m_prefix.
+ 
+-Mon Mar 15 22:22:42 1999 Jˆrgen H‰gg (jh at axis.com)
++Mon Mar 15 22:22:42 1999 J√∂rgen H√§gg (jh at axis.com)
+ 
+ 	* OK, let's release this as a beta, 1.33 will be better. :-)
+ 	* version 1.32
+@@ -563,14 +563,14 @@ Mon Mar 15 22:22:42 1999 Jˆrgen H‰gg (jh
+ 	* fixed Hps-bug, should be 1, not 1v.
+ 	* fixed bug with APPSK, variable not set.
+ 
+-Wed Feb 4 15:46:04 1998 Jˆrgen H‰gg (jh at axis.se)
++Wed Feb 4 15:46:04 1998 J√∂rgen H√§gg (jh at axis.se)
+ 
+ 	* version 1.31
+ 	* .LI will now honor a space mark.
+ 	* Another fix for .AU to let it be used without arguments.
+ 	* uninitialized eq*label fixed
+ 
+-Fri Sep 6 07:13:07 1996 Jˆrgen H‰gg (jh at axis.se)
++Fri Sep 6 07:13:07 1996 J√∂rgen H√§gg (jh at axis.se)
+ 
+ 	* version 1.30
+ 	* This is more like a beta-release, bugs might pop up. :-)
+@@ -610,7 +610,7 @@ Fri Sep 6 07:13:07 1996 Jˆrgen H‰gg (jh
+ 		footnote on the page occurred at just the wrong place
+ 
+ 
+-Wed May 15 07:39:32 1996 Jˆrgen H‰gg (jh at axis.se)
++Wed May 15 07:39:32 1996 J√∂rgen H√§gg (jh at axis.se)
+ 
+ 	* version 1.29
+ 	* Syntax and scaling errror fixed, (thanks to Frazer Williams)
+@@ -628,7 +628,7 @@ Wed May 15 07:39:32 1996 Jˆrgen H‰gg (jh
+ 	* Corrected line length for figure caption (FG and friends)
+ 
+ 
+-Mon Apr 24 07:37:52 1995 Jˆrgen H‰gg (jh at axis.se)
++Mon Apr 24 07:37:52 1995 J√∂rgen H√§gg (jh at axis.se)
+ 
+ 	* version 1.28
+ 	* Added AVL (AV without date)
+@@ -647,7 +647,7 @@ Mon Apr 24 07:37:52 1995 Jˆrgen H‰gg (jh
+ 	* Space may be omitted between prefix and mark in automatic lists (.AL)
+ 	  See .LI
+ 
+-Tue Jan 10 07:51:37 1995 Jˆrgen H‰gg (jh at axis.se)
++Tue Jan 10 07:51:37 1995 J√∂rgen H√§gg (jh at axis.se)
+ 
+ 	* version 1.27
+ 	* Manual updated
+@@ -661,7 +661,7 @@ Tue Jan 10 07:51:37 1995 Jˆrgen H‰gg (jh
+ 	* Added support for EOP (TPs twin)
+ 	* Hyphenation turned off by default. (Hy == 0)
+ 
+-Fri Nov 4 08:14:50 1994 Jˆrgen H‰gg (jh at axis.se)
++Fri Nov 4 08:14:50 1994 J√∂rgen H√§gg (jh at axis.se)
+ 
+ 	* version 1.25
+ 	* DS/DF separated and several bugs fixed. Watch out for new though. :-)
+@@ -669,7 +669,7 @@ Fri Nov 4 08:14:50 1994 Jˆrgen H‰gg (jh
+ 	* RD made prettier.
+ 	* typo in AV and let@print-head fixed.
+ 
+-Mon Oct 31 08:19:24 1994 Jˆrgen H‰gg (jh at axis.se)
++Mon Oct 31 08:19:24 1994 J√∂rgen H√§gg (jh at axis.se)
+ 
+ 	* version 1.24
+ 	* Bug fixed and format extended in .SG and .FC.
+@@ -678,13 +678,13 @@ Mon Oct 31 08:19:24 1994 Jˆrgen H‰gg (jh
+ 	* Swedish letter-standards implemented in tmac.mse.
+ 	* .ND can be used to turn off the date. (Empty argument)
+ 
+-Mon Oct 31 08:14:09 1994 Jˆrgen H‰gg (jh at axis.se)
++Mon Oct 31 08:14:09 1994 J√∂rgen H√§gg (jh at axis.se)
+ 
+ 	* version 1.23
+ 	* An attempt to get in sync with RCS. This is the distributed
+ 	  version.
+ 
+-Thu Oct 27 08:29:34 1994 Jˆrgen H‰gg (jh at axis.se)
++Thu Oct 27 08:29:34 1994 J√∂rgen H√§gg (jh at axis.se)
+ 
+ 	* version 1.22
+ 	* (version 1.21 lost... :-)
+@@ -706,7 +706,7 @@ Tue Dec 14 16:26:36 1993 Joergen Haegg (
+ 	  became necessary.
+ 	* WC WD now works in two-column-mode.
+ 
+-Tue Sep 7 08:37:00 1993 Jˆrgen H‰gg (jh at efd.lth.se)
++Tue Sep 7 08:37:00 1993 J√∂rgen H√§gg (jh at efd.lth.se)
+ 
+ 	* version 1.19
+ 	* .lt is called in the header for .TP also.
+--- a/contrib/mm/README	2018-11-19 06:06:22.000000000 +0800
++++ b/contrib/mm/README	2023-06-01 16:51:45.843032460 +0800
+@@ -28,7 +28,7 @@ make -f Makefile.sim install
+ 
+ This README should be bigger :-)
+ 
+-/Jˆrgen H‰gg
++/J√∂rgen H√§gg
+ 
+ Thanks to everyone who have sent me bug-reports and fixes.
+ 
+--- a/contrib/mm/examples/LT.se	2018-07-03 05:56:04.000000000 +0800
++++ b/contrib/mm/examples/LT.se	2023-06-01 16:51:45.843587031 +0800
+@@ -26,10 +26,10 @@ Text xxxxxxxxxxxxxxxxxx
+ .LO BIL 2
+ .LO KOMP Kompletteringsuppgift
+ .LO DBET dokumentnummer
+-.LO BET ‰rendebeteckning
++.LO BET √§rendebeteckning
+ .LO MBET "Mottagarens b"
+ .LO SIDOR 22
+-.\" v‰nster eller hˆgerst‰llt brev
++.\" v√§nster eller h√∂gerst√§llt brev
+ .\" .LT SVH
+ .LT SVV
+ hepp
+--- a/contrib/mm/examples/MOVE	2018-07-03 05:56:04.000000000 +0800
++++ b/contrib/mm/examples/MOVE	2023-06-01 16:51:45.844574091 +0800
+@@ -6,11 +6,11 @@
+ .\"    notice and this notice are preserved.
+ .
+ .PH "'hej'hopp'i skogen'"
+-.PF "'livet'‰r'h‰rligt'"
+-.OH "'oj‰mn'%'sida'"
+-.EH "'oj‰mn'%'sida'"
+-.OF "'oj‰mn'%'sida'"
+-.EF "'oj‰mn'%'sida'"
++.PF "'livet'√§r'h√§rligt'"
++.OH "'oj√§mn'%'sida'"
++.EH "'oj√§mn'%'sida'"
++.OF "'oj√§mn'%'sida'"
++.EF "'oj√§mn'%'sida'"
+ 10th
+ 1st
+ 2nd
+--- a/contrib/mm/groff_mm.7.man	2018-12-18 05:44:34.000000000 +0800
++++ b/contrib/mm/groff_mm.7.man	2023-06-01 16:32:38.935934691 +0800
+@@ -3982,6 +3982,7 @@ of Lund, Sweden.
+ .BR @g@eqn (@MAN1EXT@)
+ .br
+ .BR groff_mmse (@MAN7EXT@)
++(only in Swedish locales)
+ .
+ .
+ .\" Restore compatibility mode (for, e.g., Solaris 10/11).
+--- a/contrib/mm/groff_mmse.7.man	2018-11-30 06:36:34.000000000 +0800
++++ b/contrib/mm/groff_mmse.7.man	2023-06-01 17:03:46.373874895 +0800
+@@ -30,7 +30,7 @@ groff_mmse \- svenska \(rqmemorandum\(rq
+ .\" instead of in the original English.
+ .
+ .\"
+-.\" Skrivet av Jˆrgen H‰gg, Lund, Sverige
++.\" Skrivet av J√∂rgen H√§gg, Lund, Sverige
+ .\"
+ .
+ .mso sv.tmac
+@@ -58,42 +58,42 @@ groff_mmse \- svenska \(rqmemorandum\(rq
+ .\" ====================================================================
+ .
+ .B m@TMAC_M_PREFIX@mse
+-‰r en svensk variant av
++√§r en svensk variant av
+ .BR m@TMAC_M_PREFIX@m .
+-Alla texter ‰r ˆversatta.
+-En A4 sida fÂr text som ‰r 13\~cm bred,
+-3,5\~cm indragning samt ‰r 28,5\~cm hˆg.
+-Det finns stˆd fˆr brevuppst‰llning enligt svensk standard
+-fˆr v‰nster och hˆgerjusterad text.
++Alla texter √§r √∂versatta.
++En A4 sida f√•r text som √§r 13\~cm bred,
++3,5\~cm indragning samt √§r 28,5\~cm h√∂g.
++Det finns st√∂d f√∂r brevuppst√§llning enligt svensk standard
++f√∂r v√§nster och h√∂gerjusterad text.
+ .
+ .LP
+ .B COVER
+-kan anv‰nda
++kan anv√§nda
+ .I se_ms
+ som argument.
+-Detta ger ett svenskt fˆrs‰ttsblad.
++Detta ger ett svenskt f√∂rs√§ttsblad.
+ Se
+ .BR groff_mm (@MAN7EXT@)
+-fˆr ˆvriga detaljer.
++f√∂r √∂vriga detaljer.
+ .
+ .
+ .\" ====================================================================
+ .SH BREV
+ .\" ====================================================================
+ .
+-Tillg‰ngliga brevtyper:
++Tillg√§ngliga brevtyper:
+ .
+ .TP
+ .B ".LT SVV"
+-V‰nsterst‰lld lˆptext med adressat i position T0 (v‰nsterst‰llt).
++V√§nsterst√§lld l√∂ptext med adressat i position T0 (v√§nsterst√§llt).
+ .
+ .TP
+ .B ".LT SVH"
+-Hˆgerst‰lld lˆptext med adressat i position T4 (passar
+-fˆnsterkuvert).
++H√∂gerst√§lld l√∂ptext med adressat i position T4 (passar
++f√∂nsterkuvert).
+ .
+ .LP
+-Fˆljande extra LO-variabler anv‰nds.
++F√∂ljande extra LO-variabler anv√§nds.
+ .
+ .TP
+ .BI ".LO DNAMN\ " namn
+@@ -106,8 +106,8 @@ Mottagarens datum, anges under
+ .RB ( LetMDAT ).
+ .
+ .TP
+-.BI ".LO BIL\ " str‰ng
+-Anger bilaga, nummer eller str‰ng med
++.BI ".LO BIL\ " str√§ng
++Anger bilaga, nummer eller str√§ng med
+ .B Bilaga
+ .RB ( LetBIL )
+ som prefix.
+@@ -122,7 +122,7 @@ Anger dokumentbeteckning eller dokumentn
+ .
+ .TP
+ .BI ".LO BET\ " beteckning
+-Anger beteckning (‰rendebeteckning i form av diarienummer eller liknande).
++Anger beteckning (√§rendebeteckning i form av diarienummer eller liknande).
+ .
+ .TP
+ .BI ".LO SIDOR\ " antal
+@@ -132,15 +132,15 @@ parenteser.
+ .LP
+ Om makrot
+ .B .TP
+-‰r definierat anropas det efter utskrift av brevhuvudet.
+-D‰r l‰gger man l‰mpligen in postadress och annat som brevfot.
++√§r definierat anropas det efter utskrift av brevhuvudet.
++D√§r l√§gger man l√§mpligen in postadress och annat som brevfot.
+ .
+ .
+ .\" ====================================================================
+ .SH "SKRIVET AV"
+ .\" ====================================================================
+ .
+-Jˆrgen H‰gg, Lund, Sweden <Jorgen.Hagg@axis.se>
++J√∂rgen H√§gg, Lund, Sweden <Jorgen.Hagg@axis.se>
+ .
+ .
+ .\" ====================================================================
+@@ -155,7 +155,7 @@ Jˆrgen H‰gg, Lund, Sweden <Jorgen.Hagg@a
+ .
+ .na
+ .\" ====================================================================
+-.SH "SE OCKS≈"
++.SH "SE OCKS√Ö"
+ .\" ====================================================================
+ .
+ .BR groff (@MAN1EXT@),
+--- a/contrib/mm/m.tmac	2018-12-23 22:36:16.000000000 +0800
++++ b/contrib/mm/m.tmac	2023-06-01 16:56:19.703239066 +0800
+@@ -1,7 +1,7 @@
+ .ig
+ 
+ Copyright (C) 1991-2018 Free Software Foundation, Inc.
+-mgm is written by Jˆrgen H‰gg <jh@axis.com>
++mgm is written by J√∂rgen H√§gg <jh@axis.com>
+ 
+ mgm is free software; you can redistribute it and/or modify it under
+ the terms of the GNU General Public License as published by the Free
+--- a/contrib/mm/mmroff.1.man	2018-11-19 06:06:22.000000000 +0800
++++ b/contrib/mm/mmroff.1.man	2023-06-01 16:32:38.936520838 +0800
+@@ -93,7 +93,8 @@ of Lund, Sweden.
+ .\" ====================================================================
+ .
+ .IR groff_mm (@MAN7EXT@),
+-.IR groff_mmse (@MAN7EXT@),
++.IR groff_mmse (@MAN7EXT@)
++(only in Swedish locales),
+ .IR groff (@MAN1EXT@),
+ .IR @g@troff (@MAN1EXT@),
+ .IR @g@tbl (@MAN1EXT@),
+--- a/contrib/mm/mse.tmac	2018-12-23 22:36:16.000000000 +0800
++++ b/contrib/mm/mse.tmac	2023-06-01 16:52:23.250671094 +0800
+@@ -55,13 +55,13 @@ http://savannah.gnu.org/bugs/?group=grof
+ .ds LetKOMP
+ .\" Dokumentbeteckning eller dokumentnummer
+ .ds LetDBET
+-.\" Beteckning (‰rendebeteckning i form av diarienummer e.d.
++.\" Beteckning (√§rendebeteckning i form av diarienummer e.d.
+ .ds LetBET Beteckning:
+ .\" Mottagarens beteckning.
+ .ds LetMBET Er beteckning:
+ .\" Antal sidor
+ .ds LetSIDOR
+-.\" Svensk standard med hˆgerst‰lld lˆptext. ---------------------
++.\" Svensk standard med h√∂gerst√§lld l√∂ptext. ---------------------
+ .de let@init_SVH
+ .in 4.57c
+ .ll 17.57c
+@@ -74,7 +74,7 @@ http://savannah.gnu.org/bugs/?group=grof
+ ..
+ .de let@fc_SVH
+ ..
+-.\" Svensk standard med v‰nsterst‰lld lˆptext. ---------------------
++.\" Svensk standard med v√§nsterst√§lld l√∂ptext. ---------------------
+ .de let@init_SVV
+ ..
+ .de let@head_SVV
+--- a/contrib/mom/ChangeLog	2018-11-25 06:50:28.000000000 +0800
++++ b/contrib/mom/ChangeLog	2023-06-01 17:09:51.498398215 +0800
+@@ -1311,7 +1311,7 @@
+ 
+ 	o Macro .PS renamed to .PT_SIZE.  Alias .TS removed.
+ 
+-	o .tr bits in .CAPS rewritten in the form .tr È\[`E].
++	o .tr bits in .CAPS rewritten in the form .tr √©\[`E].
+ 
+ 	o General cleanup of docs to reflect changes
+ 
+--- a/contrib/mom/examples/README.txt	2018-10-11 05:44:56.000000000 +0800
++++ b/contrib/mom/examples/README.txt	2023-06-01 17:09:04.493812416 +0800
+@@ -85,7 +85,7 @@ A few settings were also changed for thi
+ ATTRIBUTE_STRING is used to replace "by" by "par" in the document
+ header (where the title and the author are displayed).
+ TOC_HEADER_STRING is used to modity the Table of Content title to
+-"Table des matiËres". And finally, INDENT_FIRST_PARAS is used to
++"Table des mati√®res". And finally, INDENT_FIRST_PARAS is used to
+ indent the first paragraph of a section -- this is the usual
+ convention in French typesetting.
+ 
+@@ -96,7 +96,7 @@ The manual, Producing PDFs with mom and
+ ***mom.vim***
+ 
+ The vim syntax highlighting rules are based on those provided by
+-Christian V. J. Br¸ssow (cvjb@cvjb.de).  Copy mom.vim file to your
++Christian V. J. Br√ºssow (cvjb@cvjb.de).  Copy mom.vim file to your
+ ~/.vim/syntax directory; then, if your vim isn't already set up to
+ do so, enable mom syntax highlighting with
+ 
+--- a/contrib/pdfmark/pdfroff.1.man	2018-12-18 05:44:34.000000000 +0800
++++ b/contrib/pdfmark/pdfroff.1.man	2023-06-01 16:32:15.529849143 +0800
+@@ -27,6 +27,9 @@ pdfroff \- create PDF documents using gr
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff/copyright.
+ .
+ .
+ .\" ====================================================================
+--- a/contrib/pic2graph/pic2graph.sh	2018-10-11 05:44:56.000000000 +0800
++++ b/contrib/pic2graph/pic2graph.sh	2023-06-01 16:32:14.367004095 +0800
+@@ -1,4 +1,4 @@
+-#! /bin/sh
++#! /bin/bash
+ #
+ # pic2graph -- compile PIC image descriptions to bitmap images
+ #
+--- a/doc/groff.texi	2018-12-18 05:50:49.000000000 +0800
++++ b/doc/groff.texi	2023-06-01 16:52:54.098168517 +0800
+@@ -507,27 +507,27 @@ developing GNU and promoting software fr
+ @c Newer versions of texinfo.tex have similar code included already.
+ 
+ @tex
+-\global\catcode`^^e4\active % ‰
++\global\catcode`^^e4\active % √§
+ \gdef^^e4{\"a}
+-\global\catcode`^^c4\active % ƒ
++\global\catcode`^^c4\active % √Ñ
+ \gdef^^c4{\"A}
+-\global\catcode`^^e9\active % È
++\global\catcode`^^e9\active % √©
+ \gdef^^e9{\'e}
+-\global\catcode`^^c9\active % …
++\global\catcode`^^c9\active % √â
+ \gdef^^c9{\'E}
+-\global\catcode`^^f6\active % ˆ
++\global\catcode`^^f6\active % √∂
+ \gdef^^f6{\"o}
+-\global\catcode`^^d6\active % ÷
++\global\catcode`^^d6\active % √ñ
+ \gdef^^d6{\"O}
+-\global\catcode`^^fc\active % ¸
++\global\catcode`^^fc\active % √º
+ \gdef^^fc{\"u}
+-\global\catcode`^^dc\active % ‹
++\global\catcode`^^dc\active % √ú
+ \gdef^^dc{\"U}
+-\global\catcode`^^e6\active % Ê
++\global\catcode`^^e6\active % √¶
+ \gdef^^e6{\ae}
+-\global\catcode`^^c6\active % ∆
++\global\catcode`^^c6\active % √Ü
+ \gdef^^c6{\AE}
+-\global\catcode`^^df\active % ﬂ
++\global\catcode`^^df\active % √ü
+ \gdef^^df{\ss}
+ @end tex
+ 
+@@ -4368,7 +4368,7 @@ Upside-down exclamation point.
+ @endDefstr
+ 
+ @Defstr {8, ms}
+-German ﬂ ligature.
++German √ü ligature.
+ @endDefstr
+ 
+ @Defstr {3, ms}
+@@ -4396,11 +4396,11 @@ Hooked o.
+ @endDefstr
+ 
+ @Defstr {ae, ms}
+-Lowercase Ê ligature.
++Lowercase √¶ ligature.
+ @endDefstr
+ 
+ @Defstr {Ae, ms}
+-Uppercase ∆ ligature.
++Uppercase √Ü ligature.
+ @endDefstr
+ 
+ @c ---------------------------------------------------------------------
+@@ -5852,7 +5852,7 @@ e\'
+ 
+ 
+ in Paris
+-  @result{} A cafÈ in Paris
++  @result{} A caf√© in Paris
+ @endExample
+ 
+ @noindent
+@@ -8270,7 +8270,7 @@ doesn't handle translations of translati
+ The right way to write the above translation is
+ 
+ @Example
+-.tr È\['E]
++.tr √©\['E]
+ @endExample
+ 
+ @noindent
+@@ -14344,7 +14344,7 @@ Macro and request arguments preserve the
+ ..
+ .cp 0     \" switch compatibility mode off
+ .xx caf\['e]
+-    @result{} cafÈ
++    @result{} caf√©
+ @endExample
+ 
+ @noindent
+--- a/font/devdvi/devdvi.am	2018-10-11 05:44:56.000000000 +0800
++++ b/font/devdvi/devdvi.am	2023-06-01 16:32:37.788963607 +0800
+@@ -83,9 +83,9 @@ font/devdvi/DESC: $(devdvi_srcdir)/DESC.
+ 	$(AM_V_GEN)$(MKDIR_P) `dirname $@` \
+ 	&& cat $(devdvi_srcdir)/DESC.in >$@ \
+ 	&& if test "$(PAGE)" = A4; then \
+-	     echo "papersize a4" >>$@; \
++	     echo "papersize /etc/papersize a4" >>$@; \
+ 	   else \
+-	     echo "papersize letter" >>$@; \
++	     echo "papersize /etc/papersize letter" >>$@; \
+ 	   fi \
+ 	&& (test -z '$(DVIPRINT)' \
+ 	    || echo print '$(DVIPRINT)' >>$@)
+--- a/font/devlbp/devlbp.am	2018-10-11 05:44:56.000000000 +0800
++++ b/font/devlbp/devlbp.am	2023-06-01 16:32:37.789481965 +0800
+@@ -47,9 +47,9 @@ font/devlbp/DESC: $(devlbp_srcdir)/DESC.
+ 	$(AM_V_GEN)$(MKDIR_P) `dirname $@` \
+ 	&& cat $(devlbp_srcdir)/DESC.in >$@ \
+ 	&& if test "$(PAGE)" = A4; then \
+-	     echo "papersize a4" >>$@; \
++	     echo "papersize /etc/papersize a4" >>$@; \
+ 	   else \
+-	     echo "papersize letter" >>$@; \
++	     echo "papersize /etc/papersize letter" >>$@; \
+ 	   fi \
+ 	&& (test -z '$(LBPPRINT)' \
+ 	    || echo print '$(LBPPRINT)' >>$@)
+--- a/font/devlj4/devlj4.am	2018-10-11 05:44:56.000000000 +0800
++++ b/font/devlj4/devlj4.am	2023-06-01 16:32:37.789769580 +0800
+@@ -92,9 +92,9 @@ font/devlj4/DESC: $(devlj4_srcdir)/DESC.
+ 	&& echo "unitwidth `expr 7620000 / $(LJ4RES)`" >>$@ \
+ 	&& cat $(devlj4_srcdir)/DESC.in >>$@ \
+ 	&& if test "$(PAGE)" = A4; then \
+-	     echo "papersize a4" >>$@; \
++	     echo "papersize /etc/papersize a4" >>$@; \
+ 	   else \
+-	     echo "papersize letter" >>$@; \
++	     echo "papersize /etc/papersize letter" >>$@; \
+ 	   fi \
+ 	&& (test -z '$(LJ4PRINT)' \
+ 	    || echo print '$(LJ4PRINT)' >>$@)
+--- a/font/devps/devps.am	2018-10-11 05:44:56.000000000 +0800
++++ b/font/devps/devps.am	2023-06-01 16:32:37.790076445 +0800
+@@ -143,9 +143,9 @@ font/devps/DESC: $(devps_srcdir)/DESC.in
+ 	&& cat $(devps_srcdir)/DESC.in >$@ \
+ 	&& echo broken $(BROKEN_SPOOLER_FLAGS) >>$@ \
+ 	&& if test "$(PAGE)" = A4; then \
+-	     echo "papersize a4" >>$@; \
++	     echo "papersize /etc/papersize a4" >>$@; \
+ 	   else \
+-	     echo "papersize letter" >>$@; \
++	     echo "papersize /etc/papersize letter" >>$@; \
+ 	   fi \
+ 	&& (test -z '$(PSPRINT)' \
+ 	    || echo print '$(PSPRINT)' >>$@)
+--- a/man/ditroff.7.man	2018-11-19 06:06:22.000000000 +0800
++++ b/man/ditroff.7.man	2023-06-01 16:32:15.530161299 +0800
+@@ -19,6 +19,9 @@ ditroff \- classical device-independent
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff/copyright.
+ .
+ .
+ .\" ====================================================================
+--- a/man/groff.7.man	2018-12-18 05:44:34.000000000 +0800
++++ b/man/groff.7.man	2023-06-01 16:32:15.531313427 +0800
+@@ -22,6 +22,9 @@ groff \- a short reference for the GNU r
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff/copyright.
+ .
+ .
+ .\" ====================================================================
+--- a/man/groff_diff.7.man	2018-12-18 05:44:34.000000000 +0800
++++ b/man/groff_diff.7.man	2023-06-01 16:32:15.532391057 +0800
+@@ -29,6 +29,9 @@ groff_diff \- differences between GNU tr
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff/copyright.
+ .
+ .
+ .\" ====================================================================
+--- a/man/groff_out.5.man	2018-12-18 05:44:34.000000000 +0800
++++ b/man/groff_out.5.man	2023-06-01 16:32:15.533067826 +0800
+@@ -29,6 +29,9 @@ groff_out \- groff intermediate output f
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff/copyright.
+ .
+ .
+ .\" ====================================================================
+--- a/man/groff_tmac.5.man	2018-12-18 05:44:34.000000000 +0800
++++ b/man/groff_tmac.5.man	2023-06-01 16:32:38.937076944 +0800
+@@ -28,6 +28,9 @@ groff_tmac \- macro files in the roff ty
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff/copyright.
+ .
+ .
+ .ds Ellipsis \&.\|.\|.\&\"
+@@ -241,7 +244,8 @@ Swedish localization support, including
+ packages.
+ .
+ Note that Swedish for the mm macros is handled separately; see
+-.BR groff_mmse (@MAN7EXT@).
++.BR groff_mmse (@MAN7EXT@)
++(only in Swedish locales).
+ .
+ It should be used as the last macro package on the command line.
+ .
+--- a/man/roff.7.man	2018-12-18 05:44:34.000000000 +0800
++++ b/man/roff.7.man	2023-06-01 16:32:15.534093083 +0800
+@@ -27,6 +27,9 @@ roff \- concepts and history of roff typ
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff/copyright.
+ .
+ .
+ .\" ====================================================================
+--- a/src/devices/grohtml/post-html.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/devices/grohtml/post-html.cpp	2023-06-01 16:32:39.515075979 +0800
+@@ -5016,7 +5016,7 @@ void html_printer::do_file_components (v
+ 
+       t = current_time();
+       html.begin_comment("CreationDate: ")
+-	.put_string(ctime(&t), strlen(ctime(&t))-1)
++	.put_string(asctime(gmtime(&t)), strlen(asctime(gmtime(&t)))-1)
+ 	.end_comment();
+ 
+       if (dialect == html4)
+@@ -5129,7 +5129,7 @@ html_printer::~html_printer()
+ 
+   t = current_time();
+   html.begin_comment("CreationDate: ")
+-    .put_string(ctime(&t), strlen(ctime(&t))-1)
++    .put_string(asctime(gmtime(&t)), strlen(asctime(gmtime(&t)))-1)
+     .end_comment();
+ 
+   if (dialect == html4)
+--- a/src/devices/grolbp/grolbp.1.man	2018-12-18 05:44:34.000000000 +0800
++++ b/src/devices/grolbp/grolbp.1.man	2023-06-01 17:17:55.840870524 +0800
+@@ -10,7 +10,7 @@ series laser printers)
+ .cp 0
+ .
+ .
+-.\" Modified by Francisco AndrÈs Verd˙ <pandres@dragonet.es> for the
++.\" Modified by Francisco Andr√©s Verd√∫ <pandres@dragonet.es> for the
+ .\" grolbp program.
+ .
+ .
+--- a/src/devices/grolbp/lbp.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/devices/grolbp/lbp.cpp	2023-06-01 17:17:24.404835910 +0800
+@@ -1,6 +1,6 @@
+ // -*- C++ -*-
+ /* Copyright (C) 1994-2018 Free Software Foundation, Inc.
+-     Written by Francisco AndrÈs Verd˙ <pandres@dragonet.es> with many ideas
++     Written by Francisco Andr√©s Verd√∫ <pandres@dragonet.es> with many ideas
+      taken from the other groff drivers.
+ 
+ This file is part of groff.
+--- a/src/devices/gropdf/gropdf.pl	2018-12-10 07:37:33.000000000 +0800
++++ b/src/devices/gropdf/gropdf.pl	2023-06-01 16:32:40.673230394 +0800
+@@ -61,6 +61,7 @@ my @obj;	# Array of PDF objects
+ my $objct=0;	# Count of Objects
+ my $fct=0;	# Output count
+ my %fnt;	# Used fonts
++our $input;	# Current input filehandle
+ my $lct=0;	# Input Line Count
+ my $src_name='';
+ my %env;	# Current environment
+@@ -280,7 +281,7 @@ elsif (exists($ppsz{$papersz}))
+     @defaultmb=@mediabox=(0,0,$ppsz{$papersz}->[0],$ppsz{$papersz}->[1]);
+ }
+ 
+-my (@dt)=localtime($ENV{SOURCE_DATE_EPOCH} || time);
++my (@dt)=gmtime($ENV{SOURCE_DATE_EPOCH} || time);
+ my $dt=PDFDate(\@dt);
+ 
+ my %info=('Creator' => "(groff version $cfg{GROFF_VERSION})",
+@@ -288,56 +289,64 @@ my %info=('Creator' => "(groff version $
+ 				'ModDate' => "($dt)",
+ 				'CreationDate' => "($dt)");
+ 
+-while (<>)
+-{
+-    chomp;
+-    s/\r$//;
+-    $lct++;
++unshift @ARGV, '-' unless @ARGV;
++foreach my $filename (@ARGV) {
++    local $input;
++    if ($filename eq '-') {
++	$input = \*STDIN;
++    } elsif (not open $input, '<', $filename) {
++	warn $!;
++	next;
++    }
++    while (<$input>) {
++	chomp;
++	s/\r$//;
++	$lct++;
+ 
+-    do 	# The ahead buffer behaves like 'ungetc'
+-    {{
+-	if (scalar(@ahead))
+-	{
+-	    $_=shift(@ahead);
+-	}
++	do 	# The ahead buffer behaves like 'ungetc'
++	{{
++	    if (scalar(@ahead))
++	    {
++		$_=shift(@ahead);
++	    }
+ 
+ 
+-	my $cmd=substr($_,0,1);
+-	next if $cmd eq '#';	# just a comment
+-	my $lin=substr($_,1);
++	    my $cmd=substr($_,0,1);
++	    next if $cmd eq '#';	# just a comment
++	    my $lin=substr($_,1);
+ 
+-	while ($cmd eq 'w')
+-	{
+-	    $cmd=substr($lin,0,1);
+-	    $lin=substr($lin,1);
+-	    $w_flg=1 if $gotT;
+-	}
++	    while ($cmd eq 'w')
++	    {
++		$cmd=substr($lin,0,1);
++		$lin=substr($lin,1);
++		$w_flg=1 if $gotT;
++	    }
+ 
+-	$lin=~s/^\s+//;
++	    $lin=~s/^\s+//;
+ #		$lin=~s/\s#.*?$//;	# remove comment
+-	$stream.="\% $_\n" if $debug;
+-
+-	do_x($lin),next if ($cmd eq 'x');
+-	next if $suppress;
+-	do_p($lin),next if ($cmd eq 'p');
+-	do_f($lin),next if ($cmd eq 'f');
+-	do_s($lin),next if ($cmd eq 's');
+-	do_m($lin),next if ($cmd eq 'm');
+-	do_D($lin),next if ($cmd eq 'D');
+-	do_V($lin),next if ($cmd eq 'V');
+-	do_v($lin),next if ($cmd eq 'v');
+-	do_t($lin),next if ($cmd eq 't');
+-	do_u($lin),next if ($cmd eq 'u');
+-	do_C($lin),next if ($cmd eq 'C');
+-	do_c($lin),next if ($cmd eq 'c');
+-	do_N($lin),next if ($cmd eq 'N');
+-	do_h($lin),next if ($cmd eq 'h');
+-	do_H($lin),next if ($cmd eq 'H');
+-	do_n($lin),next if ($cmd eq 'n');
++	    $stream.="\% $_\n" if $debug;
+ 
+-	my $tmp=scalar(@ahead);
+-    }} until scalar(@ahead) == 0;
++	    do_x($lin),next if ($cmd eq 'x');
++	    next if $suppress;
++	    do_p($lin),next if ($cmd eq 'p');
++	    do_f($lin),next if ($cmd eq 'f');
++	    do_s($lin),next if ($cmd eq 's');
++	    do_m($lin),next if ($cmd eq 'm');
++	    do_D($lin),next if ($cmd eq 'D');
++	    do_V($lin),next if ($cmd eq 'V');
++	    do_v($lin),next if ($cmd eq 'v');
++	    do_t($lin),next if ($cmd eq 't');
++	    do_u($lin),next if ($cmd eq 'u');
++	    do_C($lin),next if ($cmd eq 'C');
++	    do_c($lin),next if ($cmd eq 'c');
++	    do_N($lin),next if ($cmd eq 'N');
++	    do_h($lin),next if ($cmd eq 'h');
++	    do_H($lin),next if ($cmd eq 'H');
++	    do_n($lin),next if ($cmd eq 'n');
+ 
++	    my $tmp=scalar(@ahead);
++	}} until scalar(@ahead) == 0;
++    }
+ }
+ 
+ exit 0 if $lct==0;
+@@ -377,7 +386,7 @@ my $info=BuildObj(++$objct,\%info);
+ 
+ PutObj($objct);
+ 
+-foreach my $fontno (keys %fontlst)
++foreach my $fontno (sort keys %fontlst)
+ {
+     my $o=$fontlst{$fontno}->{FNT};
+ 
+@@ -538,7 +547,7 @@ sub GetObj
+ sub PDFDate
+ {
+     my $dt=shift;
+-    return(sprintf("D:%04d%02d%02d%02d%02d%02d%+03d'00'",$dt->[5]+1900,$dt->[4]+1,$dt->[3],$dt->[2],$dt->[1],$dt->[0],( localtime time() + 3600*( 12 - (gmtime)[2] ) )[2] - 12));
++    return(sprintf("D:%04d%02d%02d%02d%02d%02d+00'00'",$dt->[5]+1900,$dt->[4]+1,$dt->[3],$dt->[2],$dt->[1],$dt->[0]));
+ }
+ 
+ sub ToPoints
+@@ -846,7 +855,7 @@ sub do_x
+ 		    my @xwds=split(' ',"<< $1 >>");
+ 		    my $docinfo=ParsePDFValue(\@xwds);
+ 
+-		    foreach my $k (keys %{$docinfo})
++		    foreach my $k (sort keys %{$docinfo})
+ 		    {
+ 			$info{$k}=$docinfo->{$k} if $k ne 'Producer';
+ 		    }
+@@ -856,7 +865,7 @@ sub do_x
+ 		    my @xwds=split(' ',"<< $1 >>");
+ 		    my $docview=ParsePDFValue(\@xwds);
+ 
+-		    foreach my $k (keys %{$docview})
++		    foreach my $k (sort keys %{$docview})
+ 		    {
+ 			$cat->{$k}=$docview->{$k} if !exists($cat->{$k});
+ 		    }
+@@ -1707,7 +1716,7 @@ sub MapInsHash
+     my $val=shift;
+ 
+ 
+-    foreach my $k (keys(%{$val}))
++    foreach my $k (sort keys(%{$val}))
+     {
+ 	MapInsValue($pdf,$o,$k,$insmap,$parent,$val->{$k}) if $k ne 'Contents';
+     }
+@@ -3248,7 +3257,7 @@ sub  LoadAhead
+ 
+     foreach my $j (1..$no)
+     {
+-	my $lin=<>;
++	my $lin=<$input>;
+ 	chomp($lin);
+ 	$lin=~s/\r$//;
+ 	$lct++;
+--- a/src/devices/grops/ps.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/devices/grops/ps.cpp	2023-06-01 16:32:39.517204490 +0800
+@@ -1392,7 +1392,7 @@ ps_printer::~ps_printer()
+     time_t
+ #endif
+     t = current_time();
+-    fputs(ctime(&t), out.get_file());
++    fputs(asctime(gmtime(&t)), out.get_file());
+   }
+   for (font_pointer_list *f = font_list; f; f = f->next) {
+     ps_font *psf = (ps_font *)(f->p);
+--- a/src/devices/grotty/grotty.1.man	2018-12-18 05:44:34.000000000 +0800
++++ b/src/devices/grotty/grotty.1.man	2023-06-01 16:32:42.402442703 +0800
+@@ -124,6 +124,22 @@ environment variable or using the \[oq]s
+ .
+ .
+ .LP
++(Debian-specific: The old behaviour is the default when using the
++.B man
++and
++.B mdoc
++macro packages, because most pagers either fail to cope with SGR escape
++sequences or need special options to do so.
++SGR output can be re-enabled permanently by editing
++.I /etc/groff/man.local
++and
++.IR /etc/groff/mdoc.local ,
++or temporarily by setting the
++.I GROFF_SGR
++environment variable to something non-empty.)
++.
++.
++.LP
+ For SGR support, it is necessary to use the
+ .B \-R
+ option of
+@@ -266,6 +282,18 @@ Use
+ .BR grotty 's
+ old output format (see above).
+ This also disables color output.
++(Debian-specific: This option is enabled by default when using the
++.B man
++and
++.B mdoc
++macro packages.
++It can be disabled by default permanently by editing
++.I /etc/groff/man.local
++and
++.IR /etc/groff/mdoc.local ,
++or temporarily by setting the
++.I GROFF_SGR
++environment variable to something non-empty.)
+ .
+ .TP
+ .B \-d
+--- a/src/include/config.hin	2018-12-23 22:34:26.000000000 +0800
++++ b/src/include/config.hin	2023-06-03 19:57:07.280269623 +0800
+@@ -133,12 +133,7 @@
+    non-IEEE-754 'long double' values. */
+ #undef CHECK_PRINTF_SAFE
+ 
+-/* Define to one of `_getb67', `GETB67', `getb67' for Cray-2 and Cray-YMP
+-   systems. This function is required for `alloca.c' support on those systems.
+-   */
+-#undef CRAY_STACKSEG_END
+-
+-/* Define to 1 if using `alloca.c'. */
++/* Define to 1 if using 'alloca.c'. */
+ #undef C_ALLOCA
+ 
+ /* Define as the bit index in the word where to find bit 0 of the exponent of
+@@ -211,8 +206,7 @@
+    may be supplied by this distribution. */
+ #undef HAVE_ALLOCA
+ 
+-/* Define to 1 if you have <alloca.h> and it should be used (not on Ultrix).
+-   */
++/* Define to 1 if <alloca.h> works. */
+ #undef HAVE_ALLOCA_H
+ 
+ /* Define to 1 if you have the <bp-sym.h> header file. */
+@@ -369,9 +363,6 @@
+ /* Define to 1 if you have the `mbrtowc' function. */
+ #undef HAVE_MBRTOWC
+ 
+-/* Define to 1 if you have the <memory.h> header file. */
+-#undef HAVE_MEMORY_H
+-
+ /* Define if you have mkstemp(). */
+ #undef HAVE_MKSTEMP
+ 
+@@ -426,6 +417,9 @@
+    uintmax_t. */
+ #undef HAVE_STDINT_H_WITH_UINTMAX
+ 
++/* Define to 1 if you have the <stdio.h> header file. */
++#undef HAVE_STDIO_H
++
+ /* Define to 1 if you have the <stdlib.h> header file. */
+ #undef HAVE_STDLIB_H
+ 
+@@ -710,7 +704,9 @@
+ 	STACK_DIRECTION = 0 => direction of growth unknown */
+ #undef STACK_DIRECTION
+ 
+-/* Define to 1 if you have the ANSI C header files. */
++/* Define to 1 if all of the C90 standard headers exist (not just the ones
++   required in a freestanding environment). This macro is provided for
++   backward compatibility; new code need not use it. */
+ #undef STDC_HEADERS
+ 
+ /* Define if your C++ compiler uses a traditional (Reiser) preprocessor. */
+@@ -984,7 +980,7 @@
+ /* Define to `int' if <sys/types.h> does not define. */
+ #undef mode_t
+ 
+-/* Define to `int' if <sys/types.h> does not define. */
++/* Define as a signed integer type capable of holding a process identifier. */
+ #undef pid_t
+ 
+ /* Define as the type of the result of subtracting two pointers, if the system
+--- a/src/libs/libgroff/assert.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/libs/libgroff/assert.cpp	2023-06-01 17:33:04.491210395 +0800
+@@ -16,6 +16,10 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ 
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include "assert.h"
+--- a/src/libs/libgroff/curtime.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/libs/libgroff/curtime.cpp	2023-06-01 17:33:04.494692245 +0800
+@@ -15,6 +15,10 @@ for more details.
+ The GNU General Public License version 2 (GPL2) is available in the
+ internet at <http://www.gnu.org/licenses/gpl-2.0.txt>. */
+ 
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
+ #include <errno.h>
+ #include <limits.h>
+ #include <stdlib.h>
+--- a/src/libs/libgroff/device.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/libs/libgroff/device.cpp	2023-06-01 17:33:04.495305059 +0800
+@@ -17,6 +17,7 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ 
++#include "config.h"
+ #include <stdlib.h>
+ #include "device.h"
+ #include "defs.h"
+--- a/src/libs/libgroff/errarg.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/libs/libgroff/errarg.cpp	2023-06-01 17:33:04.492485272 +0800
+@@ -17,6 +17,10 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ 
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
+ #include <stdio.h>
+ #include "assert.h"
+ #include "errarg.h"
+--- a/src/libs/libgroff/error.cpp	2018-11-19 06:06:22.000000000 +0800
++++ b/src/libs/libgroff/error.cpp	2023-06-01 17:33:04.493027630 +0800
+@@ -17,6 +17,10 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ 
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+--- a/src/libs/libgroff/fatal.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/libs/libgroff/fatal.cpp	2023-06-01 17:33:04.495670089 +0800
+@@ -16,6 +16,7 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ 
++#include "config.h"
+ #include <stdlib.h>
+ 
+ #define FATAL_ERROR_EXIT_CODE 3
+--- a/src/libs/libgroff/string.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/libs/libgroff/string.cpp	2023-06-01 17:33:04.496092451 +0800
+@@ -17,6 +17,10 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ 
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
+ #include <stdlib.h>
+ 
+ #include "lib.h"
+--- a/src/libs/libgroff/strsave.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/libs/libgroff/strsave.cpp	2023-06-01 17:33:04.496620726 +0800
+@@ -17,6 +17,7 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ 
++#include "config.h"
+ #include <string.h>
+ #include <stdlib.h>
+ 
+--- a/src/preproc/eqn/eqn.ypp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/preproc/eqn/eqn.ypp	2023-06-01 17:33:04.493860229 +0800
+@@ -16,6 +16,10 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ %{
++#ifdef HAVE_CONFIG_H
++#include "config.h"
++#endif
++
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
+--- a/src/preproc/eqn/other.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/preproc/eqn/other.cpp	2023-06-01 17:33:04.498614581 +0800
+@@ -17,6 +17,7 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ 
++#include "config.h"
+ #include <stdlib.h>
+ 
+ #include "eqn.h"
+--- a/src/preproc/eqn/text.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/preproc/eqn/text.cpp	2023-06-01 17:33:04.497477783 +0800
+@@ -17,6 +17,7 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ 
++#include "config.h"
+ #include <ctype.h>
+ #include <stdlib.h>
+ #include "eqn.h"
+--- a/src/preproc/pic/object.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/preproc/pic/object.cpp	2023-06-01 17:33:04.499773170 +0800
+@@ -17,6 +17,8 @@ for more details.
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>. */
+ 
++#include "config.h"
++
+ #include <stdlib.h>
+ 
+ #include "pic.h"
+--- a/src/roff/groff/groff.1.man	2018-12-18 05:44:34.000000000 +0800
++++ b/src/roff/groff/groff.1.man	2023-06-01 16:32:38.937782462 +0800
+@@ -26,6 +26,9 @@ groff \- front-end for the groff documen
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff-base/copyright.
+ .
+ .
+ .\" ====================================================================
+@@ -2014,7 +2017,8 @@ Groff macro packages and macro-specific
+ .BR \%groff_mdoc (@MAN7EXT@),
+ .BR \%groff_me (@MAN7EXT@),
+ .BR \%groff_mm (@MAN7EXT@),
+-.BR \%groff_mmse (@MAN7EXT@),
++.BR \%groff_mmse (@MAN7EXT@)
++(only in Swedish locales),
+ .BR \%groff_mom (@MAN7EXT@),
+ .BR \%groff_ms (@MAN7EXT@),
+ .BR \%groff_www (@MAN7EXT@),
+--- a/src/roff/groff/groff.cpp	2018-12-23 22:27:47.000000000 +0800
++++ b/src/roff/groff/groff.cpp	2023-06-01 16:32:38.364154778 +0800
+@@ -340,8 +340,16 @@ int main(int argc, char **argv)
+     commands[PIC_INDEX].append_arg("-U");
+   }
+   font::set_unknown_desc_command_handler(handle_unknown_desc_command);
+-  if (!font::load_desc())
+-    fatal("invalid device '%1'", device);
++  if (!font::load_desc()) {
++    if (strcmp(device, "X100") == 0 || strcmp(device, "X100-12") == 0 ||
++	strcmp(device, "X75") == 0 || strcmp(device, "X75-12") == 0 ||
++	strcmp(device, "dvi") == 0 || strcmp(device, "html") == 0 ||
++	strcmp(device, "lbp") == 0 || strcmp(device, "lj4") == 0)
++      fatal("invalid device '%1' (try installing the 'groff' package?)",
++	    device);
++    else
++      fatal("invalid device '%1'", device);
++  }
+   if (!postdriver)
+     fatal("no 'postpro' command in DESC file for device '%1'", device);
+   if (predriver && !zflag) {
+--- a/src/roff/nroff/nroff.sh	2018-11-19 06:28:27.000000000 +0800
++++ b/src/roff/nroff/nroff.sh	2023-06-01 16:32:14.991223987 +0800
+@@ -20,6 +20,8 @@
+ # You should have received a copy of the GNU General Public License
+ # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ 
++unset IFS
++
+ prog="$0"
+ 
+ # Default device.
+--- a/src/roff/troff/div.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/roff/troff/div.cpp	2023-06-01 16:32:42.980588567 +0800
+@@ -559,7 +559,10 @@ void cleanup_and_exit(int exit_code)
+ {
+   if (the_output) {
+     the_output->trailer(topdiv->get_page_length());
+-    delete the_output;
++    // If we're already dying, don't call the_output's destructor.  See
++    // node.cpp:real_output_file::~real_output_file().
++    if (!the_output->is_dying)
++      delete the_output;
+   }
+   FLUSH_INPUT_PIPE(STDIN_FILENO);
+   exit(exit_code);
+--- a/src/roff/troff/env.cpp	2018-11-19 06:06:22.000000000 +0800
++++ b/src/roff/troff/env.cpp	2023-06-01 16:32:43.552557806 +0800
+@@ -2595,7 +2595,8 @@ tab_type tab_stops::distance_to_next_tab
+   return distance_to_next_tab(curpos, distance, &nextpos);
+ }
+ 
+-tab_type tab_stops::distance_to_next_tab(hunits curpos, hunits *distance,
++tab_type tab_stops::distance_to_next_tab(hunits curpos,
++					 hunits *distance,
+ 					 hunits *nextpos)
+ {
+   hunits lastpos = 0;
+@@ -2611,14 +2612,16 @@ tab_type tab_stops::distance_to_next_tab
+     return TAB_NONE;
+   hunits base = lastpos;
+   for (;;) {
+-    for (tem = repeated_list; tem && tem->pos + base <= curpos; tem = tem->next)
++    for (tem = repeated_list; tem && tem->pos + base <= curpos;
++	 tem = tem->next)
+       lastpos = tem->pos;
+     if (tem) {
+       *distance = tem->pos + base - curpos;
+       *nextpos  = tem->pos + base;
+       return tem->type;
+     }
+-    assert(lastpos > 0);
++    if (lastpos < 0)
++      lastpos = 0;
+     base += lastpos;
+   }
+   return TAB_NONE;
+@@ -2780,7 +2783,7 @@ void set_tabs()
+     else if (tok.ch() == 'L') {
+       tok.next();
+     }
+-    if (pos <= prev_pos && !first)
++    if (pos <= prev_pos && (!first || repeated))
+       warning(WARN_RANGE,
+ 	      "positions of tab stops must be strictly increasing");
+     else {
+--- a/src/roff/troff/input.cpp	2018-11-24 05:51:49.000000000 +0800
++++ b/src/roff/troff/input.cpp	2023-06-01 16:32:39.519698031 +0800
+@@ -8084,7 +8084,7 @@ static void init_registers()
+ #endif /* not LONG_FOR_TIME_T */
+     t = current_time();
+   // Use struct here to work around misfeature in old versions of g++.
+-  struct tm *tt = localtime(&t);
++  struct tm *tt = gmtime(&t);
+   set_number_reg("seconds", int(tt->tm_sec));
+   set_number_reg("minutes", int(tt->tm_min));
+   set_number_reg("hours", int(tt->tm_hour));
+--- a/src/roff/troff/node.cpp	2018-10-11 05:44:56.000000000 +0800
++++ b/src/roff/troff/node.cpp	2023-06-01 16:32:42.982403297 +0800
+@@ -1656,6 +1656,8 @@ real_output_file::~real_output_file()
+ {
+   if (!fp)
+     return;
++  // Prevent destructor from recursing; see div.cpp:cleanup_and_exit().
++  is_dying = true;
+   // To avoid looping, set fp to 0 before calling fatal().
+   if (ferror(fp) || fflush(fp) < 0) {
+     fp = 0;
+--- a/src/roff/troff/node.h	2018-10-11 05:44:56.000000000 +0800
++++ b/src/roff/troff/node.h	2023-06-01 16:32:42.982885073 +0800
+@@ -626,6 +626,7 @@ class output_file {
+   char make_g_plus_plus_shut_up;
+ public:
+   output_file();
++  bool is_dying = false;
+   virtual ~output_file();
+   virtual void trailer(vunits);
+   virtual void flush() = 0;
+--- a/src/roff/troff/troff.1.man	2018-12-18 05:44:34.000000000 +0800
++++ b/src/roff/troff/troff.1.man	2023-06-01 16:32:15.535159172 +0800
+@@ -22,6 +22,9 @@
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff-base/copyright.
+ .
+ .
+ .\" ====================================================================
+--- a/src/utils/afmtodit/afmtodit.pl	2018-10-11 05:44:56.000000000 +0800
++++ b/src/utils/afmtodit/afmtodit.pl	2023-06-01 16:32:40.101315736 +0800
+@@ -164,8 +164,8 @@ while (<AFM>) {
+ 		$depth{$n} = -$lly;
+ 		$left_side_bearing{$n} = -$llx;
+ 		$right_side_bearing{$n} = $urx - $w;
+-#		while ((my $lig, my $glyph2) = each %ligs) {
+-#		    $ligatures{$lig} = $n . " " . $glyph2;
++#		foreach my $lig (sort keys %ligs) {
++#		    $ligatures{$lig} = $n . " " . $ligs{$lig};
+ #		}
+ 	    }
+ 	}
+@@ -267,7 +267,7 @@ $italic_angle = $opt_a if $opt_a;
+ if (!$opt_x) {
+     my %mapped;
+     my $i = ($#encoding > 256) ? ($#encoding + 1) : 256;
+-    while (my $ch = each %width) {
++    foreach my $ch (sort keys %width) {
+ 	# add unencoded characters
+ 	if (!$in_encoding{$ch}) {
+ 	    $encoding[$i] = $ch;
+@@ -407,9 +407,9 @@ my %default_ligatures = (
+   "ffl", "ff l",
+ );
+ 
+-while (my ($lig, $components) = each %default_ligatures) {
++foreach my $lig (sort keys %default_ligatures) {
+     if (defined $width{$lig} && !defined $ligatures{$lig}) {
+-	$ligatures{$lig} = $components;
++	$ligatures{$lig} = $default_ligatures{$lig};
+     }
+ }
+ 
+@@ -456,7 +456,7 @@ if ($opt_e) {
+ 
+ if (!$opt_n && %ligatures) {
+     print("ligatures");
+-    while (my $lig = each %ligatures) {
++    foreach my $lig (sort keys %ligatures) {
+ 	print(" $lig");
+     }
+     print(" 0\n");
+--- a/tmac/doc-common-u	2018-12-23 22:36:16.000000000 +0800
++++ b/tmac/doc-common-u	2023-06-01 16:45:05.997148093 +0800
+@@ -456,8 +456,12 @@
+ .ds doc-operating-system-NetBSD-1.2c  1.2C
+ .ds doc-operating-system-NetBSD-1.2d  1.2D
+ .ds doc-operating-system-NetBSD-1.2e  1.2E
++.ds doc-operating-system-NetBSD-1.2.1 1.2.1
+ .ds doc-operating-system-NetBSD-1.3   1.3
+ .ds doc-operating-system-NetBSD-1.3a  1.3A
++.ds doc-operating-system-NetBSD-1.3.1 1.3.1
++.ds doc-operating-system-NetBSD-1.3.2 1.3.2
++.ds doc-operating-system-NetBSD-1.3.3 1.3.3
+ .ds doc-operating-system-NetBSD-1.4   1.4
+ .ds doc-operating-system-NetBSD-1.4.1 1.4.1
+ .ds doc-operating-system-NetBSD-1.4.2 1.4.2
+@@ -487,6 +491,7 @@
+ .ds doc-operating-system-NetBSD-5.0.1 5.0.1
+ .ds doc-operating-system-NetBSD-5.0.2 5.0.2
+ .ds doc-operating-system-NetBSD-5.1   5.1
++.ds doc-operating-system-NetBSD-5.1.1 5.1.1
+ .ds doc-operating-system-NetBSD-5.1.2 5.1.2
+ .ds doc-operating-system-NetBSD-5.1.3 5.1.3
+ .ds doc-operating-system-NetBSD-5.1.4 5.1.4
+@@ -499,11 +504,22 @@
+ .ds doc-operating-system-NetBSD-6.0.3 6.0.3
+ .ds doc-operating-system-NetBSD-6.0.4 6.0.4
+ .ds doc-operating-system-NetBSD-6.0.5 6.0.5
++.ds doc-operating-system-NetBSD-6.0.6 6.0.6
+ .ds doc-operating-system-NetBSD-6.1   6.1
+ .ds doc-operating-system-NetBSD-6.1.1 6.1.1
+ .ds doc-operating-system-NetBSD-6.1.2 6.1.2
+ .ds doc-operating-system-NetBSD-6.1.3 6.1.3
+ .ds doc-operating-system-NetBSD-6.1.4 6.1.4
++.ds doc-operating-system-NetBSD-6.1.5 6.1.5
++.ds doc-operating-system-NetBSD-7.0   7.0
++.ds doc-operating-system-NetBSD-7.0.1 7.0.1
++.ds doc-operating-system-NetBSD-7.0.2 7.0.2
++.ds doc-operating-system-NetBSD-7.1   7.1
++.ds doc-operating-system-NetBSD-7.1.1 7.1.1
++.ds doc-operating-system-NetBSD-7.1.2 7.1.2
++.ds doc-operating-system-NetBSD-7.2   7.2
++.ds doc-operating-system-NetBSD-8.0   8.0
++.ds doc-operating-system-NetBSD-8.1   8.1
+ .
+ .ds doc-operating-system-OpenBSD-2.0  2.0
+ .ds doc-operating-system-OpenBSD-2.1  2.1
+@@ -542,6 +558,16 @@
+ .ds doc-operating-system-OpenBSD-5.4  5.4
+ .ds doc-operating-system-OpenBSD-5.5  5.5
+ .ds doc-operating-system-OpenBSD-5.6  5.6
++.ds doc-operating-system-OpenBSD-5.7  5.7
++.ds doc-operating-system-OpenBSD-5.8  5.8
++.ds doc-operating-system-OpenBSD-5.9  5.9
++.ds doc-operating-system-OpenBSD-6.0  6.0
++.ds doc-operating-system-OpenBSD-6.1  6.1
++.ds doc-operating-system-OpenBSD-6.2  6.2
++.ds doc-operating-system-OpenBSD-6.3  6.3
++.ds doc-operating-system-OpenBSD-6.4  6.4
++.ds doc-operating-system-OpenBSD-6.5  6.5
++.ds doc-operating-system-OpenBSD-6.6  6.6
+ .
+ .ds doc-operating-system-FreeBSD-1.0     1.0
+ .ds doc-operating-system-FreeBSD-1.1     1.1
+@@ -608,6 +634,16 @@
+ .ds doc-operating-system-FreeBSD-9.2     9.2
+ .ds doc-operating-system-FreeBSD-9.3     9.3
+ .ds doc-operating-system-FreeBSD-10.0    10.0
++.ds doc-operating-system-FreeBSD-10.1    10.1
++.ds doc-operating-system-FreeBSD-10.2    10.2
++.ds doc-operating-system-FreeBSD-10.3    10.3
++.ds doc-operating-system-FreeBSD-10.4    10.4
++.ds doc-operating-system-FreeBSD-11.0    11.0
++.ds doc-operating-system-FreeBSD-11.1    11.1
++.ds doc-operating-system-FreeBSD-11.2    11.2
++.ds doc-operating-system-FreeBSD-11.3    11.3
++.ds doc-operating-system-FreeBSD-12.0    12.0
++.ds doc-operating-system-FreeBSD-12.1    12.1
+ .
+ .ds doc-operating-system-Darwin-8.0.0  8.0.0
+ .ds doc-operating-system-Darwin-8.1.0  8.1.0
+@@ -654,12 +690,72 @@
+ .ds doc-operating-system-Darwin-13.3.0 13.3.0
+ .ds doc-operating-system-Darwin-13.4.0 13.4.0
+ .ds doc-operating-system-Darwin-14.0.0 14.0.0
++.ds doc-operating-system-Darwin-14.1.0 14.1.0
++.ds doc-operating-system-Darwin-14.2.0 14.2.0
++.ds doc-operating-system-Darwin-14.3.0 14.3.0
++.ds doc-operating-system-Darwin-14.4.0 14.4.0
++.ds doc-operating-system-Darwin-14.5.0 14.5.0
++.ds doc-operating-system-Darwin-15.0.0 15.0.0
++.ds doc-operating-system-Darwin-15.1.0 15.1.0
++.ds doc-operating-system-Darwin-15.2.0 15.2.0
++.ds doc-operating-system-Darwin-15.3.0 15.3.0
++.ds doc-operating-system-Darwin-15.4.0 15.4.0
++.ds doc-operating-system-Darwin-15.5.0 15.5.0
++.ds doc-operating-system-Darwin-15.6.0 15.6.0
++.ds doc-operating-system-Darwin-16.0.0 16.0.0
++.ds doc-operating-system-Darwin-16.1.0 16.1.0
++.ds doc-operating-system-Darwin-16.2.0 16.2.0
++.ds doc-operating-system-Darwin-16.3.0 16.3.0
++.ds doc-operating-system-Darwin-16.4.0 16.4.0
++.ds doc-operating-system-Darwin-16.5.0 16.5.0
++.ds doc-operating-system-Darwin-16.6.0 16.6.0
++.ds doc-operating-system-Darwin-17.0.0 17.0.0
++.ds doc-operating-system-Darwin-17.1.0 17.1.0
++.ds doc-operating-system-Darwin-17.2.0 17.2.0
++.ds doc-operating-system-Darwin-17.3.0 17.3.0
++.ds doc-operating-system-Darwin-17.4.0 17.4.0
++.ds doc-operating-system-Darwin-17.5.0 17.5.0
++.ds doc-operating-system-Darwin-17.6.0 17.6.0
++.ds doc-operating-system-Darwin-17.7.0 17.7.0
++.ds doc-operating-system-Darwin-18.0.0 18.0.0
++.ds doc-operating-system-Darwin-18.1.0 18.1.0
++.ds doc-operating-system-Darwin-18.2.0 18.2.0
++.ds doc-operating-system-Darwin-18.3.0 18.3.0
++.ds doc-operating-system-Darwin-18.4.0 18.4.0
++.ds doc-operating-system-Darwin-18.5.0 18.5.0
++.ds doc-operating-system-Darwin-18.6.0 18.6.0
++.ds doc-operating-system-Darwin-18.7.0 18.7.0
++.ds doc-operating-system-Darwin-19.0.0 19.0.0
++.ds doc-operating-system-Darwin-19.1.0 19.1.0
++.ds doc-operating-system-Darwin-19.2.0 19.2.0
++.ds doc-operating-system-Darwin-19.3.0 19.3.0
++.ds doc-operating-system-Darwin-19.4.0 19.4.0
++.ds doc-operating-system-Darwin-19.5.0 19.5.0
++.ds doc-operating-system-Darwin-19.6.0 19.6.0
++.ds doc-operating-system-Darwin-20.0.0 20.0.0
++.ds doc-operating-system-Darwin-20.1.0 20.1.0
++.ds doc-operating-system-Darwin-20.2.0 20.2.0
++.ds doc-operating-system-Darwin-20.3.0 20.3.0
++.ds doc-operating-system-Darwin-20.4.0 20.4.0
++.ds doc-operating-system-Darwin-20.5.0 20.5.0
++.ds doc-operating-system-Darwin-20.6.0 20.6.0
++.ds doc-operating-system-Darwin-21.0.0 21.0.0
++.ds doc-operating-system-Darwin-21.1.0 21.1.0
++.ds doc-operating-system-Darwin-21.2.0 21.2.0
++.ds doc-operating-system-Darwin-21.3.0 21.3.0
++.ds doc-operating-system-Darwin-21.4.0 21.4.0
++.ds doc-operating-system-Darwin-21.5.0 21.5.0
++.ds doc-operating-system-Darwin-21.6.0 21.6.0
++.ds doc-operating-system-Darwin-22.0.0 22.0.0
++.ds doc-operating-system-Darwin-22.1.0 22.1.0
++.ds doc-operating-system-Darwin-22.2.0 22.2.0
+ .
+ .ds doc-operating-system-DragonFly-1.0    1.0
+ .ds doc-operating-system-DragonFly-1.1    1.1
+ .ds doc-operating-system-DragonFly-1.2    1.2
+ .ds doc-operating-system-DragonFly-1.3    1.3
+ .ds doc-operating-system-DragonFly-1.4    1.4
++.ds doc-operating-system-DragonFly-1.4.4  1.4.4
+ .ds doc-operating-system-DragonFly-1.5    1.5
+ .ds doc-operating-system-DragonFly-1.6    1.6
+ .ds doc-operating-system-DragonFly-1.7    1.7
+@@ -667,15 +763,20 @@
+ .ds doc-operating-system-DragonFly-1.8.1  1.8.1
+ .ds doc-operating-system-DragonFly-1.9    1.9
+ .ds doc-operating-system-DragonFly-1.10   1.10
++.ds doc-operating-system-DragonFly-1.10.1 1.10.1
+ .ds doc-operating-system-DragonFly-1.11   1.11
+ .ds doc-operating-system-DragonFly-1.12   1.12
++.ds doc-operating-system-DragonFly-1.12.1 1.12.1
+ .ds doc-operating-system-DragonFly-1.12.2 1.12.2
+ .ds doc-operating-system-DragonFly-1.13   1.13
+ .ds doc-operating-system-DragonFly-2.0    2.0
++.ds doc-operating-system-DragonFly-2.0.1  2.0.1
+ .ds doc-operating-system-DragonFly-2.1    2.1
+ .ds doc-operating-system-DragonFly-2.2    2.2
++.ds doc-operating-system-DragonFly-2.2.1  2.2.1
+ .ds doc-operating-system-DragonFly-2.3    2.3
+ .ds doc-operating-system-DragonFly-2.4    2.4
++.ds doc-operating-system-DragonFly-2.4.1  2.4.1
+ .ds doc-operating-system-DragonFly-2.5    2.5
+ .ds doc-operating-system-DragonFly-2.6    2.6
+ .ds doc-operating-system-DragonFly-2.7    2.7
+@@ -688,14 +789,68 @@
+ .ds doc-operating-system-DragonFly-2.12   2.12
+ .ds doc-operating-system-DragonFly-2.13   2.13
+ .ds doc-operating-system-DragonFly-3.0    3.0
++.ds doc-operating-system-DragonFly-3.0.1  3.0.1
++.ds doc-operating-system-DragonFly-3.0.2  3.0.2
++.ds doc-operating-system-DragonFly-3.0.3  3.0.3
+ .ds doc-operating-system-DragonFly-3.1    3.1
+ .ds doc-operating-system-DragonFly-3.2    3.2
++.ds doc-operating-system-DragonFly-3.2.1  3.2.1
++.ds doc-operating-system-DragonFly-3.2.2  3.2.2
+ .ds doc-operating-system-DragonFly-3.3    3.3
+ .ds doc-operating-system-DragonFly-3.4    3.4
++.ds doc-operating-system-DragonFly-3.4.1  3.4.1
++.ds doc-operating-system-DragonFly-3.4.2  3.4.2
++.ds doc-operating-system-DragonFly-3.4.3  3.4.3
+ .ds doc-operating-system-DragonFly-3.5    3.5
+ .ds doc-operating-system-DragonFly-3.6    3.6
++.ds doc-operating-system-DragonFly-3.6.1  3.6.1
++.ds doc-operating-system-DragonFly-3.6.2  3.6.2
+ .ds doc-operating-system-DragonFly-3.7    3.7
+ .ds doc-operating-system-DragonFly-3.8    3.8
++.ds doc-operating-system-DragonFly-3.8.1  3.8.1
++.ds doc-operating-system-DragonFly-3.8.2  3.8.2
++.ds doc-operating-system-DragonFly-4.0    4.0
++.ds doc-operating-system-DragonFly-4.0.1  4.0.1
++.ds doc-operating-system-DragonFly-4.0.2  4.0.2
++.ds doc-operating-system-DragonFly-4.0.3  4.0.3
++.ds doc-operating-system-DragonFly-4.0.4  4.0.4
++.ds doc-operating-system-DragonFly-4.0.5  4.0.5
++.ds doc-operating-system-DragonFly-4.0.6  4.0.6
++.ds doc-operating-system-DragonFly-4.1    4.1
++.ds doc-operating-system-DragonFly-4.2    4.2
++.ds doc-operating-system-DragonFly-4.2.1  4.2.1
++.ds doc-operating-system-DragonFly-4.2.2  4.2.2
++.ds doc-operating-system-DragonFly-4.2.3  4.2.3
++.ds doc-operating-system-DragonFly-4.2.4  4.2.4
++.ds doc-operating-system-DragonFly-4.3    4.3
++.ds doc-operating-system-DragonFly-4.4    4.4
++.ds doc-operating-system-DragonFly-4.4.1  4.4.1
++.ds doc-operating-system-DragonFly-4.4.2  4.4.2
++.ds doc-operating-system-DragonFly-4.4.3  4.4.3
++.ds doc-operating-system-DragonFly-4.5    4.5
++.ds doc-operating-system-DragonFly-4.6    4.6
++.ds doc-operating-system-DragonFly-4.6.1  4.6.1
++.ds doc-operating-system-DragonFly-4.6.2  4.6.2
++.ds doc-operating-system-DragonFly-4.7    4.7
++.ds doc-operating-system-DragonFly-4.8    4.8
++.ds doc-operating-system-DragonFly-4.8.1  4.8.1
++.ds doc-operating-system-DragonFly-4.9    4.9
++.ds doc-operating-system-DragonFly-5.0    5.0
++.ds doc-operating-system-DragonFly-5.0.1  5.0.1
++.ds doc-operating-system-DragonFly-5.0.2  5.0.2
++.ds doc-operating-system-DragonFly-5.1    5.1
++.ds doc-operating-system-DragonFly-5.2    5.2
++.ds doc-operating-system-DragonFly-5.2.1  5.2.1
++.ds doc-operating-system-DragonFly-5.2.2  5.2.2
++.ds doc-operating-system-DragonFly-5.3    5.3
++.ds doc-operating-system-DragonFly-5.4    5.4
++.ds doc-operating-system-DragonFly-5.4.1  5.4.1
++.ds doc-operating-system-DragonFly-5.4.2  5.4.2
++.ds doc-operating-system-DragonFly-5.4.3  5.4.3
++.ds doc-operating-system-DragonFly-5.5    5.5
++.ds doc-operating-system-DragonFly-5.6    5.6
++.ds doc-operating-system-DragonFly-5.6.1  5.6.1
++.ds doc-operating-system-DragonFly-5.6.2  5.6.2
+ .
+ .de Os
+ .  ds doc-command-name
+--- a/tmac/doc-syms-u	2018-12-23 22:36:16.000000000 +0800
++++ b/tmac/doc-syms-u	2023-06-01 16:49:39.849325522 +0800
+@@ -678,12 +678,16 @@
+ .as doc-str-St--xns5           " (\*[Lq]\*[doc-Tn-font-size]XNS\*[doc-str-St]\^5\*[Rq])
+ .ds doc-str-St--xns5.2         \*[doc-Tn-font-size]X/Open\*[doc-str-St] Networking Services Issue\~5.2
+ .as doc-str-St--xns5.2         " (\*[Lq]\*[doc-Tn-font-size]XNS\*[doc-str-St]\^5.2\*[Rq])
++.ds doc-str-St--xns5.2d2.0     \*[doc-Tn-font-size]X/Open\*[doc-str-St] Networking Services Issue\~5.2, Draft\~2.0
++.as doc-str-St--xns5.2d2.0     " (\*[Lq]\*[doc-Tn-font-size]XNS\*[doc-str-St]\^5.2D2.0\*[Rq])
+ .ds doc-str-St--xpg3           \*[doc-Tn-font-size]X/Open\*[doc-str-St] Portability Guide Issue\~3
+ .as doc-str-St--xpg3           " (\*[Lq]\*[doc-Tn-font-size]XPG\*[doc-str-St]\^3\*[Rq])
+ .ds doc-str-St--xpg4           \*[doc-Tn-font-size]X/Open\*[doc-str-St] Portability Guide Issue\~4
+ .as doc-str-St--xpg4           " (\*[Lq]\*[doc-Tn-font-size]XPG\*[doc-str-St]\^4\*[Rq])
+ .ds doc-str-St--xpg4.2         \*[doc-Tn-font-size]X/Open\*[doc-str-St] Portability Guide Issue\~4, Version\~2
+ .as doc-str-St--xpg4.2         " (\*[Lq]\*[doc-Tn-font-size]XPG\*[doc-str-St]\^4.2\*[Rq])
++.ds doc-str-St--xpg4.3         \*[doc-Tn-font-size]X/Open\*[doc-str-St] Portability Guide Issue\~4, Version\~3
++.as doc-str-St--xpg4.3         " (\*[Lq]\*[doc-Tn-font-size]XPG\*[doc-str-St]\^4.3\*[Rq])
+ .ds doc-str-St--xsh5           \*[doc-Tn-font-size]X/Open\*[doc-str-St] System Interfaces and Headers Issue\~5
+ .as doc-str-St--xsh5           " (\*[Lq]\*[doc-Tn-font-size]XSH\*[doc-str-St]\^5\*[Rq])
+ .
+@@ -815,6 +819,7 @@
+ .ds doc-str-Lb-libprop     Property Container Object Library (libprop, \-lprop)
+ .ds doc-str-Lb-libpthread  \*[Px] \*[doc-str-Lb]Threads Library (libpthread, \-lpthread)
+ .ds doc-str-Lb-libpuffs    puffs Convenience Library (libpuffs, \-lpuffs)
++.ds doc-str-Lb-librecompat Userspace Darwin to non-Darwin Compatibility Library (librecompat, -lrecompat)
+ .ds doc-str-Lb-librefuse   File System in Userspace Convenience Library (librefuse, \-lrefuse)
+ .ds doc-str-Lb-libresolv   DNS Resolver Library (libresolv, \-lresolv)
+ .ds doc-str-Lb-librpcsec_gss RPC GSS-API Authentication Library (librpcsec_gss, \-lrpcsec_gss)
+--- a/tmac/doc.tmac-u	2018-12-23 22:36:16.000000000 +0800
++++ b/tmac/doc.tmac-u	2023-06-01 16:32:41.252593633 +0800
+@@ -6485,10 +6485,11 @@
+ .  if (\n[doc-arg-ptr] <= \n[doc-lasttext-Lk]) \{\
+ .    nop \*[doc-Em-font]\c
+ .    while (\n[doc-arg-ptr] < \n[doc-lasttext-Lk]) \{\
+-.      nop \*[doc-arg\n[doc-arg-ptr]]
++.      nop \&\*[doc-arg\n[doc-arg-ptr]]
+ .      nr doc-arg-ptr +1
+ .    \}
+-.    nop \*[doc-arg\n[doc-arg-ptr]]\f[\n[doc-curr-font]]\s[\n[doc-curr-size]u]:
++.    nop \&\*[doc-arg\n[doc-arg-ptr]]\c
++.    nop \f[\n[doc-curr-font]]\s[\n[doc-curr-size]u]:
+ .    nr doc-arg-ptr +1
+ .  \}
+ .
+@@ -6498,7 +6499,7 @@
+ .
+ .  \" Print the delimiters, if any.
+ .  while (\n[doc-arg-ptr] <= \n[doc-arg-limit]) \{\
+-.    nop \*[doc-arg\n[doc-arg-ptr]]\c
++.    nop \&\*[doc-arg\n[doc-arg-ptr]]\c
+ .    nr doc-arg-ptr +1
+ .  \}
+ .  nop \&
+--- a/tmac/groff_mdoc.7.man	2018-11-19 06:06:22.000000000 +0800
++++ b/tmac/groff_mdoc.7.man	2023-06-01 16:32:41.828707899 +0800
+@@ -879,28 +879,40 @@ the release ID.
+ 1.3, 1.3a, 1.4, 1.4.1, 1.4.2, 1.4.3, 1.5, 1.5.1, 1.5.2, 1.5.3, 1.6, 1.6.1,
+ 1.6.2, 1.6.3, 2.0, 2.0.1, 2.0.2, 2.0.3, 2.1, 3.0, 3.0.1, 3.0.2, 3.0.3,
+ 3.1, 3.1.1, 4.0, 4.0.1, 5.0, 5.0.1, 5.0.2, 5.1, 5.1.2, 5.1.3, 5.1.4,
+-5.2, 5.2.1, 5.2.2, 6.0, 6.0.1, 6.0.2, 6.0.3, 6.0.4, 6.0.5, 6.1, 6.1.1,
+-6.1.2, 6.1.3, 6.1.4
++5.2, 5.2.1, 5.2.2, 6.0, 6.0.1, 6.0.2, 6.0.3, 6.0.4, 6.0.5, 6.0.6, 6.1,
++6.1.1, 6.1.2, 6.1.3, 6.1.4, 6.1.5, 7.0, 7.0.1, 7.0.2, 7.1, 7.1.1, 7.1.2,
++7.2, 8.0, 8.1
+ .It FreeBSD
+ 1.0, 1.1, 1.1.5, 1.1.5.1, 2.0, 2.0.5, 2.1, 2.1.5, 2.1.6, 2.1.7, 2.2, 2.2.1,
+-2.2.2, 2.2.5, 2.2.6, 2.2.7, 2.2.8, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 4.0, 4.1,
+-4.1.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.6.2, 4.7, 4.8, 4.9, 4.10, 4.11, 5.0, 5.1,
+-5.2, 5.2.1, 5.3, 5.4, 5.5, 6.0, 6.1, 6.2, 6.3, 6.4, 7.0, 7.1, 7.2, 7.3, 7.4,
+-8.0, 8.1, 8.2, 8.3, 8.4, 9.0, 9.1, 9.2, 9.3, 10.0
++2.2.2, 2.2.5, 2.2.6, 2.2.7, 2.2.8, 2.2.9, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 4.0,
++4.1, 4.1.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.6.2, 4.7, 4.8, 4.9, 4.10, 4.11, 5.0,
++5.1, 5.2, 5.2.1, 5.3, 5.4, 5.5, 6.0, 6.1, 6.2, 6.3, 6.4, 7.0, 7.1, 7.2, 7.3,
++7.4, 8.0, 8.1, 8.2, 8.3, 8.4, 9.0, 9.1, 9.2, 9.3, 10.0, 10.1, 10.2, 10.3,
++10.4, 11.0, 11.1, 11.2, 11.3, 12.0, 12.1
+ .It OpenBSD
+ 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.3, 3.4,
+ 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9,
+-5.0, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6
++5.0, 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 6.0, 6.1, 6.2, 6.3, 6.4,
++6.5, 6.6
+ .It DragonFly
+-1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8, 1.8.1, 1.9, 1.10, 1.12, 1.12.2,
+-1.13, 2.0, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.9.1, 2.10, 2.10.1,
+-2.11, 2.12, 2.13, 3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8
++1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.8.1, 1.9, 1.10, 1.11, 1.12,
++1.12.2, 1.13, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.9.1, 2.10,
++2.10.1, 2.11, 2.12, 2.13, 3.0, 3.0.1, 3.0.2, 3.1, 3.2, 3.2.1, 3.2.2, 3.3,
++3.4, 3.4.1, 3.4.2, 3.4.3, 3.5, 3.6, 3.6.1, 3.6.2, 3.7, 3.8, 3.8.1, 3.8.2,
++4.0, 4.0.1, 4.0.2, 4.0.3, 4.0.4, 4.0.5, 4.0.6, 4.1, 4.2, 4.2.1, 4.2.2,
++4.2.3, 4.2.4, 4.3, 4.4, 4.4.1, 4.4.2, 4.4.3, 4.5, 4.6, 4.6.1, 4.6.2, 4.7,
++4.8, 4.8.1, 4.9, 5.0, 5.0.1, 5.0.2, 5.1, 5.2, 5.2.1, 5.2.2, 5.3, 5.4, 5.4.1,
++5.4.2, 5.4.3, 5.5, 5.6, 5.6.1, 5.6.2
+ .It Darwin
+ 8.0.0, 8.1.0, 8.2.0, 8.3.0, 8.4.0, 8.5.0, 8.6.0, 8.7.0, 8.8.0, 8.9.0,
+ 8.10.0, 8.11.0, 9.0.0, 9.1.0, 9.2.0, 9.3.0, 9.4.0, 9.5.0, 9.6.0, 9.7.0,
+-9.8.0, 10.1.0, 10.2.0, 10.3.0, 10.4.0, 10.5.0, 10.6.0, 10.7.0, 10.8.0,
+-11.0.0, 11.1.0, 11.2.0, 11.3.0, 11.4.0, 11.5.0, 12.0.0, 12.1.0, 12.2.0,
+-13.0.0, 13.1.0, 13.2.0, 13.3.0, 13.4.0, 14.0.0
++9.8.0, 10.0.0, 10.1.0, 10.2.0, 10.3.0, 10.4.0, 10.5.0, 10.6.0, 10.7.0,
++10.8.0, 11.0.0, 11.1.0, 11.2.0, 11.3.0, 11.4.0, 11.5.0, 12.0.0, 12.1.0,
++12.2.0, 13.0.0, 13.1.0, 13.2.0, 13.3.0, 13.4.0, 14.0.0, 14.1.0, 14.2.0,
++14.3.0, 14.4.0, 14.5.0, 15.0.0, 15.1.0, 15.2.0, 15.3.0, 15.4.0, 15.5.0,
++15.6.0, 16.0.0, 16.1.0, 16.2.0, 16.3.0, 16.4.0, 16.5.0, 16.6.0, 17.0.0,
++17.1.0, 17.2.0, 17.3.0, 17.4.0, 17.5.0, 17.6.0, 17.7.0, 18.0.0, 18.1.0,
++18.2.0, 18.3.0, 18.4.0, 18.5.0, 18.6.0, 18.7.0, 19.0.0, 19.1.0, 19.2.0
+ .El
+ .Ed
+ .Pp
+--- a/tmac/groff_trace.7.man	2018-11-30 06:36:34.000000000 +0800
++++ b/tmac/groff_trace.7.man	2023-06-01 16:32:15.535532284 +0800
+@@ -27,6 +27,9 @@ groff_trace \- groff macro package trace
+ .\"
+ .\" A copy of the Free Documentation License is included as a file
+ .\" called FDL in the main directory of the groff source package.
++.\"
++.\" A copy of the GNU Free Documentation License is also available in this
++.\" Debian package as /usr/share/doc/groff/copyright.
+ .
+ .
+ .\" ====================================================================
+--- a/tmac/hyphenex.pl	2018-07-03 05:56:04.000000000 +0800
++++ b/tmac/hyphenex.pl	2023-06-01 16:32:40.673715253 +0800
+@@ -31,47 +31,57 @@ print "% for corrections and omissions.\
+ print "\n";
+ print "\\hyphenation{\n";
+ 
+-while (<>) {
+-  # retain only lines starting with \1 ... \6 or \tabalign
+-  next if not (m/^\\[123456]/ || m/^\\tabalign/);
+-  # remove final newline
+-  chop;
+-  # remove all TeX commands except \1 ... \6
+-  s/\\[^123456\s{]+//g;
+-  # remove all paired { ... }
+-  1 while s/{(.*?)}/\1/g;
+-  # skip lines which now have only whitespace before '&'
+-  next if m/^\s*&/;
+-  # remove comments
+-  s/%.*//;
+-  # remove trailing whitespace
+-  s/\s*$//;
+-  # remove trailing '*' (used as a marker in the document)
+-  s/\*$//;
+-  # split at whitespace
+-  @field = split(' ');
+-  if ($field[0] eq "\\1" || $field[0] eq "\\4") {
+-    print "  $field[2]\n";
++unshift @ARGV, '-' unless @ARGV;
++foreach my $filename (@ARGV) {
++  my $input;
++  if ($filename eq '-') {
++    $input = \*STDIN;
++  } elsif (not open $input, '<', $filename) {
++    warn $!;
++    next;
+   }
+-  elsif ($field[0] eq "\\2" || $field[0] eq "\\5") {
+-    print "  $field[2]\n";
+-    # handle multiple suffixes separated by commata
+-    @suffix_list = split(/,/, "$field[3]");
+-    foreach $suffix (@suffix_list) {
+-      print "  $field[2]$suffix\n";
++  while (<$input>) {
++    # retain only lines starting with \1 ... \6 or \tabalign
++    next if not (m/^\\[123456]/ || m/^\\tabalign/);
++    # remove final newline
++    chop;
++    # remove all TeX commands except \1 ... \6
++    s/\\[^123456\s{]+//g;
++    # remove all paired { ... }
++    1 while s/{(.*?)}/\1/g;
++    # skip lines which now have only whitespace before '&'
++    next if m/^\s*&/;
++    # remove comments
++    s/%.*//;
++    # remove trailing whitespace
++    s/\s*$//;
++    # remove trailing '*' (used as a marker in the document)
++    s/\*$//;
++    # split at whitespace
++    @field = split(' ');
++    if ($field[0] eq "\\1" || $field[0] eq "\\4") {
++      print "  $field[2]\n";
+     }
+-  }
+-  elsif ($field[0] eq "\\3" || $field[0] eq "\\6") {
+-    # handle multiple suffixes separated by commata
+-    @suffix_list = split(/,/, "$field[3],$field[4]");
+-    foreach $suffix (@suffix_list) {
+-      print "  $field[2]$suffix\n";
++    elsif ($field[0] eq "\\2" || $field[0] eq "\\5") {
++      print "  $field[2]\n";
++      # handle multiple suffixes separated by commata
++      @suffix_list = split(/,/, "$field[3]");
++      foreach $suffix (@suffix_list) {
++        print "  $field[2]$suffix\n";
++      }
++    }
++    elsif ($field[0] eq "\\3" || $field[0] eq "\\6") {
++      # handle multiple suffixes separated by commata
++      @suffix_list = split(/,/, "$field[3],$field[4]");
++      foreach $suffix (@suffix_list) {
++        print "  $field[2]$suffix\n";
++      }
++    }
++    else {
++      # for '&', split at '&' with trailing whitespace
++      @field = split(/&\s*/);
++      print "  $field[1]\n";
+     }
+-  }
+-  else {
+-    # for '&', split at '&' with trailing whitespace
+-    @field = split(/&\s*/);
+-    print "  $field[1]\n";
+   }
+ }
+ 
+--- a/tmac/man.local	2018-07-03 05:56:04.000000000 +0800
++++ b/tmac/man.local	2023-06-01 16:32:44.128836941 +0800
+@@ -2,3 +2,15 @@
+ .\"
+ .\" This file is loaded after an-old.tmac.
+ .\" Put any local modifications to an-old.tmac here.
++.\"
++.\" for forward compatibility with a groff 1.23 feature
++.if !d MR \{\
++.  \" Provide a simple implementation of the new `MR` macro to avoid
++.  \" loss of formatted text.
++.  de MR
++.    ie \\n(.$=1 \
++.      I \%\\$1
++.    el \
++.      IR \%\\$1 (\\$2)\\$3
++.  .
++.\}
+--- a/tmac/troffrc	2018-07-03 05:56:04.000000000 +0800
++++ b/tmac/troffrc	2023-06-01 16:51:12.358460859 +0800
+@@ -3,6 +3,15 @@
+ .\" This is tested by pic.
+ .nr 0p 0
+ .
++.\" for forward compatibility with a groff 1.23 feature
++.if !r .cp \{\
++.  \" Construct an equivalent of groff 1.23's .cp register.  Any
++.  \" unlikely two-character register name will do.
++.  nr }{ \n(.C
++.  do nr .cp \n(}{
++.  rr }{
++.\}
++.
+ .\" Load composite mappings.
+ .do mso composite.tmac
+ .
+@@ -48,6 +57,13 @@ troffrc!X100 troffrc!X100-12 troffrc!lj4
+ .\" Handle paper formats.
+ .do mso papersize.tmac
+ .
++.\" Disable SGR support in grotty(1).
++.if n \{\
++.	do nop \X'tty: sgr 0'
++.	sp -1
++.	nr nl 0-1
++.\}
++.
+ .\" Handle PS images.
+ .do mso pspic.tmac
+ .do mso pdfpic.tmac
