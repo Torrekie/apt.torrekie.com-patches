@@ -1,0 +1,190 @@
+--- a/man/startx.man	2022-12-04 06:18:43.000000000 +0800
++++ b/man/startx.man	2023-05-30 19:04:12.273782611 +0800
+@@ -69,6 +69,27 @@ startx \-\^\- \-dpi 100
+ startx \-\^\- \-layout Multihead
+ .RE
+ .PP
++Note that in the Debian Packager managed system, what many people traditionally put in the
++.I .xinitrc
++file should go in
++instead; this permits the same X environment to be presented whether
++.IR startx ,
++.IR xdm ,
++or
++.I xinit
++is used to start the X session. All discussion of the
++.I .xinitrc
++file in the
++.IR xinit (1)
++manual page applies equally well to
++.IR .xsession.
++Keep in mind that
++.I .xinitrc
++is used only by
++.IR xinit (1)
++and completely ignored by
++.IR xdm (1).
++.PP
+ To determine the client to run,
+ .B startx
+ first checks the environment variable
+@@ -116,38 +137,6 @@ and
+ files are found in the
+ .I __xinitdir__
+ directory.
+-.PP
+-The
+-.I .xinitrc
+-is typically a shell script which starts many clients according to the
+-user's preference.  When this shell script exits,
+-.B startx
+-kills the server and performs any other session shutdown needed.
+-Most of the clients started by
+-.I .xinitrc
+-should be run in the background.  The last client should run in the
+-foreground; when it exits, the session will exit.  People often choose
+-a session manager, window manager, or \fIxterm\fP as the ''magic'' client.
+-.SH EXAMPLE
+-.PP
+-Below is a sample \fI\.xinitrc\fP that starts several applications and
+-leaves the window manager running as the ''last'' application.  Assuming that
+-the window manager has been configured properly, the user
+-then chooses the ''Exit'' menu item to shut down X.
+-.sp
+-.in +4
+-.nf
+-xrdb \-load $HOME/.Xresources
+-xsetroot \-solid gray &
+-xbiff \-geometry \-430+5 &
+-oclock \-geometry 75x75\-0\-0 &
+-xload \-geometry \-80\-0 &
+-xterm \-geometry +0+60 \-ls &
+-xterm \-geometry +0\-100 &
+-xconsole \-geometry \-0+0 \-fn 5x7 &
+-exec twm
+-.fi
+-.in -4
+ .SH "ENVIRONMENT VARIABLES"
+ .TP 25
+ DISPLAY
+--- a/xinit.c	2022-12-04 06:18:43.000000000 +0800
++++ b/xinit.c	2023-05-30 19:00:28.932606145 +0800
+@@ -42,8 +42,8 @@ in this Software without prior written a
+ #include <stdarg.h>
+ 
+ #ifdef __APPLE__
+-#include <AvailabilityMacros.h>
+-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
++#include <TargetConditionals.h>
++#if TARGET_OS_OSX
+ #include <vproc.h>
+ #endif
+ #endif
+@@ -60,7 +60,7 @@ in this Software without prior written a
+ 
+ const char *bindir = BINDIR;
+ const char * const server_names[] = {
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+     "Xquartz     Mac OSX Quartz displays.",
+ #else
+ # ifdef __CYGWIN__
+@@ -153,7 +153,7 @@ main(int argc, char *argv[])
+     int client_given = 0, server_given = 0;
+     int start_of_client_args, start_of_server_args;
+     struct sigaction sa, si;
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+ #if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+     vproc_transaction_t vt;
+ #endif
+@@ -285,7 +285,7 @@ main(int argc, char *argv[])
+     sigaction(SIGUSR1, &si, NULL);
+     sigaction(SIGCHLD, &si, NULL);
+ 
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+ #if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+     vt = vproc_transaction_begin(NULL);
+ #endif
+@@ -300,7 +300,7 @@ main(int argc, char *argv[])
+             pid = wait(NULL);
+     }
+ 
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+ #if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+     vproc_transaction_end(NULL, vt);
+ #endif
+@@ -336,7 +336,7 @@ waitforserver(void)
+     int    ncycles     = 120;        /* # of cycles to wait */
+     int    cycles;            /* Wait cycle count */
+ 
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+     /* For Apple, we don't get signaled by the server when it's ready, so we just
+      * want to sleep now since we're going to sleep later anyways and this allows us
+      * to avoid the awkard, "why is there an error message in the log" questions
+--- a/xinitrc.cpp	2022-12-04 06:18:43.000000000 +0800
++++ b/xinitrc.cpp	2023-05-30 19:02:05.489440225 +0800
+@@ -1,55 +1,8 @@
+ XCOMM!SHELL_CMD
+ 
+-userresources=$HOME/.Xresources
+-usermodmap=$HOME/.Xmodmap
+-sysresources=XINITDIR/.Xresources
+-sysmodmap=XINITDIR/.Xmodmap
++XCOMM /etc/X11/xinit/xinitrc
++XCOMM
++XCOMM global xinitrc file, used by all X sessions started by xinit (startx)
+ 
+-XCOMM merge in defaults and keymaps
+-
+-if [ -f $sysresources ]; then
+-#ifdef __APPLE__
+-    if [ -x /usr/bin/cpp ] ; then
+-        XRDB -merge $sysresources
+-    else
+-        XRDB -nocpp -merge $sysresources
+-    fi
+-#else
+-    XRDB -merge $sysresources
+-#endif
+-fi
+-
+-if [ -f $sysmodmap ]; then
+-    XMODMAP $sysmodmap
+-fi
+-
+-if [ -f "$userresources" ]; then
+-#ifdef __APPLE__
+-    if [ -x /usr/bin/cpp ] ; then
+-        XRDB -merge "$userresources"
+-    else
+-        XRDB -nocpp -merge "$userresources"
+-    fi
+-#else
+-    XRDB -merge "$userresources"
+-#endif
+-fi
+-
+-if [ -f "$usermodmap" ]; then
+-    XMODMAP "$usermodmap"
+-fi
+-
+-XCOMM start some nice programs
+-
+-if [ -d XINITDIR/xinitrc.d ] ; then
+-	for f in XINITDIR/xinitrc.d/?*.sh ; do
+-		[ -x "$f" ] && . "$f"
+-	done
+-	unset f
+-fi
+-
+-TWM &
+-XCLOCK -geometry 50x50-1+1 &
+-XTERM -geometry 80x50+494+51 &
+-XTERM -geometry 80x20+494-0 &
+-exec XTERM -geometry 80x66+0+0 -name login
++XCOMM invoke global X session script
++. /etc/X11/Xsession

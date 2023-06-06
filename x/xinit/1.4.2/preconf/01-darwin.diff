@@ -1,0 +1,138 @@
+--- a/xinit.c	2022-12-04 06:18:43.000000000 +0800
++++ b/xinit.c	2023-05-30 19:00:28.932606145 +0800
+@@ -42,8 +42,8 @@ in this Software without prior written a
+ #include <stdarg.h>
+ 
+ #ifdef __APPLE__
+-#include <AvailabilityMacros.h>
+-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
++#include <TargetConditionals.h>
++#if TARGET_OS_OSX
+ #include <vproc.h>
+ #endif
+ #endif
+@@ -60,7 +60,7 @@ in this Software without prior written a
+ 
+ const char *bindir = BINDIR;
+ const char * const server_names[] = {
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+     "Xquartz     Mac OSX Quartz displays.",
+ #else
+ # ifdef __CYGWIN__
+@@ -153,7 +153,7 @@ main(int argc, char *argv[])
+     int client_given = 0, server_given = 0;
+     int start_of_client_args, start_of_server_args;
+     struct sigaction sa, si;
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+ #if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+     vproc_transaction_t vt;
+ #endif
+@@ -285,7 +285,7 @@ main(int argc, char *argv[])
+     sigaction(SIGUSR1, &si, NULL);
+     sigaction(SIGCHLD, &si, NULL);
+ 
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+ #if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+     vt = vproc_transaction_begin(NULL);
+ #endif
+@@ -300,7 +300,7 @@ main(int argc, char *argv[])
+             pid = wait(NULL);
+     }
+ 
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+ #if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+     vproc_transaction_end(NULL, vt);
+ #endif
+@@ -336,7 +336,7 @@ waitforserver(void)
+     int    ncycles     = 120;        /* # of cycles to wait */
+     int    cycles;            /* Wait cycle count */
+ 
+-#ifdef __APPLE__
++#if TARGET_OS_OSX
+     /* For Apple, we don't get signaled by the server when it's ready, so we just
+      * want to sleep now since we're going to sleep later anyways and this allows us
+      * to avoid the awkard, "why is there an error message in the log" questions
+--- a/configure.ac	2022-12-04 06:18:43.000000000 +0800
++++ b/configure.ac	2023-05-30 19:25:54.890341847 +0800
+@@ -134,24 +134,36 @@ case $host_os in
+         ;;
+ esac
+ 
++case $host_os in
++    darwin*)
++        # Torrekie: Don't use mcookie, util-linux is huge
++        AC_PATH_PROGS(OPENSSL, [openssl], [$OPENSSL],
++            [$PATH:/bin:/usr/bin:/usr/sbin:/usr/lib:/usr/libexec:/usr/local/bin])
++        if test "x$OPENSSL" != x ; then
++            MCOOKIE="$OPENSSL rand -hex 16"
++        fi
++        ;;
++    *)
++        AC_PATH_PROGS(MCOOKIE, [mcookie], [$MCOOKIE],
++            [$PATH:/bin:/usr/bin:/usr/lib:/usr/libexec:/usr/local/bin])
+ 
+-AC_PATH_PROGS(MCOOKIE, [mcookie], [$MCOOKIE],
+-  [$PATH:/bin:/usr/bin:/usr/lib:/usr/libexec:/usr/local/bin])
++        # If mcookie not found, try openssl, else per-system fallbacks
++        if test "x$MCOOKIE" = x ; then
++            AC_PATH_PROGS(OPENSSL, [openssl], [$OPENSSL],
++                [$PATH:/bin:/usr/bin:/usr/sbin:/usr/lib:/usr/libexec:/usr/local/bin])
++            if test "x$OPENSSL" != x ; then
++                MCOOKIE="$OPENSSL rand -hex 16"
++            else
++                case $host_os in
++                    *solaris*)
++                        MCOOKIE="/usr/bin/od -X -A n -N 16 /dev/urandom | /usr/bin/tr -d ' '"
++                        ;;
++                esac
++            fi
++        fi
++        ;;
++esac
+ 
+-# If mcookie not found, try openssl, else per-system fallbacks
+-if test "x$MCOOKIE" = x ; then
+-    AC_PATH_PROGS(OPENSSL, [openssl], [$OPENSSL],
+-        [$PATH:/bin:/usr/bin:/usr/sbin:/usr/lib:/usr/libexec:/usr/local/bin])
+-    if test "x$OPENSSL" != x ; then
+-        MCOOKIE="$OPENSSL rand -hex 16"
+-    else
+-        case $host_os in
+-            *solaris*)
+-                MCOOKIE="/usr/bin/od -X -A n -N 16 /dev/urandom | /usr/bin/tr -d ' '"
+-                ;;
+-        esac
+-    fi
+-fi
+ if test "x$MCOOKIE" != x ; then
+ 	STARTX_COOKIE_FLAGS='-DHAS_COOKIE_MAKER -DMK_COOKIE="$(MCOOKIE)"'
+ 	AC_MSG_NOTICE([startx will depend on "$MCOOKIE" to generate xauth cookies])
+@@ -169,7 +181,8 @@ case $host_os in
+ 	XCONFIGFILE="XWinrc"
+ 	;;
+     darwin*)
+-	XSERVERNAME="Xquartz"
++	# Torrekie: No XQuartz on iOS
++	XSERVERNAME="Xorg"
+ 	XCONFIGFILE="defaults"
+ 	XCONFIGFILEMAN='defaults (1)'
+ 	;;
+--- a/launchd/privileged_startx/10-tmpdirs.cpp	2022-12-04 06:18:43.000000000 +0800
++++ b/launchd/privileged_startx/10-tmpdirs.cpp	2023-05-30 19:09:55.726892598 +0800
+@@ -51,9 +51,9 @@ for dir in /tmp/.ICE-unix /tmp/.X11-unix
+ 			echo "${dir} exists but is insecure.  It has been moved into ${saved}" >&2
+ 		fi
+ 
+-		# Use mktemp rather than mkdir to avoid possible security issue
+-		# if $dir exists and is a symlink (ie protect against a race
+-		# against the above check)
++		/* Use mktemp rather than mkdir to avoid possible security issue
++		 * if $dir exists and is a symlink (ie protect against a race
++		 * against the above check) */
+ 		if ${MKTEMP} -d ${dir} >& /dev/null ; then
+ 			chmod 1777 $dir
+ 			chown root:wheel $dir
