@@ -1,0 +1,8 @@
+SED=/usr/bin/sed
+GREP=/usr/bin/grep
+EGREP="/usr/bin/grep -E"
+FGREP="/usr/bin/grep -F"
+ac_cv_path_lt_DD=/bin/dd
+pr_lock_method="USE_FLOCK_SERIALIZE"
+ac_cv_func_kqueue="yes"
+ac_cv_func_poll="yes"
