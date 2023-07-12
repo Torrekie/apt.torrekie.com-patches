@@ -1,0 +1,244 @@
+--- a/Makefile.in	2008-03-09 02:31:40.000000000 +0800
++++ b/Makefile.in	2023-06-12 18:25:08.428899110 +0800
+@@ -62,13 +62,13 @@ PERL        = @PERL@
+ PHP         = @PHP@
+ PG_CONFIG   = @PG_CONFIG@
+ 
+-LIB_NAME    = libuuid.la
++LIB_NAME    = libossp-uuid.la
+ LIB_OBJS    = uuid.lo uuid_md5.lo uuid_sha1.lo uuid_prng.lo uuid_mac.lo uuid_time.lo uuid_ui64.lo uuid_ui128.lo uuid_str.lo
+ 
+-DCE_NAME    = libuuid_dce.la
++DCE_NAME    = libossp-uuid_dce.la
+ DCE_OBJS    = uuid_dce.lo $(LIB_OBJS)
+ 
+-CXX_NAME    = libuuid++.la
++CXX_NAME    = libossp-uuid++.la
+ CXX_OBJS    = uuid++.lo $(LIB_OBJS)
+ 
+ PRG_NAME    = uuid
+@@ -112,15 +112,18 @@ all: $(TARGETS)
+ 	@$(LIBTOOL) --mode=compile $(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $<
+ 
+ $(LIB_NAME): $(LIB_OBJS)
+-	@$(LIBTOOL) --mode=link $(CC) -o $(LIB_NAME) $(LIB_OBJS) -rpath $(libdir) \
++	@$(LIBTOOL) --mode=link $(CC) -o $(LIB_NAME) $(LIB_OBJS) $(LIBS) -rpath $(libdir) \
++	    $(LDFLAGS) \
+ 	    -version-info `$(SHTOOL) version -l c -d libtool $(S)/uuid_vers.h`
+ 
+ $(DCE_NAME): $(DCE_OBJS)
+ 	@$(LIBTOOL) --mode=link $(CC) -o $(DCE_NAME) $(DCE_OBJS) -rpath $(libdir) \
++	    $(LDFLAGS) \
+ 	    -version-info `$(SHTOOL) version -l c -d libtool $(S)/uuid_vers.h`
+ 
+ $(CXX_NAME): $(CXX_OBJS)
+ 	@$(LIBTOOL) --mode=link $(CXX) -o $(CXX_NAME) $(CXX_OBJS) -rpath $(libdir) \
++	    $(LDFLAGS) \
+ 	    -version-info `$(SHTOOL) version -l c -d libtool $(S)/uuid_vers.h`
+ 
+ $(PRG_NAME): $(PRG_OBJS) $(LIB_NAME)
+--- a/configure.ac	2008-03-07 18:49:59.000000000 +0800
++++ b/configure.ac	2023-06-12 18:25:06.729050265 +0800
+@@ -44,8 +44,7 @@ AC_CHECK_DEBUGGING
+ AC_CHECK_DMALLOC
+ 
+ with_tags=""
+-sinclude(libtool.m4)
+-AC_PROG_LIBTOOL
++LT_INIT
+ 
+ sinclude(uuid.ac)
+ UUID_CHECK_ALL
+--- a/perl/Makefile.PL	2007-01-02 02:13:18.000000000 +0800
++++ b/perl/Makefile.PL	2023-06-12 18:25:04.308237251 +0800
+@@ -33,9 +33,9 @@ use Config;
+ use ExtUtils::MakeMaker;
+ 
+ #   determine source directory
+-my ($srcdir) = map { my $d = $_; $d =~ s/\/libuuid\.la$//; $d }
+-               grep { -f $_ } ("../libuuid.la", glob("../*/libuuid.la"))
+-    or die "no source directory found (where libuuid.la is located)";
++my ($srcdir) = map { my $d = $_; $d =~ s/\/libossp-uuid\.la$//; $d }
++               grep { -f $_ } ("../libossp-uuid.la", glob("../*/libossp-uuid.la"))
++    or die "no source directory found (where libossp-uuid.la is located)";
+ 
+ #   determine extra build options
+ my $compat = 0;
+@@ -47,15 +47,15 @@ WriteMakefile(
+     VERSION_FROM      => 'uuid.pm',
+     ABSTRACT_FROM     => 'uuid.pod',
+     PREREQ_PM         => {},
+-    LIBS              => [ "-L$srcdir/.libs -L$srcdir -luuid" ],
++    LIBS              => [ "-L$srcdir/.libs -L$srcdir -lossp-uuid" ],
+     DEFINE            => '',
+     INC               => "-I. -I$srcdir",
+     PM                => { 'uuid.pm'   => '$(INST_LIBDIR)/uuid.pm',
+                            'uuid.pod'  => '$(INST_LIBDIR)/uuid.pod',
+                            ($compat ? ('uuid_compat.pm'  => '$(INST_LIBDIR)/../Data/UUID.pm')  : ()),
+                            ($compat ? ('uuid_compat.pod' => '$(INST_LIBDIR)/../Data/UUID.pod') : ()), },
+-    MAN3PODS          => { 'uuid.pod' => '$(INST_MAN3DIR)/OSSP::uuid.3',
+-                           ($compat ? ('uuid_compat.pod' => '$(INST_MAN3DIR)/Data::UUID.3') : ()), },
++    MAN3PODS          => { 'uuid.pod' => '$(INST_MAN3DIR)/OSSP::uuid.3pm',
++                           ($compat ? ('uuid_compat.pod' => '$(INST_MAN3DIR)/Data::UUID.3pm') : ()), },
+     TYPEMAPS          => [ 'uuid.tm' ],
+     test              => { TESTS => 'uuid.ts' . ($compat ? ' uuid_compat.ts' : '') },
+     NO_META           => 1,
+--- a/perl/uuid_compat.pm	2008-07-05 05:41:37.000000000 +0800
++++ b/perl/uuid_compat.pm	2023-06-12 18:25:09.008954636 +0800
+@@ -93,7 +93,9 @@ sub from_string {
+     $uuid->import('str',
+           $str =~ /^0x/
+         ? join '-', unpack('x2 a8 a4 a4 a4 a12', $str)
+-        : $str
++        : $str =~ /-/
++        ? $str
++        : join '-', unpack('A8 A4 A4 A4 A12', $str)
+     );
+     return $uuid->export('bin');
+ }
+@@ -157,6 +159,12 @@ sub create_b64 {
+     return $self->to_b64string($self->create);
+ }
+ 
++sub create_bin {
++    my ($self) = @_;
++    return $self->create($self);
++}
++
++
+ sub create_from_name_str {
+     my $self = shift;
+     return $self->to_string($self->create_from_name(@_));
+--- a/perl/uuid_compat.ts	2007-01-02 02:13:22.000000000 +0800
++++ b/perl/uuid_compat.ts	2023-06-12 18:25:06.151491532 +0800
+@@ -28,7 +28,7 @@
+ ##  uuid_compat.ts: Data::UUID Backward Compatibility Perl API (Perl test suite part)
+ ##
+ 
+-use Test::More tests => 14;
++use Test::More tests => 16;
+ 
+ BEGIN {
+     use_ok('Data::UUID');
+@@ -53,3 +53,5 @@ ok($uuid7 = NameSpace_URL);
+ ok($uuid8 = $ug->from_string("6ba7b811-9dad-11d1-80b4-00c04fd430c8"));
+ ok($ug->compare($uuid7, $uuid8) == 0);
+ 
++ok($uuid9 = $ug->from_string("6ba7b8119dad11d180b400c04fd430c8"));
++ok($ug->compare($uuid7, $uuid9) == 0);
+--- a/php/config.m4	2007-05-20 03:26:56.000000000 +0800
++++ b/php/config.m4	2023-06-12 18:25:04.308489418 +0800
+@@ -34,7 +34,7 @@ if test "$PHP_UUID" != "no"; then
+     PHP_NEW_EXTENSION(uuid, uuid.c, $ext_shared)
+     AC_DEFINE(HAVE_UUID, 1, [Have OSSP uuid library])
+     PHP_ADD_LIBPATH([..], )
+-    PHP_ADD_LIBRARY([uuid],, UUID_SHARED_LIBADD)
++    PHP_ADD_LIBRARY([ossp-uuid],, UUID_SHARED_LIBADD)
+     PHP_ADD_INCLUDE([..])
+     PHP_SUBST(UUID_SHARED_LIBADD)
+ 
+--- a/uuid++.pod	2008-03-07 18:49:59.000000000 +0800
++++ b/uuid++.pod	2023-06-12 18:25:05.563311100 +0800
+@@ -31,7 +31,7 @@
+ 
+ =head1 NAME
+ 
+-B<OSSP uuid> - B<Universally Unique Identifier> (C++ API)
++B<uuid++> - B<Universally Unique Identifier> (C++ API)
+ 
+ =head1 VERSION
+ 
+--- a/uuid-config.in	2008-03-07 18:49:59.000000000 +0800
++++ b/uuid-config.in	2023-06-12 18:25:04.308753710 +0800
+@@ -121,7 +121,7 @@ do
+             output_extra="$output_extra $uuid_ldflags"
+             ;;
+         --libs)
+-            output="$output -luuid"
++            output="$output -lossp-uuid"
+             output_extra="$output_extra $uuid_libs"
+             ;;
+         * )
+--- a/uuid.pc.in	2008-03-07 18:49:59.000000000 +0800
++++ b/uuid.pc.in	2023-06-12 18:25:07.855285225 +0800
+@@ -30,13 +30,12 @@
+ prefix=@prefix@
+ exec_prefix=${prefix}
+ includedir=${prefix}/include
+-libdir=${exec_prefix}/lib
+ 
+ Name: OSSP uuid
+ Description: Universally Unique Identifier (UUID) Library
+ Version: @UUID_VERSION_RAW@
+ URL: http://www.ossp.org/pkg/lib/uuid/
+-Cflags: -I${includedir}
+-Libs: -L${libdir} -luuid
++Cflags: -I${includedir}/ossp
++Libs: -lossp-uuid
+ Libs.private: @LIBS@
+ 
+--- a/uuid.pod	2008-05-14 19:53:35.000000000 +0800
++++ b/uuid.pod	2023-06-12 18:25:05.563882144 +0800
+@@ -31,7 +31,7 @@
+ 
+ =head1 NAME
+ 
+-B<OSSP uuid> - B<Universally Unique Identifier>
++B<uuid> - B<Universally Unique Identifier>
+ 
+ =head1 VERSION
+ 
+--- a/uuid_cli.c	2008-03-07 18:49:59.000000000 +0800
++++ b/uuid_cli.c	2023-06-12 18:25:04.968439938 +0800
+@@ -140,11 +140,12 @@ int main(int argc, char *argv[])
+                 i = strtol(optarg, &p, 10);
+                 if (*p != '\0')
+                     usage("invalid argument to option 'v'");
++                version &= ~(UUID_MAKE_V1|UUID_MAKE_V3|UUID_MAKE_V4|UUID_MAKE_V5);
+                 switch (i) {
+-                    case 1: version = UUID_MAKE_V1; break;
+-                    case 3: version = UUID_MAKE_V3; break;
+-                    case 4: version = UUID_MAKE_V4; break;
+-                    case 5: version = UUID_MAKE_V5; break;
++                    case 1: version |= UUID_MAKE_V1; break;
++                    case 3: version |= UUID_MAKE_V3; break;
++                    case 4: version |= UUID_MAKE_V4; break;
++                    case 5: version |= UUID_MAKE_V5; break;
+                     default:
+                         usage("invalid version on option 'v'");
+                         break;
+@@ -213,10 +214,10 @@ int main(int argc, char *argv[])
+     }
+     else {
+         /* encoding */
+-        if (   (version == UUID_MAKE_V1 && argc != 0)
+-            || (version == UUID_MAKE_V3 && argc != 2)
+-            || (version == UUID_MAKE_V4 && argc != 0)
+-            || (version == UUID_MAKE_V5 && argc != 2))
++        if (   (version & UUID_MAKE_V1 && argc != 0)
++            || (version & UUID_MAKE_V3 && argc != 2)
++            || (version & UUID_MAKE_V4 && argc != 0)
++            || (version & UUID_MAKE_V5 && argc != 2))
+             usage("invalid number of arguments");
+         if ((rc = uuid_create(&uuid)) != UUID_RC_OK)
+             error(1, "uuid_create: %s", uuid_error(rc));
+@@ -232,7 +233,7 @@ int main(int argc, char *argv[])
+                 if ((rc = uuid_load(uuid, "nil")) != UUID_RC_OK)
+                     error(1, "uuid_load: %s", uuid_error(rc));
+             }
+-            if (version == UUID_MAKE_V3 || version == UUID_MAKE_V5) {
++            if (version & UUID_MAKE_V3 || version & UUID_MAKE_V5) {
+                 if ((rc = uuid_create(&uuid_ns)) != UUID_RC_OK)
+                     error(1, "uuid_create: %s", uuid_error(rc));
+                 if ((rc = uuid_load(uuid_ns, argv[0])) != UUID_RC_OK) {
+--- a/uuid_cli.pod	2008-03-07 21:49:38.000000000 +0800
++++ b/uuid_cli.pod	2023-06-12 18:25:05.564538562 +0800
+@@ -31,7 +31,7 @@
+ 
+ =head1 NAME
+ 
+-B<OSSP uuid> - B<Universally Unique Identifier Command-Line Tool>
++B<uuid> - B<Universally Unique Identifier Command-Line Tool>
+ 
+ =head1 VERSION
+ 

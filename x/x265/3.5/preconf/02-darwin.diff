@@ -1,0 +1,263 @@
+--- a/source/common/aarch64/asm.S	2021-03-16 20:53:00.000000000 +0800
++++ b/source/common/aarch64/asm.S	2023-07-12 18:27:27.652412237 +0800
+@@ -23,24 +23,32 @@
+ 
+ .arch           armv8-a
+ 
+-#ifdef PREFIX
++#ifdef __APPLE__
+ #define EXTERN_ASM _
++#define COMMENT ;
++#define HAVE_AS_FUNC 0
+ #else
+ #define EXTERN_ASM
++#define COMMENT @
++#define HAVE_AS_FUNC 1
+ #endif
+ 
+ #ifdef __ELF__
+ #define ELF
+ #else
+-#define ELF @
++#define ELF COMMENT
+ #endif
+ 
+-#define HAVE_AS_FUNC 1
++#ifdef __APPLE__
++#define MACHO
++#else
++#define MACHO COMMENT
++#endif
+ 
+ #if HAVE_AS_FUNC
+ #define FUNC
+ #else
+-#define FUNC @
++#define FUNC COMMENT
+ #endif
+ 
+ .macro function name, export=1
+@@ -49,14 +57,16 @@ ELF     .size   \name, . - \name
+ FUNC    .endfunc
+         .purgem endfunc
+     .endm
+-        .align  2
+-.if \export == 1
++        .text
++        .align 2
++    .if \export == 1
+         .global EXTERN_ASM\name
+ ELF     .hidden EXTERN_ASM\name
++MACHO   .private_extern EXTERN_ASM\name
+ ELF     .type   EXTERN_ASM\name, %function
+ FUNC    .func   EXTERN_ASM\name
+ EXTERN_ASM\name:
+-.else
++    .else
+ ELF     .hidden \name
+ ELF     .type   \name, %function
+ FUNC    .func   \name
+--- a/source/common/aarch64/ipfilter8.S	2021-03-16 20:53:00.000000000 +0800
++++ b/source/common/aarch64/ipfilter8.S	2023-07-12 18:31:54.601751558 +0800
+@@ -23,7 +23,9 @@
+ 
+ #include "asm.S"
+ 
++#ifndef __APPLE__
+ .section .rodata
++#endif
+ 
+ .align 4
+ 
+@@ -185,7 +187,7 @@
+ 
+ 
+ // void interp_horiz_ps_c(const pixel* src, intptr_t srcStride, int16_t* dst, intptr_t dstStride, int coeffIdx, int isRowExt)
+-.macro HPS_FILTER a b filterhps
++.macro HPS_FILTER a, b, filterhps
+     mov             w12, #8192
+     mov             w6, w10
+     sub             x3, x3, #\a
+@@ -197,10 +199,10 @@
+     b.eq            15f
+     b               7f
+ 14:
+-    HPS_FILTER_4 \a \b \filterhps
++    HPS_FILTER_4 \a, \b, \filterhps
+     b               10f
+ 15:
+-    HPS_FILTER_12 \a \b \filterhps
++    HPS_FILTER_12 \a, \b, \filterhps
+     b               10f
+ 7:
+     cmp             w5, #0
+@@ -255,7 +257,7 @@ loop4_hps_\filterhps\()_\a\()x\b\()_rowe
+ 10:
+ .endm
+ 
+-.macro HPS_FILTER_4 w h filterhps
++.macro HPS_FILTER_4 w, h, filterhps
+     cmp             w5, #0
+     b.eq            11f
+     cmp             w5, #1
+@@ -294,7 +296,7 @@ loop5_hps_\filterhps\()_\w\()x\h\()_rowe
+ 13:
+ .endm
+ 
+-.macro HPS_FILTER_12 w h filterhps
++.macro HPS_FILTER_12 w, h, filterhps
+     cmp             w5, #0
+     b.eq            14f
+     cmp             w5, #1
+@@ -352,7 +354,7 @@ loop12_hps_\filterhps\()_\w\()x\h\()_row
+ .endm
+ 
+ // void interp_horiz_ps_c(const pixel* src, intptr_t srcStride, int16_t* dst, intptr_t dstStride, int coeffIdx, int isRowExt)
+-.macro LUMA_HPS w h
++.macro LUMA_HPS w, h
+ function x265_interp_8tap_horiz_ps_\w\()x\h\()_neon
+     mov             w10, #\h
+     cmp             w5, #0
+@@ -371,44 +373,44 @@ function x265_interp_8tap_horiz_ps_\w\()
+     cmp             w4, #3
+     b.eq            3f
+ 0:
+-    HPS_FILTER  \w \h qpel_filter_0_32b
++    HPS_FILTER  \w, \h, qpel_filter_0_32b
+     b               5f
+ 1:
+-    HPS_FILTER  \w \h qpel_filter_1_32b
++    HPS_FILTER  \w, \h, qpel_filter_1_32b
+     b               5f
+ 2:
+-    HPS_FILTER  \w \h qpel_filter_2_32b
++    HPS_FILTER  \w, \h, qpel_filter_2_32b
+     b               5f
+ 3:
+-    HPS_FILTER  \w \h qpel_filter_3_32b
++    HPS_FILTER  \w, \h, qpel_filter_3_32b
+     b               5f
+ 5:
+     ret
+ endfunc
+ .endm
+ 
+-LUMA_HPS    4 4
+-LUMA_HPS    4 8
+-LUMA_HPS    4 16
+-LUMA_HPS    8 4
+-LUMA_HPS    8 8
+-LUMA_HPS    8 16
+-LUMA_HPS    8 32
+-LUMA_HPS    12 16
+-LUMA_HPS    16 4
+-LUMA_HPS    16 8
+-LUMA_HPS    16 12
+-LUMA_HPS    16 16
+-LUMA_HPS    16 32
+-LUMA_HPS    16 64
+-LUMA_HPS    24 32
+-LUMA_HPS    32 8
+-LUMA_HPS    32 16
+-LUMA_HPS    32 24
+-LUMA_HPS    32 32
+-LUMA_HPS    32 64
+-LUMA_HPS    48 64
+-LUMA_HPS    64 16
+-LUMA_HPS    64 32
+-LUMA_HPS    64 48
+-LUMA_HPS    64 64
++LUMA_HPS    4, 4
++LUMA_HPS    4, 8
++LUMA_HPS    4, 16
++LUMA_HPS    8, 4
++LUMA_HPS    8, 8
++LUMA_HPS    8, 16
++LUMA_HPS    8, 32
++LUMA_HPS    12, 16
++LUMA_HPS    16, 4
++LUMA_HPS    16, 8
++LUMA_HPS    16, 12
++LUMA_HPS    16, 16
++LUMA_HPS    16, 32
++LUMA_HPS    16, 64
++LUMA_HPS    24, 32
++LUMA_HPS    32, 8
++LUMA_HPS    32, 16
++LUMA_HPS    32, 24
++LUMA_HPS    32, 32
++LUMA_HPS    32, 64
++LUMA_HPS    48, 64
++LUMA_HPS    64, 16
++LUMA_HPS    64, 32
++LUMA_HPS    64, 48
++LUMA_HPS    64, 64
+--- a/source/common/aarch64/mc-a.S	2021-03-16 20:53:00.000000000 +0800
++++ b/source/common/aarch64/mc-a.S	2023-07-12 18:33:03.193785163 +0800
+@@ -23,7 +23,9 @@
+ 
+ #include "asm.S"
+ 
++#ifndef __APPLE__
+ .section .rodata
++#endif
+ 
+ .align 4
+ 
+--- a/source/common/aarch64/pixel-util.S	2021-03-16 20:53:00.000000000 +0800
++++ b/source/common/aarch64/pixel-util.S	2023-07-12 18:33:38.932145257 +0800
+@@ -24,7 +24,9 @@
+ 
+ #include "asm.S"
+ 
++#ifndef __APPLE__
+ .section .rodata
++#endif
+ 
+ .align 4
+ 
+--- a/source/common/aarch64/sad-a.S	2021-03-16 20:53:00.000000000 +0800
++++ b/source/common/aarch64/sad-a.S	2023-07-12 18:03:11.998379077 +0800
+@@ -23,7 +23,9 @@
+ 
+ #include "asm.S"
+ 
++#if !__APPLE__
+ .section .rodata
++#endif
+ 
+ .align 4
+ 
+@@ -94,12 +96,12 @@ function x265_sad_x\x\()_8x\h\()_neon
+ endfunc
+ .endm
+ 
+-SAD_X_8xN 3 4
+-SAD_X_8xN 3 8
+-SAD_X_8xN 3 16
+-SAD_X_8xN 3 32
+-
+-SAD_X_8xN 4 4
+-SAD_X_8xN 4 8
+-SAD_X_8xN 4 16
+-SAD_X_8xN 4 32
++SAD_X_8xN 3, 4
++SAD_X_8xN 3, 8
++SAD_X_8xN 3, 16
++SAD_X_8xN 3, 32
++
++SAD_X_8xN 4, 4
++SAD_X_8xN 4, 8
++SAD_X_8xN 4, 16
++SAD_X_8xN 4, 32
+--- a/source/common/version.cpp	2021-03-16 20:53:00.000000000 +0800
++++ b/source/common/version.cpp	2023-07-12 17:36:27.006937516 +0800
+@@ -66,7 +66,7 @@
+ #elif  __CYGWIN__
+ #define ONOS    "[Cygwin]"
+ #elif __APPLE__
+-#define ONOS    "[Mac OS X]"
++#define ONOS    "[Darwin]"
+ #else
+ #define ONOS    "[Unk-OS]"
+ #endif
