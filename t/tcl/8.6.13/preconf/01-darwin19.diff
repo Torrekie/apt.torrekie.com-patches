@@ -1,0 +1,413 @@
+--- a/doc/tclsh.1	2022-06-06 23:58:41.000000000 +0800
++++ b/doc/tclsh.1	2023-06-18 16:01:26.506217885 +0800
+@@ -55,13 +55,13 @@ line, but the script file can always \fB
+ If you create a Tcl script in a file whose first line is
+ .PP
+ .CS
+-\fB#!/usr/local/bin/tclsh\fR
++\fB#!/usr/bin/tclsh\fR
+ .CE
+ .PP
+ then you can invoke the script file directly from your shell if
+ you mark the file as executable.
+ This assumes that \fBtclsh\fR has been installed in the default
+-location in /usr/local/bin;  if it is installed somewhere else
++location in /usr/bin;  if it is installed somewhere else
+ then you will have to modify the above line to match.
+ Many UNIX systems do not allow the \fB#!\fR line to exceed about
+ 30 characters in length, so be sure that the \fBtclsh\fR
+--- a/macosx/tclMacOSXBundle.c	2022-06-06 23:58:41.000000000 +0800
++++ b/macosx/tclMacOSXBundle.c	2023-06-18 16:41:26.622041260 +0800
+@@ -20,45 +20,24 @@
+ /*
+  * Use preferred dlfcn API on 10.4 and later
+  */
+-#   if !defined(NO_DLFCN_H) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1040
+-#	define TCL_DYLD_USE_DLFCN 1
+-#   else
+-#	define TCL_DYLD_USE_DLFCN 0
+-#   endif
++#   define TCL_DYLD_USE_DLFCN 1
+ #endif /* TCL_DYLD_USE_DLFCN */
+ 
+ #ifndef TCL_DYLD_USE_NSMODULE
+ /*
+  * Use deprecated NSModule API only to support 10.3 and earlier:
+  */
+-#   if MAC_OS_X_VERSION_MIN_REQUIRED < 1040
+-#	define TCL_DYLD_USE_NSMODULE 1
+-#   else
+-#	define TCL_DYLD_USE_NSMODULE 0
+-#   endif
++#   define TCL_DYLD_USE_NSMODULE 0
+ #endif /* TCL_DYLD_USE_NSMODULE */
+ 
+ #if TCL_DYLD_USE_DLFCN
+ #include <dlfcn.h>
+-#if defined(HAVE_WEAK_IMPORT) && MAC_OS_X_VERSION_MIN_REQUIRED < 1040
+-/*
+- * Support for weakly importing dlfcn API.
+- */
+-extern void *		dlsym(void *handle, const char *symbol)
+-			    WEAK_IMPORT_ATTRIBUTE;
+-extern char *		dlerror(void) WEAK_IMPORT_ATTRIBUTE;
+-#endif
+ #endif /* TCL_DYLD_USE_DLFCN */
+ 
+ #if TCL_DYLD_USE_NSMODULE
+ #include <mach-o/dyld.h>
+ #endif
+ 
+-#if (TCL_DYLD_USE_DLFCN && MAC_OS_X_VERSION_MIN_REQUIRED < 1040) || \
+-	(MAC_OS_X_VERSION_MIN_REQUIRED < 1050)
+-MODULE_SCOPE long	tclMacOSXDarwinRelease;
+-#endif
+-
+ #ifdef TCL_DEBUG_LOAD
+ #define TclLoadDbgMsg(m, ...) \
+     do {								\
+@@ -102,9 +81,6 @@ OpenResourceMap(
+ 
+     if (!initialized) {
+ #if TCL_DYLD_USE_DLFCN
+-#if MAC_OS_X_VERSION_MIN_REQUIRED < 1040
+-	if (tclMacOSXDarwinRelease >= 8)
+-#endif
+ 	{
+ 	    openresourcemap = (short (*)(CFBundleRef))dlsym(RTLD_NEXT,
+ 		    "CFBundleOpenBundleResourceMap");
+@@ -284,13 +260,6 @@ Tcl_MacOSXOpenVersionedBundleResources(
+ 	    CFRelease(libURL);
+ 	}
+ 	if (versionedBundleRef) {
+-#if MAC_OS_X_VERSION_MIN_REQUIRED < 1050
+-	    /*
+-	     * Workaround CFBundle bug in Tiger and earlier. [Bug 2569449]
+-	     */
+-
+-	    if (tclMacOSXDarwinRelease >= 9)
+-#endif
+ 	    {
+ 		CFRelease(versionedBundleRef);
+ 	    }
+--- a/macosx/tclMacOSXFCmd.c	2022-06-06 23:58:41.000000000 +0800
++++ b/macosx/tclMacOSXFCmd.c	2023-06-18 16:39:44.244155438 +0800
+@@ -22,26 +22,12 @@
+ #ifdef HAVE_COPYFILE
+ #ifdef HAVE_COPYFILE_H
+ #include <copyfile.h>
+-#if defined(HAVE_WEAK_IMPORT) && (MAC_OS_X_VERSION_MIN_REQUIRED < 1040)
+-/* Support for weakly importing copyfile. */
+-#define WEAK_IMPORT_COPYFILE
+-extern int		copyfile(const char *from, const char *to,
+-			    copyfile_state_t state, copyfile_flags_t flags)
+-			    WEAK_IMPORT_ATTRIBUTE;
+-#endif /* HAVE_WEAK_IMPORT */
+ #else /* HAVE_COPYFILE_H */
+ int			copyfile(const char *from, const char *to,
+ 			    void *state, uint32_t flags);
+ #define COPYFILE_ACL		(1<<0)
+ #define COPYFILE_XATTR		(1<<2)
+ #define COPYFILE_NOFOLLOW_SRC	(1<<18)
+-#if defined(HAVE_WEAK_IMPORT) && (MAC_OS_X_VERSION_MIN_REQUIRED < 1040)
+-/* Support for weakly importing copyfile. */
+-#define WEAK_IMPORT_COPYFILE
+-extern int		copyfile(const char *from, const char *to,
+-			    void *state, uint32_t flags)
+-			    WEAK_IMPORT_ATTRIBUTE;
+-#endif /* HAVE_WEAK_IMPORT */
+ #endif /* HAVE_COPYFILE_H */
+ #endif /* HAVE_COPYFILE */
+ 
+--- a/macosx/tclMacOSXNotify.c	2022-06-06 23:58:41.000000000 +0800
++++ b/macosx/tclMacOSXNotify.c	2023-06-18 16:58:39.884501243 +0800
+@@ -20,11 +20,9 @@
+  * OSSpinLock, and the OSSpinLock was deprecated.
+  */
+ 
+-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 101200
+ #define USE_OS_UNFAIR_LOCK
+ #include <os/lock.h>
+ #undef TCL_MAC_DEBUG_NOTIFIER
+-#endif
+ 
+ #ifdef HAVE_COREFOUNDATION	/* Traditional unix select-based notifier is
+ 				 * in tclUnixNotfy.c */
+@@ -54,57 +52,9 @@
+ 
+ #include <libkern/OSAtomic.h>
+ 
+-#if defined(HAVE_WEAK_IMPORT) && MAC_OS_X_VERSION_MIN_REQUIRED < 1040
+-/*
+- * Support for weakly importing spinlock API.
+- */
+-#define WEAK_IMPORT_SPINLOCKLOCK
+-
+-#if MAC_OS_X_VERSION_MAX_ALLOWED >= 1050
+-#define VOLATILE volatile
+-#else
+-#define VOLATILE
+-#endif /* MAC_OS_X_VERSION_MAX_ALLOWED >= 1050 */
+-
+-#ifndef bool
+-#define bool int
+-#endif
+-
+-extern void		OSSpinLockLock(VOLATILE OSSpinLock *lock)
+-			    WEAK_IMPORT_ATTRIBUTE;
+-extern void		OSSpinLockUnlock(VOLATILE OSSpinLock *lock)
+-			    WEAK_IMPORT_ATTRIBUTE;
+-extern bool		OSSpinLockTry(VOLATILE OSSpinLock *lock)
+-			    WEAK_IMPORT_ATTRIBUTE;
+-extern void		_spin_lock(VOLATILE OSSpinLock *lock)
+-			    WEAK_IMPORT_ATTRIBUTE;
+-extern void		_spin_unlock(VOLATILE OSSpinLock *lock)
+-			    WEAK_IMPORT_ATTRIBUTE;
+-extern bool		_spin_lock_try(VOLATILE OSSpinLock *lock)
+-			    WEAK_IMPORT_ATTRIBUTE;
+-static void (* lockLock)(VOLATILE OSSpinLock *lock) = NULL;
+-static void (* lockUnlock)(VOLATILE OSSpinLock *lock) = NULL;
+-static bool (* lockTry)(VOLATILE OSSpinLock *lock) = NULL;
+-#undef VOLATILE
+-static pthread_once_t spinLockLockInitControl = PTHREAD_ONCE_INIT;
+-static void
+-SpinLockLockInit(void)
+-{
+-    lockLock   = OSSpinLockLock   != NULL ? OSSpinLockLock   : _spin_lock;
+-    lockUnlock = OSSpinLockUnlock != NULL ? OSSpinLockUnlock : _spin_unlock;
+-    lockTry    = OSSpinLockTry    != NULL ? OSSpinLockTry    : _spin_lock_try;
+-    if (lockLock == NULL || lockUnlock == NULL) {
+-	Tcl_Panic("SpinLockLockInit: no spinlock API available");
+-    }
+-}
+-#define SpinLockLock(p) 	lockLock(p)
+-#define SpinLockUnlock(p)	lockUnlock(p)
+-#define SpinLockTry(p)		lockTry(p)
+-#else
+ #define SpinLockLock(p) 	OSSpinLockLock(p)
+ #define SpinLockUnlock(p)	OSSpinLockUnlock(p)
+ #define SpinLockTry(p)		OSSpinLockTry(p)
+-#endif /* HAVE_WEAK_IMPORT */
+ #define SPINLOCK_INIT		OS_SPINLOCK_INIT
+ 
+ #else
+@@ -444,29 +394,14 @@ static int atForkInit = 0;
+ static void		AtForkPrepare(void);
+ static void		AtForkParent(void);
+ static void		AtForkChild(void);
+-#if defined(HAVE_WEAK_IMPORT) && MAC_OS_X_VERSION_MIN_REQUIRED < 1040
+-/* Support for weakly importing pthread_atfork. */
+-#define WEAK_IMPORT_PTHREAD_ATFORK
+-extern int		pthread_atfork(void (*prepare)(void),
+-			    void (*parent)(void), void (*child)(void))
+-			    WEAK_IMPORT_ATTRIBUTE;
+-#define MayUsePthreadAtfork()	(pthread_atfork != NULL)
+-#else
+ #define MayUsePthreadAtfork()	(1)
+-#endif /* HAVE_WEAK_IMPORT */
+ 
+ /*
+  * On Darwin 9 and later, it is not possible to call CoreFoundation after
+  * a fork.
+  */
+ 
+-#if !defined(MAC_OS_X_VERSION_MIN_REQUIRED) || \
+-	MAC_OS_X_VERSION_MIN_REQUIRED < 1050
+-MODULE_SCOPE long tclMacOSXDarwinRelease;
+-#define noCFafterFork	(tclMacOSXDarwinRelease >= 9)
+-#else /* MAC_OS_X_VERSION_MIN_REQUIRED */
+ #define noCFafterFork	1
+-#endif /* MAC_OS_X_VERSION_MIN_REQUIRED */
+ #endif /* HAVE_PTHREAD_ATFORK */
+ 
+ /*
+--- a/unix/configure.in	2022-06-07 00:00:10.000000000 +0800
++++ b/unix/configure.in	2023-06-18 16:52:21.644378145 +0800
+@@ -563,8 +563,6 @@ if test "`uname -s`" = "Darwin" ; then
+     AC_DEFINE(USE_VFORK, 1, [Should we use vfork() instead of fork()?])
+     AC_DEFINE(TCL_DEFAULT_ENCODING, "utf-8",
+ 	[Are we to override what our default encoding is?])
+-    AC_DEFINE(TCL_LOAD_FROM_MEMORY, 1,
+-	[Can this platform load code from memory?])
+     AC_DEFINE(TCL_WIDE_CLICKS, 1,
+ 	[Does this platform have wide high-resolution clicks?])
+     AC_CHECK_HEADERS(AvailabilityMacros.h)
+@@ -572,13 +570,6 @@ if test "`uname -s`" = "Darwin" ; then
+ 	AC_CACHE_CHECK([if weak import is available], tcl_cv_cc_weak_import, [
+ 	    hold_cflags=$CFLAGS; CFLAGS="$CFLAGS -Werror"
+ 	    AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+-		    #ifdef __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__
+-		    #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1020
+-		    #error __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1020
+-		    #endif
+-		    #elif MAC_OS_X_VERSION_MIN_REQUIRED < 1020
+-		    #error MAC_OS_X_VERSION_MIN_REQUIRED < 1020
+-		    #endif
+ 		    int rand(void) __attribute__((weak_import));
+ 		]], [[rand();]])],
+ 		[tcl_cv_cc_weak_import=yes],[tcl_cv_cc_weak_import=no])
+@@ -590,13 +581,6 @@ if test "`uname -s`" = "Darwin" ; then
+ 	    tcl_cv_cc_darwin_c_source, [
+ 	    hold_cflags=$CFLAGS; CFLAGS="$CFLAGS -Werror"
+ 	    AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+-		    #ifdef __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__
+-		    #if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
+-		    #error __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ < 1050
+-		    #endif
+-		    #elif MAC_OS_X_VERSION_MIN_REQUIRED < 1050
+-		    #error MAC_OS_X_VERSION_MIN_REQUIRED < 1050
+-		    #endif
+ 		    #define _DARWIN_C_SOURCE 1
+ 		    #include <sys/cdefs.h>
+ 		]], [[]])],[tcl_cv_cc_darwin_c_source=yes],[tcl_cv_cc_darwin_c_source=no])
+--- a/unix/tclUnixFCmd.c	2022-06-06 23:58:41.000000000 +0800
++++ b/unix/tclUnixFCmd.c	2023-06-18 16:30:23.303121088 +0800
+@@ -256,37 +256,13 @@ Realpath(
+ #endif /* PURIFY */
+ 
+ #ifndef NO_REALPATH
+-#if defined(__APPLE__) && defined(TCL_THREADS) && \
+-	defined(MAC_OS_X_VERSION_MIN_REQUIRED) && \
+-	MAC_OS_X_VERSION_MIN_REQUIRED < 1030
+-/*
+- * Prior to Darwin 7, realpath is not thread-safe, c.f. Bug 711232; if we
+- * might potentially be running on pre-10.3 OSX, check Darwin release at
+- * runtime before using realpath.
+- */
+-
+-MODULE_SCOPE long tclMacOSXDarwinRelease;
+-#   define haveRealpath	(tclMacOSXDarwinRelease >= 7)
+-#else
+-#   define haveRealpath	1
++#define haveRealpath	1
+ #endif
+-#endif /* NO_REALPATH */
+ 
+ #ifdef HAVE_FTS
+ #if defined(HAVE_STRUCT_STAT64) && !defined(__APPLE__)
+ /* fts doesn't do stat64 */
+ #   define noFtsStat	1
+-#elif defined(__APPLE__) && defined(__LP64__) && \
+-	defined(MAC_OS_X_VERSION_MIN_REQUIRED) && \
+-	MAC_OS_X_VERSION_MIN_REQUIRED < 1050
+-/*
+- * Prior to Darwin 9, 64bit fts_open() without FTS_NOSTAT may crash (due to a
+- * 64bit-unsafe ALIGN macro); if we could be running on pre-10.5 OSX, check
+- * Darwin release at runtime and do a separate stat() if necessary.
+- */
+-
+-MODULE_SCOPE long tclMacOSXDarwinRelease;
+-#   define noFtsStat	(tclMacOSXDarwinRelease < 9)
+ #else
+ #   define noFtsStat	0
+ #endif
+--- a/unix/tclUnixInit.c	2022-06-06 23:58:41.000000000 +0800
++++ b/unix/tclUnixInit.c	2023-06-18 16:35:24.502065173 +0800
+@@ -13,13 +13,6 @@
+ #include <locale.h>
+ #ifdef HAVE_LANGINFO
+ #   include <langinfo.h>
+-#   ifdef __APPLE__
+-#	if defined(HAVE_WEAK_IMPORT) && MAC_OS_X_VERSION_MIN_REQUIRED < 1030
+-	    /* Support for weakly importing nl_langinfo on Darwin. */
+-#	    define WEAK_IMPORT_NL_LANGINFO
+-	    extern char *nl_langinfo(nl_item) WEAK_IMPORT_ATTRIBUTE;
+-#	endif
+-#    endif
+ #endif
+ #include <sys/resource.h>
+ #if defined(__FreeBSD__) && defined(__GNUC__)
+@@ -323,12 +316,8 @@ static const LocaleTable localeTable[] =
+ static int		MacOSXGetLibraryPath(Tcl_Interp *interp,
+ 			    int maxPathLen, char *tclLibPath);
+ #endif /* HAVE_COREFOUNDATION */
+-#if defined(__APPLE__) && (defined(TCL_LOAD_FROM_MEMORY) || ( \
+-	defined(MAC_OS_X_VERSION_MIN_REQUIRED) && ( \
+-	(defined(TCL_THREADS) && MAC_OS_X_VERSION_MIN_REQUIRED < 1030) || \
+-	(defined(__LP64__) && MAC_OS_X_VERSION_MIN_REQUIRED < 1050) || \
+-	(defined(HAVE_COREFOUNDATION) && MAC_OS_X_VERSION_MIN_REQUIRED < 1050)\
+-	)))
++#if defined(__APPLE__) && defined(TCL_LOAD_FROM_MEMORY)
++
+ /*
+  * Need to check Darwin release at runtime in tclUnixFCmd.c and tclLoadDyld.c:
+  * initialize release global at startup from uname().
+@@ -742,7 +731,7 @@ Tcl_GetEncodingNameFromEnvironment(
+  *----------------------------------------------------------------------
+  */
+ 
+-#if defined(HAVE_COREFOUNDATION) && MAC_OS_X_VERSION_MAX_ALLOWED > 1020
++#if defined(HAVE_COREFOUNDATION)
+ /*
+  * Helper because whether CFLocaleCopyCurrent and CFLocaleGetIdentifier are
+  * strongly or weakly bound varies by version of OSX, triggering warnings.
+@@ -777,7 +766,7 @@ InitMacLocaleInfoVar(
+     }
+     CFRelease(localeRef);
+ }
+-#endif /*defined(HAVE_COREFOUNDATION) && MAC_OS_X_VERSION_MAX_ALLOWED > 1020*/
++#endif /*defined(HAVE_COREFOUNDATION)*/
+ 
+ void
+ TclpSetVariables(
+@@ -801,9 +790,7 @@ TclpSetVariables(
+      * Set msgcat fallback locale to current CFLocale identifier.
+      */
+ 
+-#if MAC_OS_X_VERSION_MAX_ALLOWED > 1020
+     InitMacLocaleInfoVar(CFLocaleCopyCurrent, CFLocaleGetIdentifier, interp);
+-#endif /* MAC_OS_X_VERSION_MAX_ALLOWED > 1020 */
+ 
+     if (MacOSXGetLibraryPath(interp, MAXPATHLEN, tclLibPath) == TCL_OK) {
+ 	const char *str;
+--- a/unix/tclUnixPort.h	2022-06-06 23:58:41.000000000 +0800
++++ b/unix/tclUnixPort.h	2023-06-18 16:32:43.000180965 +0800
+@@ -598,8 +598,11 @@ extern char **		environ;
+  *---------------------------------------------------------------------------
+  */
+ 
++/* Torrekie: If we have already done checks in configure stage, why still
++ * check for those macros?
++ */
+ #   ifdef HAVE_WEAK_IMPORT
+-#	if !defined(HAVE_AVAILABILITYMACROS_H) || !defined(MAC_OS_X_VERSION_MIN_REQUIRED)
++#	if !defined(HAVE_AVAILABILITYMACROS_H)
+ #	    undef HAVE_WEAK_IMPORT
+ #	else
+ #	    ifndef WEAK_IMPORT_ATTRIBUTE
+@@ -610,35 +613,6 @@ extern char **		environ;
+ 
+ /*
+  *---------------------------------------------------------------------------
+- * Support for MAC_OS_X_VERSION_MAX_ALLOWED define from AvailabilityMacros.h:
+- * only use API available in the indicated OS version or earlier.
+- *---------------------------------------------------------------------------
+- */
+-
+-#   ifdef MAC_OS_X_VERSION_MAX_ALLOWED
+-#	if MAC_OS_X_VERSION_MAX_ALLOWED < 1050 && defined(__LP64__)
+-#	    undef HAVE_COREFOUNDATION
+-#	endif
+-#	if MAC_OS_X_VERSION_MAX_ALLOWED < 1040
+-#	    undef HAVE_OSSPINLOCKLOCK
+-#	    undef HAVE_PTHREAD_ATFORK
+-#	    undef HAVE_COPYFILE
+-#	endif
+-#	if MAC_OS_X_VERSION_MAX_ALLOWED < 1030
+-#	    ifdef TCL_THREADS
+-		/* prior to 10.3, realpath is not threadsafe, c.f. bug 711232 */
+-#		define NO_REALPATH 1
+-#	    endif
+-#	    undef HAVE_LANGINFO
+-#	endif
+-#   endif /* MAC_OS_X_VERSION_MAX_ALLOWED */
+-#   if defined(HAVE_COREFOUNDATION) && defined(__LP64__) && \
+-	    defined(HAVE_WEAK_IMPORT) && MAC_OS_X_VERSION_MIN_REQUIRED < 1050
+-#	warning "Weak import of 64-bit CoreFoundation is not supported, will not run on Mac OS X < 10.5."
+-#   endif
+-
+-/*
+- *---------------------------------------------------------------------------
+  * At present, using vfork() instead of fork() causes execve() to fail
+  * intermittently on Darwin x86_64. rdar://4685553
+  *---------------------------------------------------------------------------

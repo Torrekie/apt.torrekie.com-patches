@@ -1,0 +1,304 @@
+--- a/generic/tk.h	2022-11-03 20:42:04.000000000 +0800
++++ b/generic/tk.h	2023-06-18 19:26:29.637450620 +0800
+@@ -16,6 +16,14 @@
+ #ifndef _TK
+ #define _TK
+ 
++#include <os/availability.h>
++
++/*
++ * The system version of Tk is deprecated.
++ * Please include your own version of the library in your project.
++ */
++API_DEPRECATED_BEGIN("Tk API deprecated.", macos(10.0, 10.15))
++
+ #include <tcl.h>
+ #if (TCL_MAJOR_VERSION != 8) || (TCL_MINOR_VERSION < 6)
+ #	error Tk 8.6 must be compiled with tcl.h from Tcl 8.6 or better
+@@ -1624,6 +1632,8 @@ typedef int (Tk_SelectionProc) (ClientDa
+ }
+ #endif
+ 
++API_DEPRECATED_END
++
+ #endif /* _TK */
+ 
+ /*
+--- a/generic/tkDecls.h	2022-10-15 01:29:05.000000000 +0800
++++ b/generic/tkDecls.h	2023-06-18 19:26:35.890024476 +0800
+@@ -12,6 +12,14 @@
+ #ifndef _TKDECLS
+ #define _TKDECLS
+ 
++#include <os/availability.h>
++
++/*
++ * The system version of Tk is deprecated.
++ * Please include your own version of the library in your project.
++ */
++API_DEPRECATED_BEGIN("Tk API deprecated.", macos(10.0, 10.15))
++
+ #ifdef BUILD_tk
+ #undef TCL_STORAGE_CLASS
+ #define TCL_STORAGE_CLASS DLLEXPORT
+@@ -1788,4 +1796,6 @@ extern const TkStubs *tkStubsPtr;
+ 
+ #undef TkUnusedStubEntry
+ 
++API_DEPRECATED_END
++
+ #endif /* _TKDECLS */
+--- a/generic/tkIntPlatDecls.h	2022-10-15 01:29:05.000000000 +0800
++++ b/generic/tkIntPlatDecls.h	2023-06-18 19:26:41.005589213 +0800
+@@ -13,6 +13,14 @@
+ #ifndef _TKINTPLATDECLS
+ #define _TKINTPLATDECLS
+ 
++#include <os/availability.h>
++
++/*
++ * The system version of Tk is deprecated.
++ * Please include your own version of the library in your project.
++ */
++API_DEPRECATED_BEGIN("Tk API deprecated.", macos(10.0, 10.15))
++
+ #ifdef BUILD_tk
+ #undef TCL_STORAGE_CLASS
+ #define TCL_STORAGE_CLASS DLLEXPORT
+@@ -799,4 +807,6 @@ extern const TkIntPlatStubs *tkIntPlatSt
+ #undef TCL_STORAGE_CLASS
+ #define TCL_STORAGE_CLASS DLLIMPORT
+ 
++API_DEPRECATED_END
++
+ #endif /* _TKINTPLATDECLS */
+--- a/generic/tkPlatDecls.h	2022-10-15 01:29:05.000000000 +0800
++++ b/generic/tkPlatDecls.h	2023-06-18 19:27:22.443526065 +0800
+@@ -12,6 +12,14 @@
+ #ifndef _TKPLATDECLS
+ #define _TKPLATDECLS
+ 
++#include <os/availability.h>
++
++/*
++ * The system version of Tk is deprecated.
++ * Please include your own version of the library in your project.
++ */
++API_DEPRECATED_BEGIN("Tk API deprecated.", macos(10.0, 10.15))
++
+ #ifdef BUILD_tk
+ #undef TCL_STORAGE_CLASS
+ #define TCL_STORAGE_CLASS DLLEXPORT
+@@ -203,4 +211,6 @@ extern const TkPlatStubs *tkPlatStubsPtr
+ #undef TkGenWMConfigureEvent_
+ #define Tk_MacOSXGetNSViewForDrawable TkMacOSXGetRootControl
+ 
++API_DEPRECATED_END
++
+ #endif /* _TKPLATDECLS */
+--- a/library/ttk/fonts.tcl	2022-06-07 00:40:39.000000000 +0800
++++ b/library/ttk/fonts.tcl	2023-06-19 16:55:49.519378841 +0800
+@@ -131,10 +131,10 @@ switch -- [tk windowingsystem] {
+ 	    set F(family) "Helvetica"
+ 	    set F(fixed)  "courier"
+ 	}
+-	set F(size) -12
+-	set F(ttsize) -10
+-	set F(capsize) -14
+-	set F(fixedsize) -12
++	set F(size) 10
++	set F(ttsize) 9
++	set F(capsize) 12
++	set F(fixedsize) 10
+ 
+ 	font configure TkDefaultFont -family $F(family) -size $F(size)
+ 	font configure TkTextFont    -family $F(family) -size $F(size)
+--- a/macosx/Wish-Info.plist.in	2022-06-07 00:40:39.000000000 +0800
++++ b/macosx/Wish-Info.plist.in	2023-06-18 19:28:38.515102337 +0800
+@@ -88,6 +88,8 @@
+     <true/>
+     <key>OSAScriptingDefinition</key>
+     <string>Wish.sdef</string>
++    <key>NSRequiresAquaSystemAppearance</key>
++    <true/>
+     <key>NSHighResolutionCapable</key>
+     <string>True</string>
+     <key>NSServices</key>
+--- a/macosx/tkMacOSXInit.c	2022-09-21 19:57:18.000000000 +0800
++++ b/macosx/tkMacOSXInit.c	2023-06-18 19:44:08.912512207 +0800
+@@ -17,6 +17,10 @@
+ #include "tkMacOSXConstants.h"
+ #include <dlfcn.h>
+ #include <objc/objc-auto.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
+ #include <sys/stat.h>
+ #include <sys/utsname.h>
+ 
+@@ -266,8 +270,25 @@ static int		TkMacOSXGetAppPathCmd(Client
+ 	struct utsname name;
+ 	char *endptr;
+ 	if (uname(&name) == 0) {
+-	    majorVersion = strtol(name.release, &endptr, 10) - 9;
++	    char *darwinVersionString = strdup(name.release);
++	    char *ptr = darwinVersionString;
++	    char *darwinMajorVersionString = strsep(&ptr, ".");
++	    char *darwinMinorVersionString = NULL;
++	    if (ptr) {
++		darwinMinorVersionString = strsep(&ptr, ".");
++	    }
++
++	    majorVersion = 0;
+ 	    minorVersion = 0;
++
++	    if (darwinMajorVersionString) {
++		majorVersion = strtol(darwinMajorVersionString, NULL, 10);
++	    }
++	    if (darwinMinorVersionString) {
++		minorVersion = strtol(darwinMinorVersionString, NULL, 10);
++	    }
++
++	    free(darwinVersionString);
+ 	}
+     }
+     [NSApp setMacOSVersion: 10000*majorVersion + 100*minorVersion];
+@@ -329,6 +350,12 @@ static int		TkMacOSXGetAppPathCmd(Client
+ 		    path = nil;
+ 		}
+ 	    }
++
++	    if (showDeprecationFlag) {
++	    	TkpDisplayWarning(deprecationWarningMessage, deprecationWarningTitle);
++	    }
++	} else if (showDeprecationFlag && isatty(STDERR_FILENO)) {
++		fprintf(stderr, "%s: %s\n", deprecationWarningTitle, deprecationWarningMessage);
+ 	}
+     }
+ #ifdef TK_MAC_DEBUG
+@@ -461,10 +488,6 @@ TkpInit(
+ 	 * Initialize/check OS version variable for runtime checks.
+ 	 */
+ 
+-#if MAC_OS_X_VERSION_MIN_REQUIRED < 1060
+-#   error Mac OS X 10.6 required
+-#endif
+-
+ 	initialized = 1;
+ 
+ #ifdef TK_FRAMEWORK
+@@ -538,6 +561,13 @@ TkpInit(
+ 
+ 	Tcl_DoOneEvent(TCL_WINDOW_EVENTS | TCL_DONT_WAIT);
+ 
++#if 0
++	// Torrekie: We provide it as package, so no deprecations here
++	char *silenceDeprecationOption = getenv("TK_SILENCE_DEPRECATION");
++	char showDeprecationFlag = (silenceDeprecationOption == NULL || strcmp(silenceDeprecationOption, "1") != 0);
++	const char *deprecationWarningMessage = "The system version of Tk is deprecated and may be removed in a future release. Please don't rely on it. Set TK_SILENCE_DEPRECATION=1 to suppress this warning.";
++	const char *deprecationWarningTitle = "DEPRECATION WARNING";
++#endif
+ 	/*
+ 	 * Decide whether to open a console window.  If the TK_CONSOLE
+ 	 * environment variable is not defined we only show the console if
+--- a/macosx/tkMacOSXPrivate.h	2022-09-26 20:39:09.000000000 +0800
++++ b/macosx/tkMacOSXPrivate.h	2023-06-18 19:45:57.951049026 +0800
+@@ -28,9 +28,7 @@
+ #import <ApplicationServices/ApplicationServices.h>
+ #import <Cocoa/Cocoa.h>
+ #import <QuartzCore/QuartzCore.h>
+-#if MAC_OS_X_VERSION_MAX_ALLOWED >= 110000
+ #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+-#endif
+ #ifndef NO_CARBON_H
+ #import <Carbon/Carbon.h>
+ #endif
+--- a/macosx/tkMacOSXWm.c	2022-09-21 19:57:18.000000000 +0800
++++ b/macosx/tkMacOSXWm.c	2023-06-18 19:48:59.948128376 +0800
+@@ -3214,7 +3214,7 @@ WmProtocolCmd(
+ 	wmPtr->protPtr = protPtr;
+ 	protPtr->interp = interp;
+ 	protPtr->command = (char *)ckalloc(cmdLength+1);
+-	strcpy(protPtr->command, cmd);
++	memcpy(protPtr->command, cmd, cmdLength + 1);
+     }
+     return TCL_OK;
+ }
+--- a/unix/configure.in	2022-11-22 03:56:01.000000000 +0800
++++ b/unix/configure.in	2023-06-19 16:51:01.818926496 +0800
+@@ -355,7 +355,7 @@ if test $tk_aqua = yes; then
+     if test -d "/System/Library/Frameworks/UniformTypeIdentifiers.framework"; then
+         LIBS="$LIBS -framework UniformTypeIdentifiers"
+     fi
+-    EXTRA_CC_SWITCHES='-std=gnu99 -x objective-c'
++    EXTRA_CC_SWITCHES='-std=gnu99 -x objective-c -fobjc-gc'
+     TK_WINDOWINGSYSTEM=AQUA
+     if test -n "${enable_symbols}" -a "${enable_symbols}" != no; then
+         AC_DEFINE(TK_MAC_DEBUG, 1, [Are TkAqua debug messages enabled?])
+@@ -784,7 +784,7 @@ TK_BUILD_STUB_LIB_PATH="`pwd`/${TK_STUB_
+ TK_STUB_LIB_PATH="${TK_STUB_LIB_DIR}/${TK_STUB_LIB_FILE}"
+ 
+ # Install time header dir can be set via --includedir
+-eval "TK_INCLUDE_SPEC=\"-I${includedir}\""
++eval "TK_INCLUDE_SPEC=\"-iwithsysroot ${includedir}\""
+ 
+ #------------------------------------------------------------------------
+ # tkConfig.sh refers to this by a different name
+--- a/unix/tkAppInit.c	2022-06-07 00:40:39.000000000 +0800
++++ b/unix/tkAppInit.c	2023-06-19 16:53:55.890272168 +0800
+@@ -21,6 +21,13 @@
+ #   define Tcl_StaticLibrary Tcl_StaticPackage
+ #endif
+ 
++#include <stdio.h>
++#include <stdlib.h>
++
++#ifdef __APPLE__
++#include <CoreFoundation/CoreFoundation.h>
++#endif /* __APPLE__ */
++
+ #ifdef TK_TEST
+ #ifdef __cplusplus
+ extern "C" {
+@@ -86,6 +93,29 @@ main(
+     int argc,			/* Number of command-line arguments. */
+     char **argv)		/* Values of command-line arguments. */
+ {
++#ifdef __APPLE__
++    /*
++     * rdar://90261888 (App Sandbox Escape in Wish.app Using TCL_LIBRARY)
++     *
++     * Unset TCL_LIBRARY for Wish.app; as it's trusted by Sandbox by virtue
++     * of living in /System, TCL_LIBRARY could be used to force loading of
++     * arbitrary code from another app.
++     *
++     * It's important that we do this before calling into Tk_Main() below,
++     * as that will call into TclSetupEnv() which bootstraps the environ
++     * vector into the interpreter.
++     */
++    CFBundleRef bundleRef = CFBundleGetMainBundle();
++    if (bundleRef) {
++       CFStringRef identifier = CFBundleGetIdentifier(bundleRef);
++       CFStringRef wishIdentifier = CFSTR("com.tcltk.wish");
++
++       if (identifier &&
++           (CFStringCompare(identifier, wishIdentifier, 0) == kCFCompareEqualTo)) {
++           (void)unsetenv("TCL_LIBRARY");
++       }
++    }
++#endif /* __APPLE__ */
+ #ifdef TK_LOCAL_MAIN_HOOK
+     TK_LOCAL_MAIN_HOOK(&argc, &argv);
+ #endif
+--- a/unix/tkConfig.h.in	2022-11-22 03:56:01.000000000 +0800
++++ b/unix/tkConfig.h.in	2023-06-19 16:54:02.310159307 +0800
+@@ -238,7 +238,7 @@
+ /* Define to `int' if <sys/types.h> does not define. */
+ #undef pid_t
+ 
+-/* Define to `unsigned' if <sys/types.h> does not define. */
++/* Define to `unsigned int' if <sys/types.h> does not define. */
+ #undef size_t
+ 
+ /* Define to `int' if <sys/types.h> doesn't define. */
