@@ -1,0 +1,166 @@
+--- a/Makefile	2015-08-14 17:17:01.000000000 +0800
++++ b/Makefile	2023-07-17 18:46:39.989882091 +0800
+@@ -10,11 +10,11 @@ PLAT= none
+ # so take care if INSTALL_TOP is not an absolute path. See the local target.
+ # You may want to make INSTALL_LMOD and INSTALL_CMOD consistent with
+ # LUA_ROOT, LUA_LDIR, and LUA_CDIR in luaconf.h.
+-INSTALL_TOP= /usr/local
++INSTALL_TOP= $(DESTDIR)/usr/libexec/lua5.2
+ INSTALL_BIN= $(INSTALL_TOP)/bin
+-INSTALL_INC= $(INSTALL_TOP)/include
++INSTALL_INC= $(INSTALL_TOP)/include/lua
+ INSTALL_LIB= $(INSTALL_TOP)/lib
+-INSTALL_MAN= $(INSTALL_TOP)/man/man1
++INSTALL_MAN= $(INSTALL_TOP)/share/man/man1
+ INSTALL_LMOD= $(INSTALL_TOP)/share/lua/$V
+ INSTALL_CMOD= $(INSTALL_TOP)/lib/lua/$V
+ 
+@@ -41,7 +41,7 @@ PLATS= aix ansi bsd freebsd generic linu
+ # What to install.
+ TO_BIN= lua luac
+ TO_INC= lua.h luaconf.h lualib.h lauxlib.h lua.hpp
+-TO_LIB= liblua.a
++TO_LIB= liblua.a liblua-c++.a liblua.dylib liblua-c++.dylib
+ TO_MAN= lua.1 luac.1
+ 
+ # Lua version and release.
+@@ -52,7 +52,7 @@ R= $V.4
+ all:	$(PLAT)
+ 
+ $(PLATS) clean:
+-	cd src && $(MAKE) $@
++	cd src && $(MAKE) $@ V=$(V) R=$(R)
+ 
+ test:	dummy
+ 	src/lua -v
+@@ -61,9 +61,13 @@ install: dummy
+ 	cd src && $(MKDIR) $(INSTALL_BIN) $(INSTALL_INC) $(INSTALL_LIB) $(INSTALL_MAN) $(INSTALL_LMOD) $(INSTALL_CMOD)
+ 	cd src && $(INSTALL_EXEC) $(TO_BIN) $(INSTALL_BIN)
+ 	cd src && $(INSTALL_DATA) $(TO_INC) $(INSTALL_INC)
+-	cd src && $(INSTALL_DATA) $(TO_LIB) $(INSTALL_LIB)
++	# Compiler automatically determine shared library permission, don't modify it
++	cd src && $(INSTALL) $(TO_LIB) $(INSTALL_LIB)
+ 	cd doc && $(INSTALL_DATA) $(TO_MAN) $(INSTALL_MAN)
+-
++	cd $(INSTALL_LIB) && ln -s liblua.dylib liblua.$(V).dylib
++	cd $(INSTALL_LIB) && ln -s liblua.dylib liblua.$(R).dylib
++	cd $(INSTALL_LIB) && ln -s liblua-c++.dylib liblua-c++.$(V).dylib
++	cd $(INSTALL_LIB) && ln -s liblua-c++.dylib liblua-c++.$(R).dylib
+ uninstall:
+ 	cd src && cd $(INSTALL_BIN) && $(RM) $(TO_BIN)
+ 	cd src && cd $(INSTALL_INC) && $(RM) $(TO_INC)
+--- a/src/Makefile	2015-08-14 17:17:01.000000000 +0800
++++ b/src/Makefile	2023-07-17 18:25:52.204116948 +0800
+@@ -7,8 +7,10 @@
+ PLAT= none
+ 
+ CC= gcc
+-CFLAGS= -O2 -Wall -DLUA_COMPAT_ALL $(SYSCFLAGS) $(MYCFLAGS)
++CFLAGS= -Wall -DLUA_COMPAT_ALL $(SYSCFLAGS) $(MYCFLAGS)
+ LDFLAGS= $(SYSLDFLAGS) $(MYLDFLAGS)
++CXX= g++
++CXXFLAGS= -Wall -DLUA_COMPAT_ALL $(SYSCFLAGS) $(MYCXXFLAGS)
+ LIBS= -lm $(SYSLIBS) $(MYLIBS)
+ 
+ AR= ar rcu
+@@ -20,6 +22,7 @@ SYSLDFLAGS=
+ SYSLIBS=
+ 
+ MYCFLAGS=
++MYCXXFLAGS=
+ MYLDFLAGS=
+ MYLIBS=
+ MYOBJS=
+@@ -28,7 +31,8 @@ MYOBJS=
+ 
+ PLATS= aix ansi bsd freebsd generic linux macosx mingw posix solaris
+ 
+-LUA_A=	liblua.a
++LUA_A=	liblua.a liblua-c++.a
++LUA_DYLIB= liblua.dylib liblua-c++.dylib
+ CORE_O=	lapi.o lcode.o lctype.o ldebug.o ldo.o ldump.o lfunc.o lgc.o llex.o \
+ 	lmem.o lobject.o lopcodes.o lparser.o lstate.o lstring.o ltable.o \
+ 	ltm.o lundump.o lvm.o lzio.o
+@@ -43,8 +47,8 @@ LUAC_T=	luac
+ LUAC_O=	luac.o
+ 
+ ALL_O= $(BASE_O) $(LUA_O) $(LUAC_O)
+-ALL_T= $(LUA_A) $(LUA_T) $(LUAC_T)
+-ALL_A= $(LUA_A)
++ALL_T= $(LUA_DYLIB) $(LUA_A) $(LUA_T) $(LUAC_T)
++ALL_A= $(LUA_DYLIB) $(LUA_A)
+ 
+ # Targets start here.
+ default: $(PLAT)
+@@ -56,14 +60,22 @@ o:	$(ALL_O)
+ a:	$(ALL_A)
+ 
+ $(LUA_A): $(BASE_O)
+-	$(AR) $@ $(BASE_O)
+-	$(RANLIB) $@
++	$(AR) liblua.a $(BASE_O)
++	$(RANLIB) liblua.a
++	$(AR) liblua-c++.a $(BASE_O:.o=-c++.o)
++	$(RANLIB) liblua-c++.a
++
++$(LUA_DYLIB): $(BASE_O)
++	$(CC) -o liblua.dylib -dynamiclib -install_name /usr/libexec/lua5.4/lib/liblua.dylib \
++		-compatibility_version $(V) -current_version $(R) $^
++	$(CC) -o liblua-c++.dylib -dynamiclib -install_name /usr/libexec/lua5.4/lib/liblua-c++.dylib \
++		-compatibility_version $(V) -current_version $(R) $(BASE_O:.o=-c++.o) -Wl,-lc++
+ 
+-$(LUA_T): $(LUA_O) $(LUA_A)
+-	$(CC) -o $@ $(LDFLAGS) $(LUA_O) $(LUA_A) $(LIBS)
++$(LUA_T): $(LUA_O) $(LUA_DYLIB)
++	$(CC) -fno-common -o $@ $(LDFLAGS) $(LUA_O) -L. -llua $(LIBS)
+ 
+-$(LUAC_T): $(LUAC_O) $(LUA_A)
+-	$(CC) -o $@ $(LDFLAGS) $(LUAC_O) $(LUA_A) $(LIBS)
++$(LUAC_T): $(LUAC_O) $(LUA_DYLIB)
++	$(CC) -o $@ $(LDFLAGS) $(LUAC_O) -L. -llua $(LIBS)
+ 
+ clean:
+ 	$(RM) $(ALL_T) $(ALL_O)
+@@ -106,7 +118,7 @@ linux:
+ 	$(MAKE) $(ALL) SYSCFLAGS="-DLUA_USE_LINUX" SYSLIBS="-Wl,-E -ldl -lreadline"
+ 
+ macosx:
+-	$(MAKE) $(ALL) SYSCFLAGS="-DLUA_USE_MACOSX" SYSLIBS="-lreadline" CC=cc
++	$(MAKE) $(ALL) SYSCFLAGS="-fno-common -DLUA_USE_MACOSX" SYSLIBS="-lreadline" CC=cc
+ 
+ mingw:
+ 	$(MAKE) "LUA_A=lua52.dll" "LUA_T=lua.exe" \
+@@ -125,6 +137,10 @@ solaris:
+ 
+ # DO NOT DELETE
+ 
++%.o:%.c
++	$(CC) $(CFLAGS) -c $< -o $@
++	$(CXX) $(CFLAGS) -c $< -o $*-c++.o
++
+ lapi.o: lapi.c lua.h luaconf.h lapi.h llimits.h lstate.h lobject.h ltm.h \
+  lzio.h lmem.h ldebug.h ldo.h lfunc.h lgc.h lstring.h ltable.h lundump.h \
+  lvm.h
+--- a/src/luaconf.h	2015-08-14 17:17:01.000000000 +0800
++++ b/src/luaconf.h	2023-07-17 18:27:42.265643105 +0800
+@@ -100,7 +100,7 @@
+ #else			/* }{ */
+ 
+ #define LUA_VDIR	LUA_VERSION_MAJOR "." LUA_VERSION_MINOR "/"
+-#define LUA_ROOT	"/usr/local/"
++#define LUA_ROOT	"/usr/libexec/lua5.2/"
+ #define LUA_LDIR	LUA_ROOT "share/lua/" LUA_VDIR
+ #define LUA_CDIR	LUA_ROOT "lib/lua/" LUA_VDIR
+ #define LUA_PATH_DEFAULT  \
+@@ -150,7 +150,11 @@
+ 
+ #else				/* }{ */
+ 
++#ifdef __cplusplus
++#define LUA_API                extern "C"
++#else
+ #define LUA_API		extern
++#endif
+ 
+ #endif				/* } */
+ 
