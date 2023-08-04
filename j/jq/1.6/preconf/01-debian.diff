@@ -1,0 +1,149 @@
+--- a/Makefile.am	2018-11-02 09:49:29.000000000 +0800
++++ b/Makefile.am	2023-08-04 17:37:42.802379339 +0800
+@@ -106,7 +106,6 @@ src/builtin.o: src/builtin.inc
+ 
+ bin_PROGRAMS = jq
+ jq_SOURCES = src/main.c src/version.h
+-jq_LDFLAGS = -static-libtool-libs
+ jq_LDADD = libjq.la -lm
+ 
+ if WIN32
+@@ -114,18 +113,20 @@ jq_LDADD += -lshlwapi
+ endif
+ 
+ if ENABLE_ALL_STATIC
+-jq_LDFLAGS += -all-static
++jq_LDFLAGS = -all-static
+ endif
+ 
+ ### Tests (make check)
+ 
+-TESTS = tests/optionaltest tests/mantest tests/jqtest tests/onigtest tests/shtest tests/utf8test tests/base64test
+-TESTS_ENVIRONMENT = NO_VALGRIND=$(NO_VALGRIND)
++TESTS = tests/mantest tests/jqtest tests/onigtest tests/shtest
++TESTS_ENVIRONMENT = NO_VALGRIND=$(NO_VALGRIND) LIBTOOL="$(LIBTOOL)"
+ 
+ 
+ ### Building the manpage
+ 
+ man_MANS = jq.1
++.PHONY: real_docs
++ENABLE_DOCS=1
+ if ENABLE_DOCS
+ jq.1: $(srcdir)/docs/content/3.manual/manual.yml
+ 	$(AM_V_GEN) ( cd ${abs_srcdir}/docs; '$(BUNDLER)' exec rake manpage ) > $@ || { rm -f $@; false; }
+@@ -137,13 +138,6 @@ jq.1: $(srcdir)/jq.1.prebuilt
+ endif
+ 
+ 
+-### Build oniguruma
+-
+-if BUILD_ONIGURUMA
+-libjq_la_LIBADD += modules/oniguruma/src/.libs/libonig.la
+-SUBDIRS = modules/oniguruma
+-endif
+-
+ AM_CFLAGS += $(onig_CFLAGS)
+ 
+ ### Packaging
+@@ -182,7 +176,7 @@ EXTRA_DIST = $(DOC_FILES) $(man_MANS) $(
+ # README.md is expected in Github projects, good stuff in it, so we'll
+ # distribute it and install it with the package in the doc directory.
+ docdir = ${datadir}/doc/${PACKAGE}
+-dist_doc_DATA = README.md COPYING AUTHORS README
++dist_doc_DATA = AUTHORS README
+ 
+ RELEASE ?= 1
+ rpm: dist jq.spec
+--- a/configure.ac	2018-11-02 09:49:29.000000000 +0800
++++ b/configure.ac	2023-08-04 17:37:40.011616665 +0800
+@@ -1,7 +1,4 @@
+-m4_define([jq_version],
+-          m4_esyscmd_s([(git rev-parse --verify -q jq-1.0 > /dev/null &&
+-                        (git describe --tags --dirty --match 'jq-*'|sed 's/^jq-//')) ||
+-                        echo `git rev-parse --abbrev-ref HEAD`-`git describe --always --dirty`])))
++m4_define([jq_version], '1.6')
+ 
+ AC_INIT([jq], [jq_version], [https://github.com/stedolan/jq/issues],
+              [jq], [https://stedolan.github.io/jq])
+--- a/docs/Rakefile	2018-11-02 09:49:29.000000000 +0800
++++ b/docs/Rakefile	2023-08-04 17:37:39.461100167 +0800
+@@ -1,3 +1,13 @@
++require 'yaml'
++require 'json'
++require 'ronn'
++require 'tempfile'
++require 'yaml'
++
++def load_manual
++  YAML::load(File.open("content/3.manual/manual.yml"))
++end
++
+ current_dir = File.dirname(__FILE__)
+ rakefile_manual = File.expand_path(File.join(current_dir, "Rakefile.manual"))
+ rakefile_website = File.expand_path(File.join(current_dir, "Rakefile.website"))
+--- a/scripts/version	2018-11-02 09:49:29.000000000 +0800
++++ b/scripts/version	2023-08-04 17:37:43.359019557 +0800
+@@ -1,10 +1,2 @@
+ #!/bin/sh
+-set -e
+-cd `dirname "$0"`
+-if git rev-parse --verify -q jq-1.0 > /dev/null 2>&1; then
+-    git describe --tags --match 'jq-*' --dirty | sed 's/^jq-//'
+-else
+-    b=`git rev-parse --abbrev-ref HEAD`
+-    c=`git describe --always --dirty`
+-    echo "${b}-${c}"
+-fi
++echo "1.6"
+--- a/src/jq_test.c	2018-11-02 09:49:29.000000000 +0800
++++ b/src/jq_test.c	2023-08-04 17:37:43.909586805 +0800
+@@ -54,8 +54,8 @@ static void test_err_cb(void *data, jv e
+ }
+ 
+ static void run_jq_tests(jv lib_dirs, int verbose, FILE *testdata) {
+-  char prog[4096];
+-  char buf[4096];
++  char prog[4096] = {0};
++  char buf[4096] = {0};
+   struct err_data err_msg;
+   int tests = 0, passed = 0, invalid = 0;
+   unsigned int lineno = 0;
+--- a/src/jv_print.c	2018-11-02 09:49:29.000000000 +0800
++++ b/src/jv_print.c	2023-08-04 17:37:41.117407273 +0800
+@@ -18,6 +18,10 @@
+ #define MAX_PRINT_DEPTH (256)
+ #endif
+ 
++#ifndef MAX_DEPTH
++#define MAX_DEPTH 256
++#endif
++
+ #define ESC "\033"
+ #define COL(c) (ESC "[" c "m")
+ #define COLRESET (ESC "[0m")
+@@ -201,8 +205,8 @@ static void jv_dump_term(struct dtoa_con
+       }
+     }
+   }
+-  if (indent > MAX_PRINT_DEPTH) {
+-    put_str("<skipped: too deep>", F, S, flags & JV_PRINT_ISATTY);
++  if (indent > MAX_DEPTH) {
++    put_str("<stripped: exceeds max depth>", F, S, flags & JV_PRINT_ISATTY);
+   } else switch (jv_get_kind(x)) {
+   default:
+   case JV_KIND_INVALID:
+--- a/tests/setup	2018-11-02 09:49:29.000000000 +0800
++++ b/tests/setup	2023-08-04 17:37:42.219046804 +0800
+@@ -13,8 +13,9 @@ JQBASEDIR=$JQTESTDIR/..
+ JQ=$JQBASEDIR/jq
+ 
+ if [ -z "${NO_VALGRIND-}" ] && which valgrind > /dev/null; then
+-    VALGRIND="valgrind --error-exitcode=1 --leak-check=full \
+-                       --suppressions=$JQTESTDIR/onig.supp"
++    VALGRIND="$LIBTOOL --mode=execute -- valgrind \
++    		      	       --error-exitcode=1 --leak-check=full \
++		      	       --suppressions=$JQTESTDIR/onig.supp"
+     VG_EXIT0=--error-exitcode=0
+     Q=-q
+ else
