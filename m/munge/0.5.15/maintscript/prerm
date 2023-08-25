@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+launchctl unload -F /Library/LaunchDaemons/munge.plist &> /dev/null || true
+launchctl unload -D /Library/LaunchDaemons/mungekey.plist &> /dev/null || true
+
+rm -f /var/lib/munge/munge.seed
+rm -rf /var/run/munge
+
+exit 0

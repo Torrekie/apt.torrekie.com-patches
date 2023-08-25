@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.torrekie.bootstrap</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/sbin/mungekey</string>
+		<string>-c</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<dict>
+		<key>PathState</key>
+		<dict>
+			<key>/etc/munge/munge.key</key>
+			<false/>
+		</dict>
+	</dict>
+	<key>UserName</key>
+	<string>_munge</string>
+	<key>GroupName</key>
+	<string>_munge</string>
+</dict>
+</plist>
