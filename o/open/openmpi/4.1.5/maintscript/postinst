@@ -1,0 +1,37 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "configure" ]; then
+
+update-alternatives \
+        --install /usr/include/mpi mpi-include /usr/libexec/openmpi/include 50 \
+        --slave /usr/lib/libmpi.dylib libmpi.dylib /usr/libexec/openmpi/lib/libmpi.dylib \
+        --slave /usr/lib/libmpi++.dylib libmpi++.dylib /usr/libexec/openmpi/lib/libmpi_cxx.dylib \
+        --slave /usr/lib/pkgconfig/mpi.pc mpi.pc /usr/lib/pkgconfig/ompi.pc \
+        --slave /usr/lib/pkgconfig/mpi-fort.pc mpi-fort.pc /usr/lib/pkgconfig/ompi-fort.pc \
+        --slave /usr/lib/pkgconfig/mpi-c.pc mpi-c.pc /usr/lib/pkgconfig/ompi-c.pc \
+        --slave /usr/lib/pkgconfig/mpi-cxx.pc mpi-cxx.pc /usr/lib/pkgconfig/ompi-cxx.pc
+
+update-alternatives \
+        --install /usr/bin/mpirun mpirun /usr/bin/mpirun.openmpi 50 \
+        --slave /usr/share/man/man1/mpirun.1 mpirun.1 /usr/share/man/man1/mpirun.openmpi.1 \
+        --slave /usr/bin/mpiexec mpiexec /usr/bin/mpiexec.openmpi \
+        --slave /usr/share/man/man1/mpiexec.1 mpiexec.1 /usr/share/man/man1/mpiexec.openmpi.1
+
+update-alternatives \
+        --install /usr/bin/mpicc mpi /usr/bin/mpicc.openmpi 50 \
+        --slave /usr/bin/mpic++ mpic++ /usr/bin/mpic++.openmpi \
+        --slave /usr/bin/mpicxx mpicxx /usr/bin/mpic++.openmpi \
+        --slave /usr/bin/mpiCC mpiCC /usr/bin/mpic++.openmpi \
+        --slave /usr/bin/mpif77 mpif77 /usr/bin/mpif77.openmpi \
+        --slave /usr/bin/mpif90 mpif90 /usr/bin/mpif90.openmpi \
+        --slave /usr/bin/mpifort mpifort /usr/bin/mpifort.openmpi \
+        --slave /usr/share/man/man1/mpicc.1 mpicc.1 /usr/share/man/man1/mpicc.openmpi.1 \
+        --slave /usr/share/man/man1/mpic++.1 mpic++.1 /usr/share/man/man1/mpic++.openmpi.1 \
+        --slave /usr/share/man/man1/mpicxx.1 mpicxx.1 /usr/share/man/man1/mpicxx.openmpi.1 \
+        --slave /usr/share/man/man1/mpiCC.1 mpiCC.1 /usr/share/man/man1/mpiCC.openmpi.1 \
+        --slave /usr/share/man/man1/mpif77.1 mpif77.1 /usr/share/man/man1/mpif77.openmpi.1 \
+        --slave /usr/share/man/man1/mpif90.1 mpif90.1 /usr/share/man/man1/mpif90.openmpi.1 \
+        --slave /usr/share/man/man1/mpifort.1 mpifort.1 /usr/share/man/man1/mpifort.openmpi.1
+fi

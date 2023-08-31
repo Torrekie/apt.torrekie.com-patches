@@ -1,0 +1,351 @@
+--- a/Makefile.ompi-rules	1677839764.000000000
++++ b/Makefile.ompi-rules	1693297962.877009651
+@@ -53,7 +53,7 @@ endif
+ # A little verbosity magic; "make" will show the terse output.  "make
+ # V=1" will show the actual commands used (just like the other
+ # Automake-generated compilation/linker rules).
+-V=0
++#V=0
+ 
+ OMPI_V_LN_S = $(ompi__v_LN_S_$V)
+ ompi__v_LN_S_ = $(ompi__v_LN_S_$AM_DEFAULT_VERBOSITY)
+--- a/config/opal_config_asm.m4	1677839764.000000000
++++ b/config/opal_config_asm.m4	1693297961.705107462
+@@ -1111,6 +1111,12 @@ AC_DEFUN([OPAL_CONFIG_ASM],[
+               [AC_MSG_ERROR([No atomic primitives available for $host])])
+             ;;
+ 
++        hppa*)
++            opal_cv_asm_arch="HPPA"
++            OPAL_ASM_SUPPORT_64BIT=0
++            OPAL_GCC_INLINE_ASSIGN='"copy 0,%0" : "=&r"(ret)'
++            ;;
++
+         mips-*|mips64*)
+             # Should really find some way to make sure that we are on
+             # a MIPS III machine (r4000 and later)
+--- a/configure.ac	1677839764.000000000
++++ b/configure.ac	1693297961.110229297
+@@ -1427,11 +1427,13 @@ esac
+ # easier to deal with the problem of opal, orte, and ompi built from
+ # their own tarballs, with their own PACKAGE variables.
+ opaldatadir='${datadir}/openmpi'
+-opallibdir='${libdir}/openmpi'
++opallibdir='${libdir}/openmpi3'
+ opalincludedir='${includedir}/openmpi'
++pkglibdir='${libdir}/openmpi3'
+ AC_SUBST(opaldatadir)
+ AC_SUBST(opallibdir)
+ AC_SUBST(opalincludedir)
++AC_SUBST(pkglibdir)
+ 
+ OPAL_SET_MCA_PREFIX([OMPI_MCA_])
+ OPAL_SET_MCA_CMD_LINE_ID([mca])
+--- a/ompi/include/ompi_config.h	1677839764.000000000
++++ b/ompi/include/ompi_config.h	1693297960.525090637
+@@ -28,6 +28,10 @@
+ 
+ #include "opal_config.h"
+ 
++#ifndef PATH_MAX /* Hurd */
++#define PATH_MAX 65535
++#endif
++
+ #define OMPI_IDENT_STRING OPAL_IDENT_STRING
+ 
+ /***********************************************************************
+--- a/ompi/mca/fbtl/posix/fbtl_posix_preadv.c	1677839764.000000000
++++ b/ompi/mca/fbtl/posix/fbtl_posix_preadv.c	1693297960.527314420
+@@ -32,6 +32,10 @@
+ static ssize_t mca_fbtl_posix_preadv_datasieving (ompio_file_t *fh);
+ static ssize_t mca_fbtl_posix_preadv_generic (ompio_file_t *fh);
+ 
++#ifndef IOV_MAX
++#define IOV_MAX 1024
++#endif
++
+ ssize_t mca_fbtl_posix_preadv (ompio_file_t *fh )
+ {
+     ssize_t bytes_read=0, ret_code=0;
+--- a/ompi/mca/fbtl/posix/fbtl_posix_pwritev.c	1677839764.000000000
++++ b/ompi/mca/fbtl/posix/fbtl_posix_pwritev.c	1693297960.527962168
+@@ -33,6 +33,10 @@
+ static ssize_t mca_fbtl_posix_pwritev_datasieving (ompio_file_t *fh );
+ static ssize_t mca_fbtl_posix_pwritev_generic (ompio_file_t *fh );
+ 
++#ifndef IOV_MAX
++#define IOV_MAX 1024
++#endif
++
+ ssize_t  mca_fbtl_posix_pwritev(ompio_file_t *fh )
+ {
+     ssize_t bytes_written=0, ret_code=0;
+--- a/ompi/mca/mtl/ofi/Makefile.am	1677839764.000000000
++++ b/ompi/mca/mtl/ofi/Makefile.am	1693297963.455632546
+@@ -1,4 +1,4 @@
+-#
++
+ # Copyright (c) 2013-2015 Intel, Inc. All rights reserved
+ #
+ # Copyright (c) 2014-2019 Cisco Systems, Inc.  All rights reserved
+--- a/ompi/mpi/man/man3/MPI_Get.3in	1677839764.000000000
++++ b/ompi/mpi/man/man3/MPI_Get.3in	1693297959.928792103
+@@ -104,7 +104,7 @@ window object used for communication (ha
+ 
+ .SH OUTPUT PARAMETER
+ .ft R
+-.TP li
++.TP 1i
+ request
+ MPI_Rget: RMA request
+ .TP 1i
+--- a/ompi/mpi/man/man3/MPI_T_enum_get_info.3in	1677839764.000000000
++++ b/ompi/mpi/man/man3/MPI_T_enum_get_info.3in	1693297959.927253276
+@@ -32,7 +32,7 @@ Length of the string and/or buffer for n
+ 
+ .SH OUTPUT PARAMETERS
+ .ft R
+-.TP li
++.TP 1i
+ num
+ number of discrete values represented by this enumeration.
+ .TP 1i
+--- a/ompi/mpi/man/man3/MPI_T_enum_get_item.3in	1677839764.000000000
++++ b/ompi/mpi/man/man3/MPI_T_enum_get_item.3in	1693297959.929191977
+@@ -36,7 +36,7 @@ Length of the string and/or buffer for n
+ 
+ .SH OUTPUT PARAMETERS
+ .ft R
+-.TP li
++.TP 1i
+ value
+ Variable value.
+ .TP 1i
+--- a/ompi/mpi/man/man3/MPI_T_pvar_get_info.3in	1677839764.000000000
++++ b/ompi/mpi/man/man3/MPI_T_pvar_get_info.3in	1693297959.928255522
+@@ -131,7 +131,7 @@ MPI_T_PVAR_CLASS_GENERIC
+ Variable does not fit into any other class. Can by represented by an type supported by the MPI tool
+ information interface (see DATATYPE). Starting value is variable specific.
+ 
+-For more information see MPI-3 \[char 167] 14.3.7.
++For more information see MPI-3 \[char167] 14.3.7.
+ 
+ .SH DATATYPE
+ .ft R
+--- a/ompi/tools/wrappers/mpifort-wrapper-data.txt.in	1677839764.000000000
++++ b/ompi/tools/wrappers/mpifort-wrapper-data.txt.in	1693297959.354068568
+@@ -12,6 +12,7 @@ language=Fortran
+ compiler_env=FC
+ compiler_flags_env=FCFLAGS
+ compiler=@FC@
++compiler_version=@COMPILER_VERSION@
+ preprocessor_flags=
+ compiler_flags=@OMPI_WRAPPER_EXTRA_FCFLAGS@
+ linker_flags=@OMPI_WRAPPER_EXTRA_FC_LDFLAGS@
+@@ -24,5 +25,5 @@ libs_static=@OMPI_FORTRAN_USEMPIF08_LIB@
+ dyn_lib_file=lib@OMPI_LIBMPI_NAME@.@OPAL_DYN_LIB_SUFFIX@
+ static_lib_file=lib@OMPI_LIBMPI_NAME@.a
+ required_file=@OMPI_WRAPPER_FORTRAN_REQUIRED_FILE@
+-includedir=${includedir}
+-libdir=${libdir}
++includedir=${libdir}/../../fortran/@COMPILER_VERSION@/openmpi
++libdir=${libdir}/fortran/@FC@
+--- a/ompi/tools/wrappers/ompi-fort.pc.in	1677839764.000000000
++++ b/ompi/tools/wrappers/ompi-fort.pc.in	1693297958.703290583
+@@ -11,11 +11,15 @@ exec_prefix=@exec_prefix@
+ includedir=@includedir@
+ libdir=@libdir@
+ pkgincludedir=@opalincludedir@
++# override $fortran with --define-variable when building on non-gfortran compile
++fortran=gfortran
++fortrandir=${libdir}/../../fortran/${fortran}
++
+ #
+ # Note that -lopen-pal and all the EXTRA_LIBS are only necessary when
+ # static linking (they're pulled in by libopen-rte.so's implicit
+ # dependencies), so only list these in Libs.private.
+ #
+-Libs: -L${libdir} @OMPI_PKG_CONFIG_LDFLAGS@ @OMPI_FORTRAN_USEMPIF08_LIB@ @OMPI_FORTRAN_USEMPI_LIB@ -l@OMPI_LIBMPI_NAME@_mpifh -l@OMPI_LIBMPI_NAME@
++Libs: -L${libdir}  @OMPI_PKG_CONFIG_LDFLAGS@ @OMPI_FORTRAN_USEMPIF08_LIB@ @OMPI_FORTRAN_USEMPI_LIB@ -l@OMPI_LIBMPI_NAME@_mpifh -l@OMPI_LIBMPI_NAME@
+ Libs.private: -lopen-rte -lopen-pal @OMPI_WRAPPER_EXTRA_LIBS@
+ Cflags: -I${includedir} @OMPI_WRAPPER_EXTRA_CPPFLAGS@ @OMPI_WRAPPER_EXTRA_FCFLAGS@
+--- a/opal/etc/openmpi-mca-params.conf	1677839764.000000000
++++ b/opal/etc/openmpi-mca-params.conf	1693297964.032624655
+@@ -57,3 +57,14 @@
+ 
+ # See "ompi_info --param all all --level 9" for a full listing of Open
+ # MPI MCA parameters available and their default values.
++
++# Silence this warning on Debian, as many systems don't have openfabric
++# but the warning breaks higher layers or application
++btl_base_warn_component_unused=0
++# Avoid openib an in case applications use fork: see https://github.com/ofiwg/libfabric/issues/6332
++# If you wish to use openib and know your application is safe, remove the following:
++# Similarly for UCX: https://github.com/open-mpi/ompi/issues/8367
++mtl = ^ofi
++btl = ^uct,openib,ofi
++pml = ^ucx
++osc = ^ucx,pt2pt
+\ No newline at end of file
+--- a/opal/include/opal/sys/architecture.h	1677839764.000000000
++++ b/opal/include/opal/sys/architecture.h	1693297961.706194541
+@@ -36,6 +36,7 @@
+ #define OPAL_X86_64         0030
+ #define OPAL_POWERPC32      0050
+ #define OPAL_POWERPC64      0051
++#define OPAL_HPPA           0120
+ #define OPAL_SPARC          0060
+ #define OPAL_SPARCV9_32     0061
+ #define OPAL_SPARCV9_64     0062
+--- a/opal/include/opal/sys/atomic.h	1677839764.000000000
++++ b/opal/include/opal/sys/atomic.h	1693297961.709272445
+@@ -169,6 +169,8 @@ enum {
+ #include "opal/sys/ia32/atomic.h"
+ #elif OPAL_ASSEMBLY_ARCH == OPAL_IA64
+ #include "opal/sys/ia64/atomic.h"
++#elif OPAL_ASSEMBLY_ARCH == OPAL_HPPA
++#include "opal/sys/hppa/atomic.h"
+ #elif OPAL_ASSEMBLY_ARCH == OPAL_MIPS
+ #include "opal/sys/mips/atomic.h"
+ #elif OPAL_ASSEMBLY_ARCH == OPAL_POWERPC32
+--- a/opal/include/opal/sys/timer.h	1677839764.000000000
++++ b/opal/include/opal/sys/timer.h	1693297964.610077763
+@@ -78,8 +78,6 @@ BEGIN_C_DECLS
+ #include "opal/sys/arm64/timer.h"
+ #elif OPAL_ASSEMBLY_ARCH == OPAL_IA32
+ #include "opal/sys/ia32/timer.h"
+-#elif OPAL_ASSEMBLY_ARCH == OPAL_IA64
+-#include "opal/sys/ia64/timer.h"
+ #elif OPAL_ASSEMBLY_ARCH == OPAL_POWERPC32
+ #include "opal/sys/powerpc/timer.h"
+ #elif OPAL_ASSEMBLY_ARCH == OPAL_POWERPC64
+@@ -90,6 +88,8 @@ BEGIN_C_DECLS
+ #include "opal/sys/sparcv9/timer.h"
+ #elif OPAL_ASSEMBLY_ARCH == OPAL_MIPS
+ #include "opal/sys/mips/timer.h"
++#elif OPAL_ASSEMBLY_ARCH == OPAL_HPPA
++#include "opal/sys/hppa/timer.h"
+ #endif
+ 
+ #ifndef DOXYGEN
+--- a/opal/mca/base/mca_base_var.c	1677839764.000000000
++++ b/opal/mca/base/mca_base_var.c	1693297960.526106925
+@@ -51,6 +51,14 @@
+ #include "opal/util/opal_environ.h"
+ #include "opal/runtime/opal.h"
+ 
++#ifndef MAXPATHLEN /* Hurd */
++#define MAXPATHLEN 65535
++#endif
++
++#ifndef PATH_MAX  /* Hurd */
++#define PATH_MAX 65535
++#endif
++
+ /*
+  * local variables
+  */
+--- a/opal/mca/timer/linux/configure.m4	1677839764.000000000
++++ b/opal/mca/timer/linux/configure.m4	1693297961.708612948
+@@ -47,7 +47,7 @@ AC_DEFUN([MCA_opal_timer_linux_CONFIG],[
+                  [timer_linux_happy="no"])])
+ 
+    case "${host}" in
+-   i?86-*linux*|x86_64*linux*|ia64-*linux*|powerpc-*linux*|powerpc64-*linux*|powerpc64le-*linux*|powerpcle-*linux*|sparc*-*linux*|aarch64-*linux*)
++       i?86-*linux*|x86_64*linux*|ia64-*linux*|powerpc-*linux*|powerpc64-*linux*|powerpc64le-*linux*|powerpcle-*linux*|sparc*-*linux*|aarch64-*linux*|hppa*-*linux*)
+         AS_IF([test "$timer_linux_happy" = "yes"],
+               [AS_IF([test -r "/proc/cpuinfo"],
+                      [timer_linux_happy="yes"],
+--- a/opal/util/stacktrace.c	1677839764.000000000
++++ b/opal/util/stacktrace.c	1693297960.522887563
+@@ -588,8 +588,12 @@ int opal_util_register_stackhandlers (vo
+ 
+     /* Setup the signals to catch */
+     memset(&act, 0, sizeof(act));
++#ifdef SA_SIGINFO
+     act.sa_sigaction = show_stackframe;
+     act.sa_flags = SA_SIGINFO;
++#else
++    act.sa_handler = show_stackframe_handler;
++#endif
+ #ifdef SA_ONESHOT
+     act.sa_flags |= SA_ONESHOT;
+ #else
+--- a/orte/include/orte_config.h	1677839764.000000000
++++ b/orte/include/orte_config.h	1693297960.526809505
+@@ -26,6 +26,13 @@
+ 
+ #include "opal_config.h"
+ 
++#ifndef PATH_MAX /* Hurd */
++#define PATH_MAX 65535
++#endif
++#ifndef MAXPATHLEN
++#define MAXPATHLEN 65535
++#endif
++
+ #define ORTE_IDENT_STRING OPAL_IDENT_STRING
+ 
+ #  if OPAL_C_HAVE_VISIBILITY
+--- a/orte/mca/odls/base/odls_base_default_fns.c	1677839764.000000000
++++ b/orte/mca/odls/base/odls_base_default_fns.c	1693297960.524470723
+@@ -856,7 +856,11 @@ static int setup_path(orte_app_context_t
+          * again not match getcwd! This is beyond our control - we are only
+          * ensuring they start out matching.
+          */
++#if !defined(MAXPATHLEN) && defined(__GLIBC__)
++    basedir = get_current_dir_name();
++#else
+         getcwd(dir, sizeof(dir));
++#endif	
+         *wdir = strdup(dir);
+         opal_setenv("PWD", dir, true, &app->env);
+         /* update the initial wdir value too */
+@@ -1065,7 +1069,11 @@ void orte_odls_base_default_launch_local
+     orte_app_context_t *app;
+     orte_proc_t *child=NULL;
+     int rc=ORTE_SUCCESS;
+-    char basedir[MAXPATHLEN];
++#if !defined(MAXPATHLEN) && defined(__GLIBC__)
++    char *basedir=NULL;
++#else
++  char basedir[MAXPATHLEN];
++#endif
+     int j, idx;
+     int total_num_local_procs = 0;
+     orte_odls_launch_local_t *caddy = (orte_odls_launch_local_t*)cbdata;
+@@ -2061,7 +2069,11 @@ int orte_odls_base_default_restart_proc(
+      * bouncing around as we execute this app, but we will always return
+      * to this place as our default directory
+      */
++#if !defined(MAXPATHLEN) && defined(__GLIBC__)
++    basedir = get_current_dir_name();
++#else
+     getcwd(basedir, sizeof(basedir));
++#endif
+ 
+     /* find this child's jobdat */
+     if (NULL == (jobdat = orte_get_job_data_object(child->name.jobid))) {
+--- a/orte/mca/sstore/orte_sstore.7in	1677839764.000000000
++++ b/orte/mca/sstore/orte_sstore.7in	1693297959.929667808
+@@ -12,8 +12,7 @@
+ .\" **************************
+ .SH NAME
+ .
+-Open RTE MCA File Management (SStore) Framework \- Overview of Open RTE's SStore
+-framework, and selected modules.  #PACKAGE_NAME# #PACKAGE_VERSION#
++ORTE_SSTORE \- Overview of Open RTE's SStore framework, and selected modules
+ .
+ .\" **************************
+ .\"    Description Section
+--- a/test/class/opal_fifo.c	1677839764.000000000
++++ b/test/class/opal_fifo.c	1693297962.299199670
+@@ -63,7 +63,7 @@ static void *thread_test (void *arg) {
+     printf ("Atomics thread finished. Time: %d s %d us %d nsec/poppush\n", (int) total.tv_sec,
+             (int)total.tv_usec, (int)(timing / 1e-9));
+ 
+-    return NULL;
++    pthread_exit(NULL);
+ }
+ 
+ static void *thread_test_exhaust (void *arg) {

@@ -1,0 +1,44 @@
+--- a/config/ompi_setup_fc.m4	1677839764.000000000
++++ b/config/ompi_setup_fc.m4	1693484662.426876710
+@@ -89,8 +89,8 @@ AC_DEFUN([OMPI_SETUP_FC],[
+            case "$host" in
+                *apple-darwin*)
+                    if test -z ${MACOSX_DEPLOYMENT_TARGET} ; then
+-                       AC_MSG_RESULT([impossible -- -static])
+-                       OMPI_FORTRAN_EXTRA_SHARED_LIBRARY_FLAGS="-static"
++                       AC_MSG_RESULT([-Wl,-single_module])
++                       OMPI_FORTRAN_EXTRA_SHARED_LIBRARY_FLAGS="-Wl,-single_module"
+                    else
+                        case ${MACOSX_DEPLOYMENT_TARGET} in
+                        10.[012])
+@@ -144,26 +144,20 @@ AC_DEFUN([OMPI_SETUP_FC],[
+     AS_IF([test $ompi_fc_happy -eq 1],
+           [OMPI_FORTRAN_CHECK_PREPROCESS_F90])
+ 
+-    # Per trac #1982, on OS X, we may need some esoteric linker flags
+-    # in the wrapper compilers.  However, per
+-    # https://github.com/open-mpi/ompi/issues/259, we need to use
+-    # -Wl,-flat_namespace when *building* the library (and
+-    # -Wl,-commons,use_dylibs isn't quite sufficient).
++    # Torrekie: Don't do flat namespace on modern Darwin
++    # https://github.com/open-mpi/ompi/issues/7766
+     AS_IF([test $ompi_fc_happy -eq 1],
+           [AC_MSG_CHECKING([to see if Fortran compilers need additional linker flags])
+            case "$host" in
+            *apple-darwin*)
+-               # Test whether -Wl,-flat_namespace works; if it does,
+-               # both use it to build the libraries, and also put it
+-               # in the wrapper compiler LDFLAGS.
+                LDFLAGS_save=$LDFLAGS
+-               LDFLAGS="$LDFLAGS -Wl,-flat_namespace"
++               LDFLAGS="$LDFLAGS -Wl,-twolevel_namespace"
+                AC_LANG_PUSH([Fortran])
+                AC_LINK_IFELSE([AC_LANG_SOURCE([[program test
+   integer :: i
+ end program]])],
+                               [LDFLAGS_save=$LDFLAGS
+-                               OMPI_FORTRAN_WRAPPER_FLAGS="-Wl,-flat_namespace"
++                               OMPI_FORTRAN_WRAPPER_FLAGS="-Wl,-twolevel_namespace"
+                                OPAL_WRAPPER_FLAGS_ADD([FCFLAGS], [$OMPI_FORTRAN_WRAPPER_FLAGS])],
+                               [OMPI_FORTRAN_WRAPPER_FLAGS=none])
+                AC_LANG_POP([Fortran])
