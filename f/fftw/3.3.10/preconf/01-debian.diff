@@ -1,0 +1,131 @@
+--- fftw-3.3.10/doc/FAQ/fftw-faq.bfnn	1607601764.000000000
++++ ./doc/FAQ/fftw-faq.bfnn	1693735244.448662628
+@@ -12,7 +12,7 @@
+ \call-html startup html.refs2
+ \copyto ASCII
+             FFTW FREQUENTLY ASKED QUESTIONS WITH ANSWERS
+-                            `date '+%d %h %Y'`
++
+ 			     Matteo Frigo
+ 			   Steven G. Johnson
+  			    <fftw@fftw.org>
+@@ -28,7 +28,7 @@ END-INFO-DIR-ENTRY
+ File: $prefix.info, Node: Top, Next: Question 1.1, Up: (dir)
+ 
+             FFTW FREQUENTLY ASKED QUESTIONS WITH ANSWERS
+-                            `date '+%d %h %Y'`
++
+ 			     Matteo Frigo
+ 			   Steven G. Johnson
+ 			    <fftw@fftw.org>
+--- fftw-3.3.10/doc/FAQ/m-html.pl	1607601764.000000000
++++ ./doc/FAQ/m-html.pl	1693735244.450844759
+@@ -33,8 +33,6 @@ sub html_init {
+     print HTML "<html>\n";
+     $html_needpara= -1;
+     $html_end='';
+-    chop($html_date=`date '+%d %B %Y'`);
+-    chop($html_year=`date '+%Y'`);
+ }
+ 
+ sub html_startup {
+@@ -70,11 +68,10 @@ END
+ }
+ 
+ sub html_close {
+-    print HTML $html_end,"<address>\n$user_author\n";
+-    print HTML "- $html_date\n</address><br>\n";
++    print HTML $html_end,"<address>\n$user_author\n</address><br>\n";
+     print HTML "Extracted from $user_title,\n";
+     print HTML "<A href=\"$html_copyrighthref\">" if length($html_copyrighthref);
+-    print HTML "Copyright &copy; $html_year $user_copyholder.";
++    print HTML "Copyright &copy; 2015 $user_copyholder.";
+     print HTML "</A>" if length($html_copyrighthref);
+     print HTML "\n</body></html>\n";
+     close(HTML);
+--- fftw-3.3.10/simd-support/neon.c	1607601764.000000000
++++ ./simd-support/neon.c	1693735243.847129049
+@@ -23,54 +23,38 @@
+ 
+ #if HAVE_NEON
+ 
+-/* check for an environment where signals are known to work */
+-#if defined(unix) || defined(linux)
+-  # include <signal.h>
+-  # include <setjmp.h>
+-
+-  static jmp_buf jb;
+-
+-  static void sighandler(int x)
+-  {
+-       UNUSED(x);
+-       longjmp(jb, 1);
+-  }
+-
+-  static int really_have_neon(void)
+-  {
+-       void (*oldsig)(int);
+-       oldsig = signal(SIGILL, sighandler);
+-       if (setjmp(jb)) {
+-	    signal(SIGILL, oldsig);
+-	    return 0;
+-       } else {
+-	    /* paranoia: encode the instruction in binary because the
+-	       assembler may not recognize it without -mfpu=neon */
+-	    /*asm volatile ("vand q0, q0, q0");*/
+-	    asm volatile (".long 0xf2000150");
+-	    signal(SIGILL, oldsig);
+-	    return 1;
+-       }
+-  }
+-
+-  int X(have_simd_neon)(void)
+-  {
+-       static int init = 0, res;
+-
+-       if (!init) {
+-	    res = really_have_neon();
+-	    init = 1;
+-       }
+-       return res;
+-  }
+ 
++#if defined(__aarch64__) || defined(__arm64__)
++
++/* HWCAP_ASIMD is defined in <asm/hwcap.h> but not included by <sys/auxv.h>.
++   Since all current AArch64 implementations have NEON/ASIMD it is probably
++   better to return 1 than include a header file which is not intended for
++   use by user programs. */
++
++int X(have_simd_neon)(void)
++{
++  return 1;
++}
+ 
+ #else
+-/* don't know how to autodetect NEON; assume it is present */
+-  int X(have_simd_neon)(void)
+-  {
+-       return 1;
+-  }
++
++#include <sys/auxv.h>
++
++int X(have_simd_neon)(void)
++{
++  static int cached = 2;
++  int ret;
++
++  /* This should be thread-safe in all reasonable circumstances. */
++  ret = cached;
++  if (ret == 2)
++    {
++      ret = !!(getauxval(AT_HWCAP) & HWCAP_ARM_NEON);
++      cached = ret;
++    }
++  return ret;
++}
++
+ #endif
+ 
+ #endif

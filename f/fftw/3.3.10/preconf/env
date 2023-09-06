@@ -1,0 +1,4 @@
+CC=gcc-13
+CXX=g++-13
+FC=gfortran
+MPILIBS="$(shell mpicc --showme:link)"
