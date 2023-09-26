@@ -1,4 +1,6 @@
 LDFLAGS="-L/usr/libexec/openmp/lib -lomp"
 CFLAGS="-I/usr/libexec/openmp/include"
+CXXFLAGS="-I/usr/libexec/openmp/include"
+CPPFLAGS="-I/usr/libexec/openmp/include"
 ac_cv_prog_c_openmp="-Xpreprocessor -fopenmp"
 ac_cv_prog_cxx_openmp="-Xpreprocessor -fopenmp"
