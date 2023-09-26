@@ -1,0 +1,224 @@
+--- a/extract.c	1695636942.754717504
++++ b/extract.c	1695635920.602608039
+@@ -629,7 +629,7 @@ int extract_or_test_files(__G)    /* ret
+                      */
+                     Info(slide, 0x401, ((char *)slide,
+                       LoadFarString(CentSigMsg), j + blknum*DIR_BLKSIZ + 1));
+-                    Info(slide, 0x401, ((char *)slide,
++                    Info(slide, 0x401, ((char *)slide, "%s",
+                       LoadFarString(ReportMsg)));
+                     error_in_archive = PK_BADERR;
+                 }
+@@ -910,8 +910,8 @@ int extract_or_test_files(__G)    /* ret
+ 
+ #ifndef SFX
+     if (no_endsig_found) {                      /* just to make sure */
+-        Info(slide, 0x401, ((char *)slide, LoadFarString(EndSigMsg)));
+-        Info(slide, 0x401, ((char *)slide, LoadFarString(ReportMsg)));
++        Info(slide, 0x401, ((char *)slide, "%s", LoadFarString(EndSigMsg)));
++        Info(slide, 0x401, ((char *)slide, "%s", LoadFarString(ReportMsg)));
+         if (!error_in_archive)       /* don't overwrite stronger error */
+             error_in_archive = PK_WARN;
+     }
+--- a/fileio.c	1695636942.757052229
++++ b/fileio.c	1695635961.761845706
+@@ -2310,8 +2310,11 @@ int do_string(__G__ length, option)   /*
+             seek_zipf(__G__ G.cur_zipfile_bufstart - G.extra_bytes +
+                       (G.inptr-G.inbuf) + length);
+         } else {
+-            if (readbuf(__G__ (char *)G.extra_field, length) == 0)
++            unsigned bytes_read = readbuf(__G__ (char *)G.extra_field, length);
++            if (bytes_read == 0)
+                 return PK_EOF;
++            if (bytes_read != length)
++                return PK_ERR;
+             /* Looks like here is where extra fields are read */
+             if (getZip64Data(__G__ G.extra_field, length) != PK_COOL)
+             {
+--- a/list.c	1695636942.762498376
++++ b/list.c	1695635920.604155897
+@@ -181,7 +181,7 @@ int list_files(__G)    /* return PK-type
+                 Info(slide, 0x401,
+                      ((char *)slide, LoadFarString(CentSigMsg), j));
+                 Info(slide, 0x401,
+-                     ((char *)slide, LoadFarString(ReportMsg)));
++                     ((char *)slide, "%s", LoadFarString(ReportMsg)));
+                 return PK_BADERR;   /* sig not found */
+             }
+         }
+@@ -518,7 +518,7 @@ int list_files(__G)    /* return PK-type
+             && (!G.ecrec.is_zip64_archive)
+             && (memcmp(G.sig, end_central_sig, 4) != 0)
+            ) {          /* just to make sure again */
+-            Info(slide, 0x401, ((char *)slide, LoadFarString(EndSigMsg)));
++            Info(slide, 0x401, ((char *)slide, "%s", LoadFarString(EndSigMsg)));
+             error_in_archive = PK_WARN;   /* didn't find sig */
+         }
+ 
+@@ -602,7 +602,7 @@ int get_time_stamp(__G__ last_modtime, n
+                 Info(slide, 0x401,
+                      ((char *)slide, LoadFarString(CentSigMsg), j));
+                 Info(slide, 0x401,
+-                     ((char *)slide, LoadFarString(ReportMsg)));
++                     ((char *)slide, "%s", LoadFarString(ReportMsg)));
+                 return PK_BADERR;   /* sig not found */
+             }
+         }
+@@ -685,7 +685,7 @@ int get_time_stamp(__G__ last_modtime, n
+   ---------------------------------------------------------------------------*/
+ 
+     if (memcmp(G.sig, end_central_sig, 4)) {    /* just to make sure again */
+-        Info(slide, 0x401, ((char *)slide, LoadFarString(EndSigMsg)));
++        Info(slide, 0x401, ((char *)slide, "%s", LoadFarString(EndSigMsg)));
+         error_in_archive = PK_WARN;
+     }
+     if (*nmember == 0L && error_in_archive <= PK_WARN)
+--- a/man/unzip.1	1695636942.765687424
++++ b/man/unzip.1	1695635938.293276556
+@@ -307,9 +307,6 @@ Zip archive items.  (Here, a single \fB\
+ with the default \fB\-D\fP to do what an explicit \fB\-DD\fP does on other
+ systems.)
+ .TP
+-.B \-E
+-[MacOS only] display contents of MacOS extra field during restore operation.
+-.TP
+ .B \-F
+ [Acorn only] suppress removal of NFS filetype extension from stored filenames.
+ .TP
+@@ -321,11 +318,6 @@ NFS filetype extension and append it to
+ (When the stored filename appears to already have an appended NFS filetype
+ extension, it is replaced by the info from the extra field.)
+ .TP
+-.B \-i
+-[MacOS only] ignore filenames stored in MacOS extra fields. Instead, the
+-most compatible filename stored in the generic part of the entry's header
+-is used.
+-.TP
+ .B \-j
+ junk paths.  The archive's directory structure is not recreated; all files
+ are deposited in the extraction directory (by default, the current one).
+@@ -334,10 +326,6 @@ are deposited in the extraction director
+ [BeOS only] junk file attributes.  The file's BeOS file attributes are not
+ restored, just the file's data.
+ .TP
+-.B \-J
+-[MacOS only] ignore MacOS extra fields.  All Macintosh specific info
+-is skipped. Data-fork and resource-fork are restored as separate files.
+-.TP
+ .B \-K
+ [AtheOS, BeOS, Unix only] retain SUID/SGID/Tacky file attributes.  Without
+ this flag, these attribute bits are cleared for security reasons.
+--- a/process.c	1695636942.771864689
++++ b/process.c	1695635961.763311856
+@@ -2067,10 +2067,14 @@ int getUnicodeData(__G__ ef_buf, ef_len)
+           G.unipath_checksum = makelong(offset + ef_buf);
+           offset += 4;
+ 
++          if (!G.filename_full) {
++            /* Check if we have a unicode extra section but no filename set */
++            return PK_ERR;
++          }
++
+           /*
+            * Compute 32-bit crc
+            */
+-
+           chksum = crc32(chksum, (uch *)(G.filename_full),
+                          strlen(G.filename_full));
+ 
+--- a/unix/unix.c	1695636942.773850917
++++ b/unix/unix.c	1695636926.490978684
+@@ -71,6 +71,13 @@
+ #  endif
+ #endif /* ?DIRENT */
+ 
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#  if !TARGET_OS_EMBEDDED
++#    include <quarantine.h>
++#  endif
++#endif
++
+ #ifdef SET_DIR_ATTRIB
+ typedef struct uxdirattr {      /* struct for holding unix style directory */
+     struct uxdirattr *next;     /*  info until can be sorted and set at end */
+@@ -748,6 +755,24 @@ int mapname(__G__ renamed)
+ /* Function checkdir() */
+ /***********************/
+ 
++static int
++mkdir_qtn(int zipfd, const char *path, int mode)
++{
++    int r = mkdir(path, mode);
++
++    if (r != 0 && errno != EEXIST)
++        return r;
++#if !TARGET_OS_EMBEDDED
++    qtn_file_t qf = qtn_file_alloc();
++    if (qf != NULL) {
++        if (qtn_file_init_with_fd(qf, zipfd) == 0) {
++            (void)qtn_file_apply_to_path(qf, path);
++        }
++        qtn_file_free(qf);
++    }
++#endif
++}
++
+ int checkdir(__G__ pathcomp, flag)
+     __GDEF
+     char *pathcomp;
+@@ -814,7 +839,7 @@ int checkdir(__G__ pathcomp, flag)
+                 /* no room for filenames:  fatal */
+                 return MPN_ERR_TOOLONG;
+             }
+-            if (mkdir(G.buildpath, 0777) == -1) {   /* create the directory */
++            if (mkdir_qtn(G.zipfd, G.buildpath, 0777) == -1) {   /* create the directory */
+                 Info(slide, 1, ((char *)slide,
+                   "checkdir error:  cannot create %s\n\
+                  %s\n\
+@@ -963,7 +988,7 @@ int checkdir(__G__ pathcomp, flag)
+                 }
+                 /* create the directory (could add loop here scanning tmproot
+                  * to create more than one level, but why really necessary?) */
+-                if (mkdir(tmproot, 0777) == -1) {
++                if (mkdir_qtn(G.zipfd, tmproot, 0777) == -1) {
+                     Info(slide, 1, ((char *)slide,
+                       "checkdir:  cannot create extraction directory: %s\n\
+            %s\n",
+@@ -1108,7 +1133,15 @@ void close_outfile(__G)    /* GRR: chang
+     } zt;
+     ulg z_uidgid[2];
+     int have_uidgid_flg;
+-
++#if !TARGET_OS_EMBEDDED
++    qtn_file_t qf = qtn_file_alloc();
++    if (qf != NULL) {
++        if (qtn_file_init_with_fd(qf, G.zipfd) == 0) {
++            (void)qtn_file_apply_to_fd(qf, fileno(G.outfile));
++        }
++        qtn_file_free(qf);
++    }
++#endif
+     have_uidgid_flg = get_extattribs(__G__ &(zt.t3), z_uidgid);
+ 
+ /*---------------------------------------------------------------------------
+--- a/zipinfo.c	1695636942.780970796
++++ b/zipinfo.c	1695635920.605703004
+@@ -771,7 +771,7 @@ int zipinfo(__G)   /* return PK-type err
+                 Info(slide, 0x401,
+                      ((char *)slide, LoadFarString(CentSigMsg), j));
+                 Info(slide, 0x401,
+-                     ((char *)slide, LoadFarString(ReportMsg)));
++                     ((char *)slide, "%s", LoadFarString(ReportMsg)));
+                 error_in_archive = PK_BADERR;   /* sig not found */
+                 break;
+             }
+@@ -960,7 +960,7 @@ int zipinfo(__G)   /* return PK-type err
+             && (!G.ecrec.is_zip64_archive)
+             && (memcmp(G.sig, end_central_sig, 4) != 0)
+            ) {          /* just to make sure again */
+-            Info(slide, 0x401, ((char *)slide, LoadFarString(EndSigMsg)));
++            Info(slide, 0x401, ((char *)slide, "%s", LoadFarString(EndSigMsg)));
+             error_in_archive = PK_WARN;   /* didn't find sig */
+         }
+ 
