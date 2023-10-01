@@ -1,0 +1,108 @@
+--- alibdjvu/DataPool.cpp	1605891452.000000000
++++ b/libdjvu/DataPool.cpp	1693983783.468329302
+@@ -791,6 +791,8 @@ DataPool::create(const GP<DataPool> & po
+   DEBUG_MSG("DataPool::DataPool: pool=" << (void *)((DataPool *)pool) << " start=" << start << " length= " << length << "\n");
+   DEBUG_MAKE_INDENT(3);
+ 
++  if (!pool) G_THROW( ERR_MSG("DataPool.zero_DataPool") );
++
+   DataPool *xpool=new DataPool();
+   GP<DataPool> retval=xpool;
+   xpool->init();
+--- alibdjvu/DjVuPort.cpp	1605891452.000000000
++++ b/libdjvu/DjVuPort.cpp	1693983784.041081374
+@@ -507,10 +507,19 @@ GP<DjVuFile>
+ DjVuPortcaster::id_to_file(const DjVuPort * source, const GUTF8String &id)
+ {
+    GPList<DjVuPort> list;
++
++   if (!!opening_id && opening_id == id)
++      G_THROW("DjVuPortcaster: recursive opening of the same file (corrupted file?)");
++   else
++      opening_id = id;
++
+    compute_closure(source, list, true);
+    GP<DjVuFile> file;
+    for(GPosition pos=list;pos;++pos)
+       if ((file=list[pos]->id_to_file(source, id))) break;
++
++   opening_id = GUTF8String();
++
+    return file;
+ }
+ 
+--- alibdjvu/DjVuPort.h	1605891452.000000000
++++ b/libdjvu/DjVuPort.h	1693983784.041647868
+@@ -484,6 +484,7 @@ private:
+                        const DjVuPort *dst, int distance);
+    void compute_closure(const DjVuPort *src, GPList<DjVuPort> &list,
+                         bool sorted=false);
++   GUTF8String opening_id;
+ };
+ 
+ 
+--- alibdjvu/GBitmap.cpp	1605891452.000000000
++++ b/libdjvu/GBitmap.cpp	1693983784.616336920
+@@ -69,6 +69,7 @@
+ #include <stddef.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <limits.h>
+ 
+ // - Author: Leon Bottou, 05/1997
+ 
+@@ -1284,6 +1285,8 @@ GBitmap::decode(unsigned char *runs)
+   // initialize pixel array
+   if (nrows==0 || ncolumns==0)
+     G_THROW( ERR_MSG("GBitmap.not_init") );
++  if (ncolumns > USHRT_MAX - border)
++    G_THROW("GBitmap: row size exceeds maximum (corrupted file?)");
+   bytes_per_row = ncolumns + border;
+   if (runs==0)
+     G_THROW( ERR_MSG("GBitmap.null_arg") );
+--- alibdjvu/GSmartPointer.h	1605891452.000000000
++++ b/libdjvu/GSmartPointer.h	1693983781.142650579
+@@ -62,6 +62,8 @@
+ # pragma interface
+ #endif
+ 
++#include <cstddef>
++
+ /** @name GSmartPointer.h
+ 
+     Files #"GSmartPointer.h"# and #"GSmartPointer.cpp"# define a smart-pointer
+--- alibdjvu/IW44Image.cpp	1605891452.000000000
++++ b/libdjvu/IW44Image.cpp	1693983782.323459314
+@@ -678,7 +678,11 @@ IW44Image::Map::image(signed char *img8,
+   size_t sz = bw * bh;
+   if (sz / (size_t)bw != (size_t)bh) // multiplication overflow
+     G_THROW("IW44Image: image size exceeds maximum (corrupted file?)");
++  if (sz == 0)
++    G_THROW("IW44Image: zero size image (corrupted file?)");
+   GPBuffer<short> gdata16(data16,sz);
++  if (data16 == NULL)
++    G_THROW("IW44Image: unable to allocate image data");
+   // Copy coefficients
+   int i;
+   short *p = data16;
+--- atools/ddjvu.cpp	1605891452.000000000
++++ b/tools/ddjvu.cpp	1693983782.896344679
+@@ -70,6 +70,7 @@
+ #include <locale.h>
+ #include <fcntl.h>
+ #include <errno.h>
++#include <stdint.h>
+ 
+ #ifdef UNIX
+ # include <sys/time.h>
+@@ -394,7 +395,9 @@ render(ddjvu_page_t *page, int pageno)
+     rowsize = rrect.w;
+   else
+     rowsize = rrect.w * 3; 
+-  if (! (image = (char*)malloc(rowsize * rrect.h)))
++  if ((size_t)rowsize > SIZE_MAX / rrect.h)
++    die(i18n("Integer overflow when allocating image buffer for page %d"), pageno);
++  if (! (image = (char*)malloc((size_t)rowsize * rrect.h)))
+     die(i18n("Cannot allocate image buffer for page %d"), pageno);
+ 
+   /* Render */
