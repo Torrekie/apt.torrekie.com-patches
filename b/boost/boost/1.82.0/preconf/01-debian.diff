@@ -1,0 +1,195 @@
+--- a/libs/circular_buffer/doc/circular_buffer.qbk	1681442084.000000000
++++ b/libs/circular_buffer/doc/circular_buffer.qbk	1694427127.396488263
+@@ -596,8 +596,6 @@ Paul A. Bristow refactored the documenta
+ 
+ [section:version_id Documentation Version Info]
+ 
+-Last edit to Quickbook file __FILENAME__ was at __TIME__ on __DATE__.
+-
+ [tip This should appear on the pdf version
+ (but may be redundant on a html version where the last edit date is on the first (home) page).]
+ 
+--- a/libs/mpi/build/__init__.py	1681442110.000000000
++++ b/libs/mpi/build/__init__.py	1694427224.455071068
+@@ -5,6 +5,8 @@ if sys.platform == 'linux2':
+     sys.setdlopenflags(dl.RTLD_NOW|dl.RTLD_GLOBAL)
+     import mpi
+     sys.setdlopenflags(flags)
++if sys.platform == 'linux':
++    from . import mpi
+ else:
+     import mpi
+ 
+--- a/libs/numeric/interval/include/boost/numeric/interval/detail/ppc_rounding_control.hpp	1681442114.000000000
++++ b/libs/numeric/interval/include/boost/numeric/interval/detail/ppc_rounding_control.hpp	1694427231.179627066
+@@ -28,10 +28,10 @@ typedef union {
+   double dmode;
+ } rounding_mode_struct;
+ 
+-static const rounding_mode_struct mode_upward      = { 0xFFF8000000000002LL };
+-static const rounding_mode_struct mode_downward    = { 0xFFF8000000000003LL };
+-static const rounding_mode_struct mode_to_nearest  = { 0xFFF8000000000000LL };
+-static const rounding_mode_struct mode_toward_zero = { 0xFFF8000000000001LL };
++static const rounding_mode_struct mode_upward      = { (::boost::long_long_type)0xFFF8000000000002LL };
++static const rounding_mode_struct mode_downward    = { (::boost::long_long_type)0xFFF8000000000003LL };
++static const rounding_mode_struct mode_to_nearest  = { (::boost::long_long_type)0xFFF8000000000000LL };
++static const rounding_mode_struct mode_toward_zero = { (::boost::long_long_type)0xFFF8000000000001LL };
+ 
+ struct ppc_rounding_control
+ {
+--- a/libs/phoenix/include/boost/phoenix/stl/tuple.hpp	1681442118.000000000
++++ b/libs/phoenix/include/boost/phoenix/stl/tuple.hpp	1694427219.235373361
+@@ -110,7 +110,7 @@ namespace boost { namespace phoenix {
+     namespace placeholders {
+         #define BOOST_PP_LOCAL_LIMITS (1, BOOST_PHOENIX_ARG_LIMIT)
+         #define BOOST_PP_LOCAL_MACRO(N)                                                \
+-            auto uarg##N =                                                             \
++            auto const uarg##N =                                                       \
+             boost::phoenix::get_<(N)-1>(boost::phoenix::placeholders::arg1);
+         #include BOOST_PP_LOCAL_ITERATE()
+     }
+--- a/libs/units/doc/units.qbk	1681442143.000000000
++++ b/libs/units/doc/units.qbk	1694427127.398321169
+@@ -1309,7 +1309,6 @@ the design and implementation of this li
+ 
+ __boostroot
+ 
+-Last edit to Quickbook file __FILENAME__ was at __TIME__ on __DATE__.
+ 
+ [tip This should appear on the pdf version (but may be redundant on html).]
+ [/ Useful on pdf version. See also Last revised timestamp on first page of html version.]
+--- a/tools/build/src/tools/python.jam	1681442151.000000000
++++ b/tools/build/src/tools/python.jam	1694427227.228567278
+@@ -954,8 +954,32 @@ local rule configure ( version ? : cmd-o
+     toolset.add-requirements
+         "$(target-requirements:J=,):<python.interpreter>$(interpreter-cmd)" ;
+ 
+-    # Register the right suffix for extensions.
+-    register-extension-suffix $(extension-suffix) : $(target-requirements) ;
++    #
++    # Discover and set extension suffix
++    #
++    debug-message "Checking for extension suffix..." ;
++    local full-cmd = "from __future__ import print_function; import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))" ;
++    local full-cmd = $(interpreter-cmd)" -c \"$(full-cmd)\"" ;
++    debug-message "running command '$(full-cmd)'" ;
++    local result = [ SHELL $(full-cmd) : strip-eol : exit-status ] ;
++    if $(result[2]) = 0
++    {
++        debug-message "Python extenssion suffix is $(result[1])" ;
++        type.set-generated-target-suffix PYTHON_EXTENSION : $(target-requirements) : <$(result[1])> ;
++    }
++    else
++    {
++        debug-message "Failed to determine python extension suffix" ;
++        debug-message "Falling back to old behaviour" ;
++        if $(target-os) = windows && <python-debugging>on in $(condition)
++        {
++            extension-suffix ?= _d ;
++        }
++        extension-suffix ?= "" ;
++
++        # Register the right suffix for extensions.
++        register-extension-suffix $(extension-suffix) : $(target-requirements) ;
++    }
+ 
+     # Make sure that the python feature is always considered
+     # relevant for any targets that depend on python.  Without
+--- a/tools/quickbook/doc/block.qbk	1681442152.000000000
++++ b/tools/quickbook/doc/block.qbk	1694427215.563235403
+@@ -557,14 +557,12 @@ character or the underscore. The replace
+ marked up). Example:
+ 
+ ```
+-[def sf_logo [$http://sourceforge.net/sflogo.php?group_id=28447&amp;type=1]]
++[def sf_logo []]
+ sf_logo
+ ```
+ 
+ Now everywhere the sf_logo is placed, the picture will be inlined.
+ 
+-[def sf_logo [$http://sourceforge.net/sflogo.php?group_id=28447&type=1]]
+-sf_logo
+ 
+ [tip It's a good idea to use macro identifiers that are distinguishable.
+ For instance, in this document, macro identifiers have two leading and
+@@ -604,8 +602,8 @@ Quickbook has some predefined macros tha
+ 
+ [table Predefined Macros
+     [[Macro]           [Meaning]                       [Example]]
+-    [[[^\__DATE__]]    [Today's date]                  [__DATE__]]
+-    [[[^\__TIME__]]    [The current time]              [__TIME__]]
++    [[[^\__DATE__]]    [Today's date]                  [2022-04-20]]
++    [[[^\__TIME__]]    [The current time]              [01:42:48 PM]]
+     [[[^\__FILENAME__]][Quickbook source filename]     [__FILENAME__]]
+ ]
+ 
+--- a/tools/quickbook/test/quickbook_manual-1_4.gold	1681442152.000000000
++++ b/tools/quickbook/test/quickbook_manual-1_4.gold	1694427215.565348015
+@@ -1756,14 +1756,10 @@ escape (no processing/formatting)
+           character or the underscore. The replacement text can be any phrase (even
+           marked up). Example:
+         </para>
+-<programlisting><!--quickbook-escape-prefix-->[def sf_logo [$http://sourceforge.net/sflogo.php?group_id=28447&amp;type=1]]
+-sf_logo
+-<!--quickbook-escape-postfix--></programlisting>
+         <para>
+           Now everywhere the sf_logo is placed, the picture will be inlined.
+         </para>
+         <para>
+-          <inlinemediaobject><imageobject><imagedata fileref="http://sourceforge.net/sflogo.php?group_id=28447&amp;type=1"></imagedata></imageobject>
+           <textobject>
+             <phrase>sflogo</phrase>
+           </textobject>
+--- a/tools/quickbook/test/quickbook_manual-1_4.gold-html	1681442152.000000000
++++ b/tools/quickbook/test/quickbook_manual-1_4.gold-html	1694427215.567336837
+@@ -1934,16 +1934,9 @@ escape (no processing/formatting)
+               an alphabetic character or the underscore. The replacement text can
+               be any phrase (even marked up). Example:
+             </p>
+-<pre class="programlisting">[def sf_logo [$http://sourceforge.net/sflogo.php?group_id=28447&amp;type=1]]
+-sf_logo
+-</pre>
+             <p>
+               Now everywhere the sf_logo is placed, the picture will be inlined.
+             </p>
+-            <p>
+-              <span class="inlinemediaobject"><img src="http://sourceforge.net/sflogo.php?group_id=28447&amp;type=1"
+-              alt="[]"/></span>
+-            </p>
+             <div class="tip">
+               <p>
+                 It's a good idea to use macro identifiers that are distinguishable.
+@@ -3280,7 +3273,6 @@ boostbook standalone
+     :
+         my_doc
+     :
+-        &lt;xsl:param&gt;boost.image.src=images/my_project_logo.png
+         &lt;xsl:param&gt;boost.image.alt=&quot;\&quot;My Project\&quot;&quot;
+         &lt;xsl:param&gt;boost.image.w=100
+         &lt;xsl:param&gt;boost.image.h=50
+--- a/tools/quickbook/test/quickbook_manual-1_4.quickbook	1681442152.000000000
++++ b/tools/quickbook/test/quickbook_manual-1_4.quickbook	1694427215.568524872
+@@ -1081,14 +1081,9 @@ white space characters except '\]'. A ma
+ character or the underscore. The replacement text can be any phrase (even
+ marked up). Example:
+ 
+-[pre'''
+-[def sf_logo [$http://sourceforge.net/sflogo.php?group_id=28447&amp;type=1]]
+-sf_logo
+-''']
+ 
+ Now everywhere the sf_logo is placed, the picture will be inlined.
+ 
+-[def sf_logo [$http://sourceforge.net/sflogo.php?group_id=28447&type=1]]
+ sf_logo
+ 
+ [tip It's a good idea to use macro identifiers that are distinguishable.
+@@ -1878,7 +1873,6 @@ boostbook standalone
+     :
+         my_doc
+     :
+-        <xsl:param>boost.image.src=images/my_project_logo.png
+         <xsl:param>boost.image.alt="\\"My Project\\""
+         <xsl:param>boost.image.w=100
+         <xsl:param>boost.image.h=50

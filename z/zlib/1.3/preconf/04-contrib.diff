@@ -1,0 +1,6183 @@
+--- a/contrib/amd64/amd64-match.S	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/amd64/amd64-match.S	1695412879.000000000
+@@ -0,0 +1,452 @@
++/*
++ * match.S -- optimized version of longest_match()
++ * based on the similar work by Gilles Vollant, and Brian Raiter, written 1998
++ *
++ * This is free software; you can redistribute it and/or modify it
++ * under the terms of the BSD License. Use by owners of Che Guevarra
++ * parafernalia is prohibited, where possible, and highly discouraged
++ * elsewhere.
++ */
++
++#ifndef NO_UNDERLINE
++#	define	match_init	_match_init
++#	define	longest_match	_longest_match
++#endif
++
++#define	scanend		ebx
++#define	scanendw	bx
++#define	chainlenwmask	edx /* high word: current chain len low word: s->wmask */
++#define	curmatch	rsi
++#define	curmatchd	esi
++#define	windowbestlen	r8
++#define	scanalign	r9
++#define	scanalignd	r9d
++#define	window		r10
++#define	bestlen		r11
++#define	bestlend	r11d
++#define	scanstart	r12d
++#define	scanstartw	r12w
++#define scan		r13
++#define nicematch	r14d
++#define	limit		r15
++#define	limitd		r15d
++#define prev		rcx
++
++/*
++ * The 258 is a "magic number, not a parameter -- changing it
++ * breaks the hell loose
++ */
++#define	MAX_MATCH	(258)
++#define	MIN_MATCH	(3)
++#define	MIN_LOOKAHEAD	(MAX_MATCH + MIN_MATCH + 1)
++#define	MAX_MATCH_8	((MAX_MATCH + 7) & ~7)
++
++/* stack frame offsets */
++#define	LocalVarsSize	(112)
++#define _chainlenwmask	( 8-LocalVarsSize)(%rsp)
++#define _windowbestlen	(16-LocalVarsSize)(%rsp)
++#define save_r14        (24-LocalVarsSize)(%rsp)
++#define save_rsi        (32-LocalVarsSize)(%rsp)
++#define save_rbx        (40-LocalVarsSize)(%rsp)
++#define save_r12        (56-LocalVarsSize)(%rsp)
++#define save_r13        (64-LocalVarsSize)(%rsp)
++#define save_r15        (80-LocalVarsSize)(%rsp)
++
++
++.globl	match_init, longest_match
++
++/*
++ * On AMD64 the first argument of a function (in our case -- the pointer to
++ * deflate_state structure) is passed in %rdi, hence our offsets below are
++ * all off of that.
++ */
++
++/* you can check the structure offset by running
++
++#include <stdlib.h>
++#include <stdio.h>
++#include "deflate.h"
++
++void print_depl()
++{
++deflate_state ds;
++deflate_state *s=&ds;
++printf("size pointer=%u\n",(int)sizeof(void*));
++
++printf("#define dsWSize         (%3u)(%%rdi)\n",(int)(((char*)&(s->w_size))-((char*)s)));
++printf("#define dsWMask         (%3u)(%%rdi)\n",(int)(((char*)&(s->w_mask))-((char*)s)));
++printf("#define dsWindow        (%3u)(%%rdi)\n",(int)(((char*)&(s->window))-((char*)s)));
++printf("#define dsPrev          (%3u)(%%rdi)\n",(int)(((char*)&(s->prev))-((char*)s)));
++printf("#define dsMatchLen      (%3u)(%%rdi)\n",(int)(((char*)&(s->match_length))-((char*)s)));
++printf("#define dsPrevMatch     (%3u)(%%rdi)\n",(int)(((char*)&(s->prev_match))-((char*)s)));
++printf("#define dsStrStart      (%3u)(%%rdi)\n",(int)(((char*)&(s->strstart))-((char*)s)));
++printf("#define dsMatchStart    (%3u)(%%rdi)\n",(int)(((char*)&(s->match_start))-((char*)s)));
++printf("#define dsLookahead     (%3u)(%%rdi)\n",(int)(((char*)&(s->lookahead))-((char*)s)));
++printf("#define dsPrevLen       (%3u)(%%rdi)\n",(int)(((char*)&(s->prev_length))-((char*)s)));
++printf("#define dsMaxChainLen   (%3u)(%%rdi)\n",(int)(((char*)&(s->max_chain_length))-((char*)s)));
++printf("#define dsGoodMatch     (%3u)(%%rdi)\n",(int)(((char*)&(s->good_match))-((char*)s)));
++printf("#define dsNiceMatch     (%3u)(%%rdi)\n",(int)(((char*)&(s->nice_match))-((char*)s)));
++}
++
++*/
++
++
++/*
++  to compile for XCode 3.2 on MacOSX x86_64
++  - run "gcc -g -c -DXCODE_MAC_X64_STRUCTURE amd64-match.S"
++ */
++
++
++#ifndef CURRENT_LINX_XCODE_MAC_X64_STRUCTURE
++#define dsWSize		( 68)(%rdi)
++#define dsWMask		( 76)(%rdi)
++#define dsWindow	( 80)(%rdi)
++#define dsPrev		( 96)(%rdi)
++#define dsMatchLen	(144)(%rdi)
++#define dsPrevMatch	(148)(%rdi)
++#define dsStrStart	(156)(%rdi)
++#define dsMatchStart	(160)(%rdi)
++#define dsLookahead	(164)(%rdi)
++#define dsPrevLen	(168)(%rdi)
++#define dsMaxChainLen	(172)(%rdi)
++#define dsGoodMatch	(188)(%rdi)
++#define dsNiceMatch	(192)(%rdi)
++
++#else 
++
++#ifndef STRUCT_OFFSET
++#	define STRUCT_OFFSET	(0)
++#endif
++
++
++#define dsWSize		( 56 + STRUCT_OFFSET)(%rdi)
++#define dsWMask		( 64 + STRUCT_OFFSET)(%rdi)
++#define dsWindow	( 72 + STRUCT_OFFSET)(%rdi)
++#define dsPrev		( 88 + STRUCT_OFFSET)(%rdi)
++#define dsMatchLen	(136 + STRUCT_OFFSET)(%rdi)
++#define dsPrevMatch	(140 + STRUCT_OFFSET)(%rdi)
++#define dsStrStart	(148 + STRUCT_OFFSET)(%rdi)
++#define dsMatchStart	(152 + STRUCT_OFFSET)(%rdi)
++#define dsLookahead	(156 + STRUCT_OFFSET)(%rdi)
++#define dsPrevLen	(160 + STRUCT_OFFSET)(%rdi)
++#define dsMaxChainLen	(164 + STRUCT_OFFSET)(%rdi)
++#define dsGoodMatch	(180 + STRUCT_OFFSET)(%rdi)
++#define dsNiceMatch	(184 + STRUCT_OFFSET)(%rdi)
++
++#endif
++
++
++
++
++.text
++
++/* uInt longest_match(deflate_state *deflatestate, IPos curmatch) */
++
++longest_match:
++/*
++ * Retrieve the function arguments. %curmatch will hold cur_match
++ * throughout the entire function (passed via rsi on amd64).
++ * rdi will hold the pointer to the deflate_state (first arg on amd64)
++ */
++		mov     %rsi, save_rsi
++		mov     %rbx, save_rbx
++		mov	%r12, save_r12
++		mov     %r13, save_r13
++		mov     %r14, save_r14
++		mov     %r15, save_r15
++
++/* uInt wmask = s->w_mask;						*/
++/* unsigned chain_length = s->max_chain_length;				*/
++/* if (s->prev_length >= s->good_match) {				*/
++/*     chain_length >>= 2;						*/
++/* }									*/
++
++		movl	dsPrevLen, %eax
++		movl	dsGoodMatch, %ebx
++		cmpl	%ebx, %eax
++		movl	dsWMask, %eax
++		movl	dsMaxChainLen, %chainlenwmask
++		jl	LastMatchGood
++		shrl	$2, %chainlenwmask
++LastMatchGood:
++
++/* chainlen is decremented once beforehand so that the function can	*/
++/* use the sign flag instead of the zero flag for the exit test.	*/
++/* It is then shifted into the high word, to make room for the wmask	*/
++/* value, which it will always accompany.				*/
++
++		decl	%chainlenwmask
++		shll	$16, %chainlenwmask
++		orl	%eax, %chainlenwmask
++
++/* if ((uInt)nice_match > s->lookahead) nice_match = s->lookahead;	*/
++
++		movl	dsNiceMatch, %eax
++		movl	dsLookahead, %ebx
++		cmpl	%eax, %ebx
++		jl	LookaheadLess
++		movl	%eax, %ebx
++LookaheadLess:	movl	%ebx, %nicematch
++
++/* register Bytef *scan = s->window + s->strstart;			*/
++
++		mov	dsWindow, %window
++		movl	dsStrStart, %limitd
++		lea	(%limit, %window), %scan
++
++/* Determine how many bytes the scan ptr is off from being		*/
++/* dword-aligned.							*/
++
++		mov	%scan, %scanalign
++		negl	%scanalignd
++		andl	$3, %scanalignd
++
++/* IPos limit = s->strstart > (IPos)MAX_DIST(s) ?			*/
++/*     s->strstart - (IPos)MAX_DIST(s) : NIL;				*/
++
++		movl	dsWSize, %eax
++		subl	$MIN_LOOKAHEAD, %eax
++		xorl	%ecx, %ecx
++		subl	%eax, %limitd
++		cmovng	%ecx, %limitd
++
++/* int best_len = s->prev_length;					*/
++
++		movl	dsPrevLen, %bestlend
++
++/* Store the sum of s->window + best_len in %windowbestlen locally, and in memory.	*/
++
++		lea	(%window, %bestlen), %windowbestlen
++		mov	%windowbestlen, _windowbestlen
++
++/* register ush scan_start = *(ushf*)scan;				*/
++/* register ush scan_end   = *(ushf*)(scan+best_len-1);			*/
++/* Posf *prev = s->prev;						*/
++
++		movzwl	(%scan), %scanstart
++		movzwl	-1(%scan, %bestlen), %scanend
++		mov	dsPrev, %prev
++
++/* Jump into the main loop.						*/
++
++		movl	%chainlenwmask, _chainlenwmask
++		jmp	LoopEntry
++
++.balign 16
++
++/* do {
++ *     match = s->window + cur_match;
++ *     if (*(ushf*)(match+best_len-1) != scan_end ||
++ *         *(ushf*)match != scan_start) continue;
++ *     [...]
++ * } while ((cur_match = prev[cur_match & wmask]) > limit
++ *          && --chain_length != 0);
++ *
++ * Here is the inner loop of the function. The function will spend the
++ * majority of its time in this loop, and majority of that time will
++ * be spent in the first ten instructions.
++ */
++LookupLoop:
++		andl	%chainlenwmask, %curmatchd
++		movzwl	(%prev, %curmatch, 2), %curmatchd
++		cmpl	%limitd, %curmatchd
++		jbe	LeaveNow
++		subl	$0x00010000, %chainlenwmask
++		js	LeaveNow
++LoopEntry:	cmpw	-1(%windowbestlen, %curmatch), %scanendw
++		jne	LookupLoop
++		cmpw	%scanstartw, (%window, %curmatch)
++		jne	LookupLoop
++
++/* Store the current value of chainlen.					*/
++		movl	%chainlenwmask, _chainlenwmask
++
++/* %scan is the string under scrutiny, and %prev to the string we	*/
++/* are hoping to match it up with. In actuality, %esi and %edi are	*/
++/* both pointed (MAX_MATCH_8 - scanalign) bytes ahead, and %edx is	*/
++/* initialized to -(MAX_MATCH_8 - scanalign).				*/
++
++		mov	$(-MAX_MATCH_8), %rdx
++		lea	(%curmatch, %window), %windowbestlen
++		lea	MAX_MATCH_8(%windowbestlen, %scanalign), %windowbestlen
++		lea	MAX_MATCH_8(%scan, %scanalign), %prev
++
++/* the prefetching below makes very little difference... */
++		prefetcht1	(%windowbestlen, %rdx)
++		prefetcht1	(%prev, %rdx)
++
++/*
++ * Test the strings for equality, 8 bytes at a time. At the end,
++ * adjust %rdx so that it is offset to the exact byte that mismatched.
++ *
++ * It should be confessed that this loop usually does not represent
++ * much of the total running time. Replacing it with a more
++ * straightforward "rep cmpsb" would not drastically degrade
++ * performance -- unrolling it, for example, makes no difference.
++ */
++
++#undef USE_SSE	/* works, but is 6-7% slower, than non-SSE... */
++
++LoopCmps:
++#ifdef USE_SSE
++		/* Preload the SSE registers */
++		movdqu	  (%windowbestlen, %rdx), %xmm1
++		movdqu	  (%prev, %rdx), %xmm2
++		pcmpeqb	%xmm2, %xmm1
++		movdqu	16(%windowbestlen, %rdx), %xmm3
++		movdqu	16(%prev, %rdx), %xmm4
++		pcmpeqb	%xmm4, %xmm3
++		movdqu	32(%windowbestlen, %rdx), %xmm5
++		movdqu	32(%prev, %rdx), %xmm6
++		pcmpeqb	%xmm6, %xmm5
++		movdqu	48(%windowbestlen, %rdx), %xmm7
++		movdqu	48(%prev, %rdx), %xmm8
++		pcmpeqb	%xmm8, %xmm7
++
++		/* Check the comparisions' results */
++		pmovmskb %xmm1, %rax
++		notw	%ax
++		bsfw	%ax, %ax
++		jnz	LeaveLoopCmps
++		
++		/* this is the only iteration of the loop with a possibility of having
++		   incremented rdx by 0x108 (each loop iteration add 16*4 = 0x40 
++		   and (0x40*4)+8=0x108 */
++		add	$8, %rdx
++		jz LenMaximum
++		add	$8, %rdx
++
++		
++		pmovmskb %xmm3, %rax
++		notw	%ax
++		bsfw	%ax, %ax
++		jnz	LeaveLoopCmps
++		
++		
++		add	$16, %rdx
++
++
++		pmovmskb %xmm5, %rax
++		notw	%ax
++		bsfw	%ax, %ax
++		jnz	LeaveLoopCmps
++		
++		add	$16, %rdx
++
++
++		pmovmskb %xmm7, %rax
++		notw	%ax
++		bsfw	%ax, %ax
++		jnz	LeaveLoopCmps
++		
++		add	$16, %rdx
++		
++		jmp	LoopCmps
++LeaveLoopCmps:	add	%rax, %rdx
++#else
++		mov	(%windowbestlen, %rdx), %rax
++		xor	(%prev, %rdx), %rax
++		jnz	LeaveLoopCmps
++		
++		mov	8(%windowbestlen, %rdx), %rax
++		xor	8(%prev, %rdx), %rax
++		jnz	LeaveLoopCmps8
++
++		mov	16(%windowbestlen, %rdx), %rax
++		xor	16(%prev, %rdx), %rax
++		jnz	LeaveLoopCmps16
++				
++		add	$24, %rdx
++		jnz	LoopCmps
++		jmp	LenMaximum
++#	if 0
++/*
++ * This three-liner is tantalizingly simple, but bsf is a slow instruction,
++ * and the complicated alternative down below is quite a bit faster. Sad...
++ */
++
++LeaveLoopCmps:	bsf	%rax, %rax /* find the first non-zero bit */
++		shrl	$3, %eax /* divide by 8 to get the byte */
++		add	%rax, %rdx
++#	else
++LeaveLoopCmps16:
++		add	$8, %rdx
++LeaveLoopCmps8:
++		add	$8, %rdx
++LeaveLoopCmps:	testl   $0xFFFFFFFF, %eax /* Check the first 4 bytes */
++		jnz     Check16
++		add     $4, %rdx
++		shr     $32, %rax
++Check16:        testw   $0xFFFF, %ax
++		jnz     LenLower
++		add	$2, %rdx
++		shrl	$16, %eax
++LenLower:	subb	$1, %al
++		adc	$0, %rdx
++#	endif
++#endif
++
++/* Calculate the length of the match. If it is longer than MAX_MATCH,	*/
++/* then automatically accept it as the best possible match and leave.	*/
++
++		lea	(%prev, %rdx), %rax
++		sub	%scan, %rax
++		cmpl	$MAX_MATCH, %eax
++		jge	LenMaximum
++
++/* If the length of the match is not longer than the best match we	*/
++/* have so far, then forget it and return to the lookup loop.		*/
++
++		cmpl	%bestlend, %eax
++		jg	LongerMatch
++		mov	_windowbestlen, %windowbestlen
++		mov	dsPrev, %prev
++		movl	_chainlenwmask, %edx
++		jmp	LookupLoop
++
++/*         s->match_start = cur_match;					*/
++/*         best_len = len;						*/
++/*         if (len >= nice_match) break;				*/
++/*         scan_end = *(ushf*)(scan+best_len-1);			*/
++
++LongerMatch:
++		movl	%eax, %bestlend
++		movl	%curmatchd, dsMatchStart
++		cmpl	%nicematch, %eax
++		jge	LeaveNow
++
++		lea	(%window, %bestlen), %windowbestlen
++		mov	%windowbestlen, _windowbestlen
++
++		movzwl	-1(%scan, %rax), %scanend
++		mov	dsPrev, %prev
++		movl	_chainlenwmask, %chainlenwmask
++		jmp	LookupLoop
++
++/* Accept the current string, with the maximum possible length.		*/
++
++LenMaximum:
++		movl	$MAX_MATCH, %bestlend
++		movl	%curmatchd, dsMatchStart
++
++/* if ((uInt)best_len <= s->lookahead) return (uInt)best_len;		*/
++/* return s->lookahead;							*/
++
++LeaveNow:
++		movl	dsLookahead, %eax
++		cmpl	%eax, %bestlend
++		cmovngl	%bestlend, %eax
++LookaheadRet:
++
++/* Restore the registers and return from whence we came.			*/
++
++	mov	save_rsi, %rsi
++	mov	save_rbx, %rbx
++	mov	save_r12, %r12
++	mov	save_r13, %r13
++	mov	save_r14, %r14
++	mov	save_r15, %r15
++
++	ret
++
++match_init:	ret
+--- a/contrib/asm686/README.686	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/asm686/README.686	1695412879.000000000
+@@ -0,0 +1,51 @@
++This is a patched version of zlib, modified to use
++Pentium-Pro-optimized assembly code in the deflation algorithm. The
++files changed/added by this patch are:
++
++README.686
++match.S
++
++The speedup that this patch provides varies, depending on whether the
++compiler used to build the original version of zlib falls afoul of the
++PPro's speed traps. My own tests show a speedup of around 10-20% at
++the default compression level, and 20-30% using -9, against a version
++compiled using gcc 2.7.2.3. Your mileage may vary.
++
++Note that this code has been tailored for the PPro/PII in particular,
++and will not perform particuarly well on a Pentium.
++
++If you are using an assembler other than GNU as, you will have to
++translate match.S to use your assembler's syntax. (Have fun.)
++
++Brian Raiter
++breadbox@muppetlabs.com
++April, 1998
++
++
++Added for zlib 1.1.3:
++
++The patches come from
++http://www.muppetlabs.com/~breadbox/software/assembly.html
++
++To compile zlib with this asm file, copy match.S to the zlib directory
++then do:
++
++CFLAGS="-O3 -DASMV" ./configure
++make OBJA=match.o
++
++
++Update:
++
++I've been ignoring these assembly routines for years, believing that
++gcc's generated code had caught up with it sometime around gcc 2.95
++and the major rearchitecting of the Pentium 4. However, I recently
++learned that, despite what I believed, this code still has some life
++in it. On the Pentium 4 and AMD64 chips, it continues to run about 8%
++faster than the code produced by gcc 4.1.
++
++In acknowledgement of its continuing usefulness, I've altered the
++license to match that of the rest of zlib. Share and Enjoy!
++
++Brian Raiter
++breadbox@muppetlabs.com
++April, 2007
+--- a/contrib/asm686/match.S	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/asm686/match.S	1695412879.000000000
+@@ -0,0 +1,357 @@
++/* match.S -- x86 assembly version of the zlib longest_match() function.
++ * Optimized for the Intel 686 chips (PPro and later).
++ *
++ * Copyright (C) 1998, 2007 Brian Raiter <breadbox@muppetlabs.com>
++ *
++ * This software is provided 'as-is', without any express or implied
++ * warranty.  In no event will the author be held liable for any damages
++ * arising from the use of this software.
++ *
++ * Permission is granted to anyone to use this software for any purpose,
++ * including commercial applications, and to alter it and redistribute it
++ * freely, subject to the following restrictions:
++ *
++ * 1. The origin of this software must not be misrepresented; you must not
++ *    claim that you wrote the original software. If you use this software
++ *    in a product, an acknowledgment in the product documentation would be
++ *    appreciated but is not required.
++ * 2. Altered source versions must be plainly marked as such, and must not be
++ *    misrepresented as being the original software.
++ * 3. This notice may not be removed or altered from any source distribution.
++ */
++
++#ifndef NO_UNDERLINE
++#define	match_init	_match_init
++#define	longest_match	_longest_match
++#endif
++
++#define	MAX_MATCH	(258)
++#define	MIN_MATCH	(3)
++#define	MIN_LOOKAHEAD	(MAX_MATCH + MIN_MATCH + 1)
++#define	MAX_MATCH_8	((MAX_MATCH + 7) & ~7)
++
++/* stack frame offsets */
++
++#define	chainlenwmask		0	/* high word: current chain len	*/
++					/* low word: s->wmask		*/
++#define	window			4	/* local copy of s->window	*/
++#define	windowbestlen		8	/* s->window + bestlen		*/
++#define	scanstart		16	/* first two bytes of string	*/
++#define	scanend			12	/* last two bytes of string	*/
++#define	scanalign		20	/* dword-misalignment of string	*/
++#define	nicematch		24	/* a good enough match size	*/
++#define	bestlen			28	/* size of best match so far	*/
++#define	scan			32	/* ptr to string wanting match	*/
++
++#define	LocalVarsSize		(36)
++/*	saved ebx		36 */
++/*	saved edi		40 */
++/*	saved esi		44 */
++/*	saved ebp		48 */
++/*	return address		52 */
++#define	deflatestate		56	/* the function arguments	*/
++#define	curmatch		60
++
++/* All the +zlib1222add offsets are due to the addition of fields
++ *  in zlib in the deflate_state structure since the asm code was first written
++ * (if you compile with zlib 1.0.4 or older, use "zlib1222add equ (-4)").
++ * (if you compile with zlib between 1.0.5 and 1.2.2.1, use "zlib1222add equ 0").
++ * if you compile with zlib 1.2.2.2 or later , use "zlib1222add equ 8").
++ */
++
++#define zlib1222add		(8)
++
++#define	dsWSize			(36+zlib1222add)
++#define	dsWMask			(44+zlib1222add)
++#define	dsWindow		(48+zlib1222add)
++#define	dsPrev			(56+zlib1222add)
++#define	dsMatchLen		(88+zlib1222add)
++#define	dsPrevMatch		(92+zlib1222add)
++#define	dsStrStart		(100+zlib1222add)
++#define	dsMatchStart		(104+zlib1222add)
++#define	dsLookahead		(108+zlib1222add)
++#define	dsPrevLen		(112+zlib1222add)
++#define	dsMaxChainLen		(116+zlib1222add)
++#define	dsGoodMatch		(132+zlib1222add)
++#define	dsNiceMatch		(136+zlib1222add)
++
++
++.file "match.S"
++
++.globl	match_init, longest_match
++
++.text
++
++/* uInt longest_match(deflate_state *deflatestate, IPos curmatch) */
++.cfi_sections	.debug_frame
++
++longest_match:
++
++.cfi_startproc
++/* Save registers that the compiler may be using, and adjust %esp to	*/
++/* make room for our stack frame.					*/
++
++		pushl	%ebp
++		.cfi_def_cfa_offset 8
++		.cfi_offset ebp, -8
++		pushl	%edi
++		.cfi_def_cfa_offset 12
++		pushl	%esi
++		.cfi_def_cfa_offset 16
++		pushl	%ebx
++		.cfi_def_cfa_offset 20
++		subl	$LocalVarsSize, %esp
++		.cfi_def_cfa_offset LocalVarsSize+20
++
++/* Retrieve the function arguments. %ecx will hold cur_match		*/
++/* throughout the entire function. %edx will hold the pointer to the	*/
++/* deflate_state structure during the function's setup (before		*/
++/* entering the main loop).						*/
++
++		movl	deflatestate(%esp), %edx
++		movl	curmatch(%esp), %ecx
++
++/* uInt wmask = s->w_mask;						*/
++/* unsigned chain_length = s->max_chain_length;				*/
++/* if (s->prev_length >= s->good_match) {				*/
++/*     chain_length >>= 2;						*/
++/* }									*/
++ 
++		movl	dsPrevLen(%edx), %eax
++		movl	dsGoodMatch(%edx), %ebx
++		cmpl	%ebx, %eax
++		movl	dsWMask(%edx), %eax
++		movl	dsMaxChainLen(%edx), %ebx
++		jl	LastMatchGood
++		shrl	$2, %ebx
++LastMatchGood:
++
++/* chainlen is decremented once beforehand so that the function can	*/
++/* use the sign flag instead of the zero flag for the exit test.	*/
++/* It is then shifted into the high word, to make room for the wmask	*/
++/* value, which it will always accompany.				*/
++
++		decl	%ebx
++		shll	$16, %ebx
++		orl	%eax, %ebx
++		movl	%ebx, chainlenwmask(%esp)
++
++/* if ((uInt)nice_match > s->lookahead) nice_match = s->lookahead;	*/
++
++		movl	dsNiceMatch(%edx), %eax
++		movl	dsLookahead(%edx), %ebx
++		cmpl	%eax, %ebx
++		jl	LookaheadLess
++		movl	%eax, %ebx
++LookaheadLess:	movl	%ebx, nicematch(%esp)
++
++/* register Bytef *scan = s->window + s->strstart;			*/
++
++		movl	dsWindow(%edx), %esi
++		movl	%esi, window(%esp)
++		movl	dsStrStart(%edx), %ebp
++		lea	(%esi,%ebp), %edi
++		movl	%edi, scan(%esp)
++
++/* Determine how many bytes the scan ptr is off from being		*/
++/* dword-aligned.							*/
++
++		movl	%edi, %eax
++		negl	%eax
++		andl	$3, %eax
++		movl	%eax, scanalign(%esp)
++
++/* IPos limit = s->strstart > (IPos)MAX_DIST(s) ?			*/
++/*     s->strstart - (IPos)MAX_DIST(s) : NIL;				*/
++
++		movl	dsWSize(%edx), %eax
++		subl	$MIN_LOOKAHEAD, %eax
++		subl	%eax, %ebp
++		jg	LimitPositive
++		xorl	%ebp, %ebp
++LimitPositive:
++
++/* int best_len = s->prev_length;					*/
++
++		movl	dsPrevLen(%edx), %eax
++		movl	%eax, bestlen(%esp)
++
++/* Store the sum of s->window + best_len in %esi locally, and in %esi.	*/
++
++		addl	%eax, %esi
++		movl	%esi, windowbestlen(%esp)
++
++/* register ush scan_start = *(ushf*)scan;				*/
++/* register ush scan_end   = *(ushf*)(scan+best_len-1);			*/
++/* Posf *prev = s->prev;						*/
++
++		movzwl	(%edi), %ebx
++		movl	%ebx, scanstart(%esp)
++		movzwl	-1(%edi,%eax), %ebx
++		movl	%ebx, scanend(%esp)
++		movl	dsPrev(%edx), %edi
++
++/* Jump into the main loop.						*/
++
++		movl	chainlenwmask(%esp), %edx
++		jmp	LoopEntry
++
++.balign 16
++
++/* do {
++ *     match = s->window + cur_match;
++ *     if (*(ushf*)(match+best_len-1) != scan_end ||
++ *         *(ushf*)match != scan_start) continue;
++ *     [...]
++ * } while ((cur_match = prev[cur_match & wmask]) > limit
++ *          && --chain_length != 0);
++ *
++ * Here is the inner loop of the function. The function will spend the
++ * majority of its time in this loop, and majority of that time will
++ * be spent in the first ten instructions.
++ *
++ * Within this loop:
++ * %ebx = scanend
++ * %ecx = curmatch
++ * %edx = chainlenwmask - i.e., ((chainlen << 16) | wmask)
++ * %esi = windowbestlen - i.e., (window + bestlen)
++ * %edi = prev
++ * %ebp = limit
++ */
++LookupLoop:
++		andl	%edx, %ecx
++		movzwl	(%edi,%ecx,2), %ecx
++		cmpl	%ebp, %ecx
++		jbe	LeaveNow
++		subl	$0x00010000, %edx
++		js	LeaveNow
++LoopEntry:	movzwl	-1(%esi,%ecx), %eax
++		cmpl	%ebx, %eax
++		jnz	LookupLoop
++		movl	window(%esp), %eax
++		movzwl	(%eax,%ecx), %eax
++		cmpl	scanstart(%esp), %eax
++		jnz	LookupLoop
++
++/* Store the current value of chainlen.					*/
++
++		movl	%edx, chainlenwmask(%esp)
++
++/* Point %edi to the string under scrutiny, and %esi to the string we	*/
++/* are hoping to match it up with. In actuality, %esi and %edi are	*/
++/* both pointed (MAX_MATCH_8 - scanalign) bytes ahead, and %edx is	*/
++/* initialized to -(MAX_MATCH_8 - scanalign).				*/
++
++		movl	window(%esp), %esi
++		movl	scan(%esp), %edi
++		addl	%ecx, %esi
++		movl	scanalign(%esp), %eax
++		movl	$(-MAX_MATCH_8), %edx
++		lea	MAX_MATCH_8(%edi,%eax), %edi
++		lea	MAX_MATCH_8(%esi,%eax), %esi
++
++/* Test the strings for equality, 8 bytes at a time. At the end,
++ * adjust %edx so that it is offset to the exact byte that mismatched.
++ *
++ * We already know at this point that the first three bytes of the
++ * strings match each other, and they can be safely passed over before
++ * starting the compare loop. So what this code does is skip over 0-3
++ * bytes, as much as necessary in order to dword-align the %edi
++ * pointer. (%esi will still be misaligned three times out of four.)
++ *
++ * It should be confessed that this loop usually does not represent
++ * much of the total running time. Replacing it with a more
++ * straightforward "rep cmpsb" would not drastically degrade
++ * performance.
++ */
++LoopCmps:
++		movl	(%esi,%edx), %eax
++		xorl	(%edi,%edx), %eax
++		jnz	LeaveLoopCmps
++		movl	4(%esi,%edx), %eax
++		xorl	4(%edi,%edx), %eax
++		jnz	LeaveLoopCmps4
++		addl	$8, %edx
++		jnz	LoopCmps
++		jmp	LenMaximum
++LeaveLoopCmps4:	addl	$4, %edx
++LeaveLoopCmps:	testl	$0x0000FFFF, %eax
++		jnz	LenLower
++		addl	$2, %edx
++		shrl	$16, %eax
++LenLower:	subb	$1, %al
++		adcl	$0, %edx
++
++/* Calculate the length of the match. If it is longer than MAX_MATCH,	*/
++/* then automatically accept it as the best possible match and leave.	*/
++
++		lea	(%edi,%edx), %eax
++		movl	scan(%esp), %edi
++		subl	%edi, %eax
++		cmpl	$MAX_MATCH, %eax
++		jge	LenMaximum
++
++/* If the length of the match is not longer than the best match we	*/
++/* have so far, then forget it and return to the lookup loop.		*/
++
++		movl	deflatestate(%esp), %edx
++		movl	bestlen(%esp), %ebx
++		cmpl	%ebx, %eax
++		jg	LongerMatch
++		movl	windowbestlen(%esp), %esi
++		movl	dsPrev(%edx), %edi
++		movl	scanend(%esp), %ebx
++		movl	chainlenwmask(%esp), %edx
++		jmp	LookupLoop
++
++/*         s->match_start = cur_match;					*/
++/*         best_len = len;						*/
++/*         if (len >= nice_match) break;				*/
++/*         scan_end = *(ushf*)(scan+best_len-1);			*/
++
++LongerMatch:	movl	nicematch(%esp), %ebx
++		movl	%eax, bestlen(%esp)
++		movl	%ecx, dsMatchStart(%edx)
++		cmpl	%ebx, %eax
++		jge	LeaveNow
++		movl	window(%esp), %esi
++		addl	%eax, %esi
++		movl	%esi, windowbestlen(%esp)
++		movzwl	-1(%edi,%eax), %ebx
++		movl	dsPrev(%edx), %edi
++		movl	%ebx, scanend(%esp)
++		movl	chainlenwmask(%esp), %edx
++		jmp	LookupLoop
++
++/* Accept the current string, with the maximum possible length.		*/
++
++LenMaximum:	movl	deflatestate(%esp), %edx
++		movl	$MAX_MATCH, bestlen(%esp)
++		movl	%ecx, dsMatchStart(%edx)
++
++/* if ((uInt)best_len <= s->lookahead) return (uInt)best_len;		*/
++/* return s->lookahead;							*/
++
++LeaveNow:
++		movl	deflatestate(%esp), %edx
++		movl	bestlen(%esp), %ebx
++		movl	dsLookahead(%edx), %eax
++		cmpl	%eax, %ebx
++		jg	LookaheadRet
++		movl	%ebx, %eax
++LookaheadRet:
++
++/* Restore the stack and return from whence we came.			*/
++
++		addl	$LocalVarsSize, %esp
++		.cfi_def_cfa_offset 20
++		popl	%ebx
++		.cfi_def_cfa_offset 16
++		popl	%esi
++		.cfi_def_cfa_offset 12
++		popl	%edi
++		.cfi_def_cfa_offset 8
++		popl	%ebp
++		.cfi_def_cfa_offset 4
++.cfi_endproc
++match_init:	ret
+--- a/contrib/inflate86/inffas86.c	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/inflate86/inffas86.c	1695412879.000000000
+@@ -0,0 +1,1157 @@
++/* inffas86.c is a hand tuned assembler version of
++ *
++ * inffast.c -- fast decoding
++ * Copyright (C) 1995-2003 Mark Adler
++ * For conditions of distribution and use, see copyright notice in zlib.h
++ *
++ * Copyright (C) 2003 Chris Anderson <christop@charm.net>
++ * Please use the copyright conditions above.
++ *
++ * Dec-29-2003 -- I added AMD64 inflate asm support.  This version is also
++ * slightly quicker on x86 systems because, instead of using rep movsb to copy
++ * data, it uses rep movsw, which moves data in 2-byte chunks instead of single
++ * bytes.  I've tested the AMD64 code on a Fedora Core 1 + the x86_64 updates
++ * from http://fedora.linux.duke.edu/fc1_x86_64
++ * which is running on an Athlon 64 3000+ / Gigabyte GA-K8VT800M system with
++ * 1GB ram.  The 64-bit version is about 4% faster than the 32-bit version,
++ * when decompressing mozilla-source-1.3.tar.gz.
++ *
++ * Mar-13-2003 -- Most of this is derived from inffast.S which is derived from
++ * the gcc -S output of zlib-1.2.0/inffast.c.  Zlib-1.2.0 is in beta release at
++ * the moment.  I have successfully compiled and tested this code with gcc2.96,
++ * gcc3.2, icc5.0, msvc6.0.  It is very close to the speed of inffast.S
++ * compiled with gcc -DNO_MMX, but inffast.S is still faster on the P3 with MMX
++ * enabled.  I will attempt to merge the MMX code into this version.  Newer
++ * versions of this and inffast.S can be found at
++ * http://www.eetbeetee.com/zlib/ and http://www.charm.net/~christop/zlib/
++ */
++
++#include "zutil.h"
++#include "inftrees.h"
++#include "inflate.h"
++#include "inffast.h"
++
++/* Mark Adler's comments from inffast.c: */
++
++/*
++   Decode literal, length, and distance codes and write out the resulting
++   literal and match bytes until either not enough input or output is
++   available, an end-of-block is encountered, or a data error is encountered.
++   When large enough input and output buffers are supplied to inflate(), for
++   example, a 16K input buffer and a 64K output buffer, more than 95% of the
++   inflate execution time is spent in this routine.
++
++   Entry assumptions:
++
++        state->mode == LEN
++        strm->avail_in >= 6
++        strm->avail_out >= 258
++        start >= strm->avail_out
++        state->bits < 8
++
++   On return, state->mode is one of:
++
++        LEN -- ran out of enough output space or enough available input
++        TYPE -- reached end of block code, inflate() to interpret next block
++        BAD -- error in block data
++
++   Notes:
++
++    - The maximum input bits used by a length/distance pair is 15 bits for the
++      length code, 5 bits for the length extra, 15 bits for the distance code,
++      and 13 bits for the distance extra.  This totals 48 bits, or six bytes.
++      Therefore if strm->avail_in >= 6, then there is enough input to avoid
++      checking for available input while decoding.
++
++    - The maximum bytes that a single length/distance pair can output is 258
++      bytes, which is the maximum length that can be coded.  inflate_fast()
++      requires strm->avail_out >= 258 for each loop to avoid checking for
++      output space.
++ */
++void inflate_fast(strm, start)
++z_streamp strm;
++unsigned start;         /* inflate()'s starting value for strm->avail_out */
++{
++    struct inflate_state FAR *state;
++    struct inffast_ar {
++/* 64   32                               x86  x86_64 */
++/* ar offset                              register */
++/*  0    0 */ void *esp;                /* esp save */
++/*  8    4 */ void *ebp;                /* ebp save */
++/* 16    8 */ unsigned char FAR *in;    /* esi rsi  local strm->next_in */
++/* 24   12 */ unsigned char FAR *last;  /*     r9   while in < last */
++/* 32   16 */ unsigned char FAR *out;   /* edi rdi  local strm->next_out */
++/* 40   20 */ unsigned char FAR *beg;   /*          inflate()'s init next_out */
++/* 48   24 */ unsigned char FAR *end;   /*     r10  while out < end */
++/* 56   28 */ unsigned char FAR *window;/*          size of window, wsize!=0 */
++/* 64   32 */ code const FAR *lcode;    /* ebp rbp  local strm->lencode */
++/* 72   36 */ code const FAR *dcode;    /*     r11  local strm->distcode */
++/* 80   40 */ unsigned long hold;       /* edx rdx  local strm->hold */
++/* 88   44 */ unsigned bits;            /* ebx rbx  local strm->bits */
++/* 92   48 */ unsigned wsize;           /*          window size */
++/* 96   52 */ unsigned write;           /*          window write index */
++/*100   56 */ unsigned lmask;           /*     r12  mask for lcode */
++/*104   60 */ unsigned dmask;           /*     r13  mask for dcode */
++/*108   64 */ unsigned len;             /*     r14  match length */
++/*112   68 */ unsigned dist;            /*     r15  match distance */
++/*116   72 */ unsigned status;          /*          set when state chng*/
++    } ar;
++
++#if defined( __GNUC__ ) && defined( __amd64__ ) && ! defined( __i386 )
++#define PAD_AVAIL_IN 6
++#define PAD_AVAIL_OUT 258
++#else
++#define PAD_AVAIL_IN 5
++#define PAD_AVAIL_OUT 257
++#endif
++
++    /* copy state to local variables */
++    state = (struct inflate_state FAR *)strm->state;
++    ar.in = strm->next_in;
++    ar.last = ar.in + (strm->avail_in - PAD_AVAIL_IN);
++    ar.out = strm->next_out;
++    ar.beg = ar.out - (start - strm->avail_out);
++    ar.end = ar.out + (strm->avail_out - PAD_AVAIL_OUT);
++    ar.wsize = state->wsize;
++    ar.write = state->wnext;
++    ar.window = state->window;
++    ar.hold = state->hold;
++    ar.bits = state->bits;
++    ar.lcode = state->lencode;
++    ar.dcode = state->distcode;
++    ar.lmask = (1U << state->lenbits) - 1;
++    ar.dmask = (1U << state->distbits) - 1;
++
++    /* decode literals and length/distances until end-of-block or not enough
++       input data or output space */
++
++    /* align in on 1/2 hold size boundary */
++    while (((unsigned long)(void *)ar.in & (sizeof(ar.hold) / 2 - 1)) != 0) {
++        ar.hold += (unsigned long)*ar.in++ << ar.bits;
++        ar.bits += 8;
++    }
++
++#if defined( __GNUC__ ) && defined( __amd64__ ) && ! defined( __i386 )
++    __asm__ __volatile__ (
++"        leaq    %0, %%rax\n"
++"        movq    %%rbp, 8(%%rax)\n"       /* save regs rbp and rsp */
++"        movq    %%rsp, (%%rax)\n"
++"        movq    %%rax, %%rsp\n"          /* make rsp point to &ar */
++"        movq    16(%%rsp), %%rsi\n"      /* rsi  = in */
++"        movq    32(%%rsp), %%rdi\n"      /* rdi  = out */
++"        movq    24(%%rsp), %%r9\n"       /* r9   = last */
++"        movq    48(%%rsp), %%r10\n"      /* r10  = end */
++"        movq    64(%%rsp), %%rbp\n"      /* rbp  = lcode */
++"        movq    72(%%rsp), %%r11\n"      /* r11  = dcode */
++"        movq    80(%%rsp), %%rdx\n"      /* rdx  = hold */
++"        movl    88(%%rsp), %%ebx\n"      /* ebx  = bits */
++"        movl    100(%%rsp), %%r12d\n"    /* r12d = lmask */
++"        movl    104(%%rsp), %%r13d\n"    /* r13d = dmask */
++                                          /* r14d = len */
++                                          /* r15d = dist */
++"        cld\n"
++"        cmpq    %%rdi, %%r10\n"
++"        je      .L_one_time\n"           /* if only one decode left */
++"        cmpq    %%rsi, %%r9\n"
++"        je      .L_one_time\n"
++"        jmp     .L_do_loop\n"
++
++".L_one_time:\n"
++"        movq    %%r12, %%r8\n"           /* r8 = lmask */
++"        cmpb    $32, %%bl\n"
++"        ja      .L_get_length_code_one_time\n"
++
++"        lodsl\n"                         /* eax = *(uint *)in++ */
++"        movb    %%bl, %%cl\n"            /* cl = bits, needs it for shifting */
++"        addb    $32, %%bl\n"             /* bits += 32 */
++"        shlq    %%cl, %%rax\n"
++"        orq     %%rax, %%rdx\n"          /* hold |= *((uint *)in)++ << bits */
++"        jmp     .L_get_length_code_one_time\n"
++
++".align 32,0x90\n"
++".L_while_test:\n"
++"        cmpq    %%rdi, %%r10\n"
++"        jbe     .L_break_loop\n"
++"        cmpq    %%rsi, %%r9\n"
++"        jbe     .L_break_loop\n"
++
++".L_do_loop:\n"
++"        movq    %%r12, %%r8\n"           /* r8 = lmask */
++"        cmpb    $32, %%bl\n"
++"        ja      .L_get_length_code\n"    /* if (32 < bits) */
++
++"        lodsl\n"                         /* eax = *(uint *)in++ */
++"        movb    %%bl, %%cl\n"            /* cl = bits, needs it for shifting */
++"        addb    $32, %%bl\n"             /* bits += 32 */
++"        shlq    %%cl, %%rax\n"
++"        orq     %%rax, %%rdx\n"          /* hold |= *((uint *)in)++ << bits */
++
++".L_get_length_code:\n"
++"        andq    %%rdx, %%r8\n"            /* r8 &= hold */
++"        movl    (%%rbp,%%r8,4), %%eax\n"  /* eax = lcode[hold & lmask] */
++
++"        movb    %%ah, %%cl\n"            /* cl = this.bits */
++"        subb    %%ah, %%bl\n"            /* bits -= this.bits */
++"        shrq    %%cl, %%rdx\n"           /* hold >>= this.bits */
++
++"        testb   %%al, %%al\n"
++"        jnz     .L_test_for_length_base\n" /* if (op != 0) 45.7% */
++
++"        movq    %%r12, %%r8\n"            /* r8 = lmask */
++"        shrl    $16, %%eax\n"            /* output this.val char */
++"        stosb\n"
++
++".L_get_length_code_one_time:\n"
++"        andq    %%rdx, %%r8\n"            /* r8 &= hold */
++"        movl    (%%rbp,%%r8,4), %%eax\n" /* eax = lcode[hold & lmask] */
++
++".L_dolen:\n"
++"        movb    %%ah, %%cl\n"            /* cl = this.bits */
++"        subb    %%ah, %%bl\n"            /* bits -= this.bits */
++"        shrq    %%cl, %%rdx\n"           /* hold >>= this.bits */
++
++"        testb   %%al, %%al\n"
++"        jnz     .L_test_for_length_base\n" /* if (op != 0) 45.7% */
++
++"        shrl    $16, %%eax\n"            /* output this.val char */
++"        stosb\n"
++"        jmp     .L_while_test\n"
++
++".align 32,0x90\n"
++".L_test_for_length_base:\n"
++"        movl    %%eax, %%r14d\n"         /* len = this */
++"        shrl    $16, %%r14d\n"           /* len = this.val */
++"        movb    %%al, %%cl\n"
++
++"        testb   $16, %%al\n"
++"        jz      .L_test_for_second_level_length\n" /* if ((op & 16) == 0) 8% */
++"        andb    $15, %%cl\n"             /* op &= 15 */
++"        jz      .L_decode_distance\n"    /* if (!op) */
++
++".L_add_bits_to_len:\n"
++"        subb    %%cl, %%bl\n"
++"        xorl    %%eax, %%eax\n"
++"        incl    %%eax\n"
++"        shll    %%cl, %%eax\n"
++"        decl    %%eax\n"
++"        andl    %%edx, %%eax\n"          /* eax &= hold */
++"        shrq    %%cl, %%rdx\n"
++"        addl    %%eax, %%r14d\n"         /* len += hold & mask[op] */
++
++".L_decode_distance:\n"
++"        movq    %%r13, %%r8\n"           /* r8 = dmask */
++"        cmpb    $32, %%bl\n"
++"        ja      .L_get_distance_code\n"  /* if (32 < bits) */
++
++"        lodsl\n"                         /* eax = *(uint *)in++ */
++"        movb    %%bl, %%cl\n"            /* cl = bits, needs it for shifting */
++"        addb    $32, %%bl\n"             /* bits += 32 */
++"        shlq    %%cl, %%rax\n"
++"        orq     %%rax, %%rdx\n"          /* hold |= *((uint *)in)++ << bits */
++
++".L_get_distance_code:\n"
++"        andq    %%rdx, %%r8\n"           /* r8 &= hold */
++"        movl    (%%r11,%%r8,4), %%eax\n" /* eax = dcode[hold & dmask] */
++
++".L_dodist:\n"
++"        movl    %%eax, %%r15d\n"         /* dist = this */
++"        shrl    $16, %%r15d\n"           /* dist = this.val */
++"        movb    %%ah, %%cl\n"
++"        subb    %%ah, %%bl\n"            /* bits -= this.bits */
++"        shrq    %%cl, %%rdx\n"           /* hold >>= this.bits */
++"        movb    %%al, %%cl\n"            /* cl = this.op */
++
++"        testb   $16, %%al\n"             /* if ((op & 16) == 0) */
++"        jz      .L_test_for_second_level_dist\n"
++"        andb    $15, %%cl\n"             /* op &= 15 */
++"        jz      .L_check_dist_one\n"
++
++".L_add_bits_to_dist:\n"
++"        subb    %%cl, %%bl\n"
++"        xorl    %%eax, %%eax\n"
++"        incl    %%eax\n"
++"        shll    %%cl, %%eax\n"
++"        decl    %%eax\n"                 /* (1 << op) - 1 */
++"        andl    %%edx, %%eax\n"          /* eax &= hold */
++"        shrq    %%cl, %%rdx\n"
++"        addl    %%eax, %%r15d\n"         /* dist += hold & ((1 << op) - 1) */
++
++".L_check_window:\n"
++"        movq    %%rsi, %%r8\n"           /* save in so from can use it's reg */
++"        movq    %%rdi, %%rax\n"
++"        subq    40(%%rsp), %%rax\n"      /* nbytes = out - beg */
++
++"        cmpl    %%r15d, %%eax\n"
++"        jb      .L_clip_window\n"        /* if (dist > nbytes) 4.2% */
++
++"        movl    %%r14d, %%ecx\n"         /* ecx = len */
++"        movq    %%rdi, %%rsi\n"
++"        subq    %%r15, %%rsi\n"          /* from = out - dist */
++
++"        sarl    %%ecx\n"
++"        jnc     .L_copy_two\n"           /* if len % 2 == 0 */
++
++"        rep     movsw\n"
++"        movb    (%%rsi), %%al\n"
++"        movb    %%al, (%%rdi)\n"
++"        incq    %%rdi\n"
++
++"        movq    %%r8, %%rsi\n"           /* move in back to %rsi, toss from */
++"        jmp     .L_while_test\n"
++
++".L_copy_two:\n"
++"        rep     movsw\n"
++"        movq    %%r8, %%rsi\n"           /* move in back to %rsi, toss from */
++"        jmp     .L_while_test\n"
++
++".align 32,0x90\n"
++".L_check_dist_one:\n"
++"        cmpl    $1, %%r15d\n"            /* if dist 1, is a memset */
++"        jne     .L_check_window\n"
++"        cmpq    %%rdi, 40(%%rsp)\n"      /* if out == beg, outside window */
++"        je      .L_check_window\n"
++
++"        movl    %%r14d, %%ecx\n"         /* ecx = len */
++"        movb    -1(%%rdi), %%al\n"
++"        movb    %%al, %%ah\n"
++
++"        sarl    %%ecx\n"
++"        jnc     .L_set_two\n"
++"        movb    %%al, (%%rdi)\n"
++"        incq    %%rdi\n"
++
++".L_set_two:\n"
++"        rep     stosw\n"
++"        jmp     .L_while_test\n"
++
++".align 32,0x90\n"
++".L_test_for_second_level_length:\n"
++"        testb   $64, %%al\n"
++"        jnz     .L_test_for_end_of_block\n" /* if ((op & 64) != 0) */
++
++"        xorl    %%eax, %%eax\n"
++"        incl    %%eax\n"
++"        shll    %%cl, %%eax\n"
++"        decl    %%eax\n"
++"        andl    %%edx, %%eax\n"         /* eax &= hold */
++"        addl    %%r14d, %%eax\n"        /* eax += len */
++"        movl    (%%rbp,%%rax,4), %%eax\n" /* eax = lcode[val+(hold&mask[op])]*/
++"        jmp     .L_dolen\n"
++
++".align 32,0x90\n"
++".L_test_for_second_level_dist:\n"
++"        testb   $64, %%al\n"
++"        jnz     .L_invalid_distance_code\n" /* if ((op & 64) != 0) */
++
++"        xorl    %%eax, %%eax\n"
++"        incl    %%eax\n"
++"        shll    %%cl, %%eax\n"
++"        decl    %%eax\n"
++"        andl    %%edx, %%eax\n"         /* eax &= hold */
++"        addl    %%r15d, %%eax\n"        /* eax += dist */
++"        movl    (%%r11,%%rax,4), %%eax\n" /* eax = dcode[val+(hold&mask[op])]*/
++"        jmp     .L_dodist\n"
++
++".align 32,0x90\n"
++".L_clip_window:\n"
++"        movl    %%eax, %%ecx\n"         /* ecx = nbytes */
++"        movl    92(%%rsp), %%eax\n"     /* eax = wsize, prepare for dist cmp */
++"        negl    %%ecx\n"                /* nbytes = -nbytes */
++
++"        cmpl    %%r15d, %%eax\n"
++"        jb      .L_invalid_distance_too_far\n" /* if (dist > wsize) */
++
++"        addl    %%r15d, %%ecx\n"         /* nbytes = dist - nbytes */
++"        cmpl    $0, 96(%%rsp)\n"
++"        jne     .L_wrap_around_window\n" /* if (write != 0) */
++
++"        movq    56(%%rsp), %%rsi\n"     /* from  = window */
++"        subl    %%ecx, %%eax\n"         /* eax  -= nbytes */
++"        addq    %%rax, %%rsi\n"         /* from += wsize - nbytes */
++
++"        movl    %%r14d, %%eax\n"        /* eax = len */
++"        cmpl    %%ecx, %%r14d\n"
++"        jbe     .L_do_copy\n"           /* if (nbytes >= len) */
++
++"        subl    %%ecx, %%eax\n"         /* eax -= nbytes */
++"        rep     movsb\n"
++"        movq    %%rdi, %%rsi\n"
++"        subq    %%r15, %%rsi\n"         /* from = &out[ -dist ] */
++"        jmp     .L_do_copy\n"
++
++".align 32,0x90\n"
++".L_wrap_around_window:\n"
++"        movl    96(%%rsp), %%eax\n"     /* eax = write */
++"        cmpl    %%eax, %%ecx\n"
++"        jbe     .L_contiguous_in_window\n" /* if (write >= nbytes) */
++
++"        movl    92(%%rsp), %%esi\n"     /* from  = wsize */
++"        addq    56(%%rsp), %%rsi\n"     /* from += window */
++"        addq    %%rax, %%rsi\n"         /* from += write */
++"        subq    %%rcx, %%rsi\n"         /* from -= nbytes */
++"        subl    %%eax, %%ecx\n"         /* nbytes -= write */
++
++"        movl    %%r14d, %%eax\n"        /* eax = len */
++"        cmpl    %%ecx, %%eax\n"
++"        jbe     .L_do_copy\n"           /* if (nbytes >= len) */
++
++"        subl    %%ecx, %%eax\n"         /* len -= nbytes */
++"        rep     movsb\n"
++"        movq    56(%%rsp), %%rsi\n"     /* from = window */
++"        movl    96(%%rsp), %%ecx\n"     /* nbytes = write */
++"        cmpl    %%ecx, %%eax\n"
++"        jbe     .L_do_copy\n"           /* if (nbytes >= len) */
++
++"        subl    %%ecx, %%eax\n"         /* len -= nbytes */
++"        rep     movsb\n"
++"        movq    %%rdi, %%rsi\n"
++"        subq    %%r15, %%rsi\n"         /* from = out - dist */
++"        jmp     .L_do_copy\n"
++
++".align 32,0x90\n"
++".L_contiguous_in_window:\n"
++"        movq    56(%%rsp), %%rsi\n"     /* rsi = window */
++"        addq    %%rax, %%rsi\n"
++"        subq    %%rcx, %%rsi\n"         /* from += write - nbytes */
++
++"        movl    %%r14d, %%eax\n"        /* eax = len */
++"        cmpl    %%ecx, %%eax\n"
++"        jbe     .L_do_copy\n"           /* if (nbytes >= len) */
++
++"        subl    %%ecx, %%eax\n"         /* len -= nbytes */
++"        rep     movsb\n"
++"        movq    %%rdi, %%rsi\n"
++"        subq    %%r15, %%rsi\n"         /* from = out - dist */
++"        jmp     .L_do_copy\n"           /* if (nbytes >= len) */
++
++".align 32,0x90\n"
++".L_do_copy:\n"
++"        movl    %%eax, %%ecx\n"         /* ecx = len */
++"        rep     movsb\n"
++
++"        movq    %%r8, %%rsi\n"          /* move in back to %esi, toss from */
++"        jmp     .L_while_test\n"
++
++".L_test_for_end_of_block:\n"
++"        testb   $32, %%al\n"
++"        jz      .L_invalid_literal_length_code\n"
++"        movl    $1, 116(%%rsp)\n"
++"        jmp     .L_break_loop_with_status\n"
++
++".L_invalid_literal_length_code:\n"
++"        movl    $2, 116(%%rsp)\n"
++"        jmp     .L_break_loop_with_status\n"
++
++".L_invalid_distance_code:\n"
++"        movl    $3, 116(%%rsp)\n"
++"        jmp     .L_break_loop_with_status\n"
++
++".L_invalid_distance_too_far:\n"
++"        movl    $4, 116(%%rsp)\n"
++"        jmp     .L_break_loop_with_status\n"
++
++".L_break_loop:\n"
++"        movl    $0, 116(%%rsp)\n"
++
++".L_break_loop_with_status:\n"
++/* put in, out, bits, and hold back into ar and pop esp */
++"        movq    %%rsi, 16(%%rsp)\n"     /* in */
++"        movq    %%rdi, 32(%%rsp)\n"     /* out */
++"        movl    %%ebx, 88(%%rsp)\n"     /* bits */
++"        movq    %%rdx, 80(%%rsp)\n"     /* hold */
++"        movq    (%%rsp), %%rax\n"       /* restore rbp and rsp */
++"        movq    8(%%rsp), %%rbp\n"
++"        movq    %%rax, %%rsp\n"
++          :
++          : "m" (ar)
++          : "memory", "%rax", "%rbx", "%rcx", "%rdx", "%rsi", "%rdi",
++            "%r8", "%r9", "%r10", "%r11", "%r12", "%r13", "%r14", "%r15"
++    );
++#elif ( defined( __GNUC__ ) || defined( __ICC ) ) && defined( __i386 )
++    __asm__ __volatile__ (
++"        leal    %0, %%eax\n"
++"        movl    %%esp, (%%eax)\n"        /* save esp, ebp */
++"        movl    %%ebp, 4(%%eax)\n"
++"        movl    %%eax, %%esp\n"
++"        movl    8(%%esp), %%esi\n"       /* esi = in */
++"        movl    16(%%esp), %%edi\n"      /* edi = out */
++"        movl    40(%%esp), %%edx\n"      /* edx = hold */
++"        movl    44(%%esp), %%ebx\n"      /* ebx = bits */
++"        movl    32(%%esp), %%ebp\n"      /* ebp = lcode */
++
++"        cld\n"
++"        jmp     .L_do_loop\n"
++
++".align 32,0x90\n"
++".L_while_test:\n"
++"        cmpl    %%edi, 24(%%esp)\n"      /* out < end */
++"        jbe     .L_break_loop\n"
++"        cmpl    %%esi, 12(%%esp)\n"      /* in < last */
++"        jbe     .L_break_loop\n"
++
++".L_do_loop:\n"
++"        cmpb    $15, %%bl\n"
++"        ja      .L_get_length_code\n"    /* if (15 < bits) */
++
++"        xorl    %%eax, %%eax\n"
++"        lodsw\n"                         /* al = *(ushort *)in++ */
++"        movb    %%bl, %%cl\n"            /* cl = bits, needs it for shifting */
++"        addb    $16, %%bl\n"             /* bits += 16 */
++"        shll    %%cl, %%eax\n"
++"        orl     %%eax, %%edx\n"        /* hold |= *((ushort *)in)++ << bits */
++
++".L_get_length_code:\n"
++"        movl    56(%%esp), %%eax\n"      /* eax = lmask */
++"        andl    %%edx, %%eax\n"          /* eax &= hold */
++"        movl    (%%ebp,%%eax,4), %%eax\n" /* eax = lcode[hold & lmask] */
++
++".L_dolen:\n"
++"        movb    %%ah, %%cl\n"            /* cl = this.bits */
++"        subb    %%ah, %%bl\n"            /* bits -= this.bits */
++"        shrl    %%cl, %%edx\n"           /* hold >>= this.bits */
++
++"        testb   %%al, %%al\n"
++"        jnz     .L_test_for_length_base\n" /* if (op != 0) 45.7% */
++
++"        shrl    $16, %%eax\n"            /* output this.val char */
++"        stosb\n"
++"        jmp     .L_while_test\n"
++
++".align 32,0x90\n"
++".L_test_for_length_base:\n"
++"        movl    %%eax, %%ecx\n"          /* len = this */
++"        shrl    $16, %%ecx\n"            /* len = this.val */
++"        movl    %%ecx, 64(%%esp)\n"      /* save len */
++"        movb    %%al, %%cl\n"
++
++"        testb   $16, %%al\n"
++"        jz      .L_test_for_second_level_length\n" /* if ((op & 16) == 0) 8% */
++"        andb    $15, %%cl\n"             /* op &= 15 */
++"        jz      .L_decode_distance\n"    /* if (!op) */
++"        cmpb    %%cl, %%bl\n"
++"        jae     .L_add_bits_to_len\n"    /* if (op <= bits) */
++
++"        movb    %%cl, %%ch\n"            /* stash op in ch, freeing cl */
++"        xorl    %%eax, %%eax\n"
++"        lodsw\n"                         /* al = *(ushort *)in++ */
++"        movb    %%bl, %%cl\n"            /* cl = bits, needs it for shifting */
++"        addb    $16, %%bl\n"             /* bits += 16 */
++"        shll    %%cl, %%eax\n"
++"        orl     %%eax, %%edx\n"         /* hold |= *((ushort *)in)++ << bits */
++"        movb    %%ch, %%cl\n"            /* move op back to ecx */
++
++".L_add_bits_to_len:\n"
++"        subb    %%cl, %%bl\n"
++"        xorl    %%eax, %%eax\n"
++"        incl    %%eax\n"
++"        shll    %%cl, %%eax\n"
++"        decl    %%eax\n"
++"        andl    %%edx, %%eax\n"          /* eax &= hold */
++"        shrl    %%cl, %%edx\n"
++"        addl    %%eax, 64(%%esp)\n"      /* len += hold & mask[op] */
++
++".L_decode_distance:\n"
++"        cmpb    $15, %%bl\n"
++"        ja      .L_get_distance_code\n"  /* if (15 < bits) */
++
++"        xorl    %%eax, %%eax\n"
++"        lodsw\n"                         /* al = *(ushort *)in++ */
++"        movb    %%bl, %%cl\n"            /* cl = bits, needs it for shifting */
++"        addb    $16, %%bl\n"             /* bits += 16 */
++"        shll    %%cl, %%eax\n"
++"        orl     %%eax, %%edx\n"         /* hold |= *((ushort *)in)++ << bits */
++
++".L_get_distance_code:\n"
++"        movl    60(%%esp), %%eax\n"      /* eax = dmask */
++"        movl    36(%%esp), %%ecx\n"      /* ecx = dcode */
++"        andl    %%edx, %%eax\n"          /* eax &= hold */
++"        movl    (%%ecx,%%eax,4), %%eax\n"/* eax = dcode[hold & dmask] */
++
++".L_dodist:\n"
++"        movl    %%eax, %%ebp\n"          /* dist = this */
++"        shrl    $16, %%ebp\n"            /* dist = this.val */
++"        movb    %%ah, %%cl\n"
++"        subb    %%ah, %%bl\n"            /* bits -= this.bits */
++"        shrl    %%cl, %%edx\n"           /* hold >>= this.bits */
++"        movb    %%al, %%cl\n"            /* cl = this.op */
++
++"        testb   $16, %%al\n"             /* if ((op & 16) == 0) */
++"        jz      .L_test_for_second_level_dist\n"
++"        andb    $15, %%cl\n"             /* op &= 15 */
++"        jz      .L_check_dist_one\n"
++"        cmpb    %%cl, %%bl\n"
++"        jae     .L_add_bits_to_dist\n"   /* if (op <= bits) 97.6% */
++
++"        movb    %%cl, %%ch\n"            /* stash op in ch, freeing cl */
++"        xorl    %%eax, %%eax\n"
++"        lodsw\n"                         /* al = *(ushort *)in++ */
++"        movb    %%bl, %%cl\n"            /* cl = bits, needs it for shifting */
++"        addb    $16, %%bl\n"             /* bits += 16 */
++"        shll    %%cl, %%eax\n"
++"        orl     %%eax, %%edx\n"        /* hold |= *((ushort *)in)++ << bits */
++"        movb    %%ch, %%cl\n"            /* move op back to ecx */
++
++".L_add_bits_to_dist:\n"
++"        subb    %%cl, %%bl\n"
++"        xorl    %%eax, %%eax\n"
++"        incl    %%eax\n"
++"        shll    %%cl, %%eax\n"
++"        decl    %%eax\n"                 /* (1 << op) - 1 */
++"        andl    %%edx, %%eax\n"          /* eax &= hold */
++"        shrl    %%cl, %%edx\n"
++"        addl    %%eax, %%ebp\n"          /* dist += hold & ((1 << op) - 1) */
++
++".L_check_window:\n"
++"        movl    %%esi, 8(%%esp)\n"       /* save in so from can use it's reg */
++"        movl    %%edi, %%eax\n"
++"        subl    20(%%esp), %%eax\n"      /* nbytes = out - beg */
++
++"        cmpl    %%ebp, %%eax\n"
++"        jb      .L_clip_window\n"        /* if (dist > nbytes) 4.2% */
++
++"        movl    64(%%esp), %%ecx\n"      /* ecx = len */
++"        movl    %%edi, %%esi\n"
++"        subl    %%ebp, %%esi\n"          /* from = out - dist */
++
++"        sarl    %%ecx\n"
++"        jnc     .L_copy_two\n"           /* if len % 2 == 0 */
++
++"        rep     movsw\n"
++"        movb    (%%esi), %%al\n"
++"        movb    %%al, (%%edi)\n"
++"        incl    %%edi\n"
++
++"        movl    8(%%esp), %%esi\n"       /* move in back to %esi, toss from */
++"        movl    32(%%esp), %%ebp\n"      /* ebp = lcode */
++"        jmp     .L_while_test\n"
++
++".L_copy_two:\n"
++"        rep     movsw\n"
++"        movl    8(%%esp), %%esi\n"       /* move in back to %esi, toss from */
++"        movl    32(%%esp), %%ebp\n"      /* ebp = lcode */
++"        jmp     .L_while_test\n"
++
++".align 32,0x90\n"
++".L_check_dist_one:\n"
++"        cmpl    $1, %%ebp\n"            /* if dist 1, is a memset */
++"        jne     .L_check_window\n"
++"        cmpl    %%edi, 20(%%esp)\n"
++"        je      .L_check_window\n"      /* out == beg, if outside window */
++
++"        movl    64(%%esp), %%ecx\n"      /* ecx = len */
++"        movb    -1(%%edi), %%al\n"
++"        movb    %%al, %%ah\n"
++
++"        sarl    %%ecx\n"
++"        jnc     .L_set_two\n"
++"        movb    %%al, (%%edi)\n"
++"        incl    %%edi\n"
++
++".L_set_two:\n"
++"        rep     stosw\n"
++"        movl    32(%%esp), %%ebp\n"      /* ebp = lcode */
++"        jmp     .L_while_test\n"
++
++".align 32,0x90\n"
++".L_test_for_second_level_length:\n"
++"        testb   $64, %%al\n"
++"        jnz     .L_test_for_end_of_block\n" /* if ((op & 64) != 0) */
++
++"        xorl    %%eax, %%eax\n"
++"        incl    %%eax\n"
++"        shll    %%cl, %%eax\n"
++"        decl    %%eax\n"
++"        andl    %%edx, %%eax\n"         /* eax &= hold */
++"        addl    64(%%esp), %%eax\n"     /* eax += len */
++"        movl    (%%ebp,%%eax,4), %%eax\n" /* eax = lcode[val+(hold&mask[op])]*/
++"        jmp     .L_dolen\n"
++
++".align 32,0x90\n"
++".L_test_for_second_level_dist:\n"
++"        testb   $64, %%al\n"
++"        jnz     .L_invalid_distance_code\n" /* if ((op & 64) != 0) */
++
++"        xorl    %%eax, %%eax\n"
++"        incl    %%eax\n"
++"        shll    %%cl, %%eax\n"
++"        decl    %%eax\n"
++"        andl    %%edx, %%eax\n"         /* eax &= hold */
++"        addl    %%ebp, %%eax\n"         /* eax += dist */
++"        movl    36(%%esp), %%ecx\n"     /* ecx = dcode */
++"        movl    (%%ecx,%%eax,4), %%eax\n" /* eax = dcode[val+(hold&mask[op])]*/
++"        jmp     .L_dodist\n"
++
++".align 32,0x90\n"
++".L_clip_window:\n"
++"        movl    %%eax, %%ecx\n"
++"        movl    48(%%esp), %%eax\n"     /* eax = wsize */
++"        negl    %%ecx\n"                /* nbytes = -nbytes */
++"        movl    28(%%esp), %%esi\n"     /* from = window */
++
++"        cmpl    %%ebp, %%eax\n"
++"        jb      .L_invalid_distance_too_far\n" /* if (dist > wsize) */
++
++"        addl    %%ebp, %%ecx\n"         /* nbytes = dist - nbytes */
++"        cmpl    $0, 52(%%esp)\n"
++"        jne     .L_wrap_around_window\n" /* if (write != 0) */
++
++"        subl    %%ecx, %%eax\n"
++"        addl    %%eax, %%esi\n"         /* from += wsize - nbytes */
++
++"        movl    64(%%esp), %%eax\n"     /* eax = len */
++"        cmpl    %%ecx, %%eax\n"
++"        jbe     .L_do_copy\n"           /* if (nbytes >= len) */
++
++"        subl    %%ecx, %%eax\n"         /* len -= nbytes */
++"        rep     movsb\n"
++"        movl    %%edi, %%esi\n"
++"        subl    %%ebp, %%esi\n"         /* from = out - dist */
++"        jmp     .L_do_copy\n"
++
++".align 32,0x90\n"
++".L_wrap_around_window:\n"
++"        movl    52(%%esp), %%eax\n"     /* eax = write */
++"        cmpl    %%eax, %%ecx\n"
++"        jbe     .L_contiguous_in_window\n" /* if (write >= nbytes) */
++
++"        addl    48(%%esp), %%esi\n"     /* from += wsize */
++"        addl    %%eax, %%esi\n"         /* from += write */
++"        subl    %%ecx, %%esi\n"         /* from -= nbytes */
++"        subl    %%eax, %%ecx\n"         /* nbytes -= write */
++
++"        movl    64(%%esp), %%eax\n"     /* eax = len */
++"        cmpl    %%ecx, %%eax\n"
++"        jbe     .L_do_copy\n"           /* if (nbytes >= len) */
++
++"        subl    %%ecx, %%eax\n"         /* len -= nbytes */
++"        rep     movsb\n"
++"        movl    28(%%esp), %%esi\n"     /* from = window */
++"        movl    52(%%esp), %%ecx\n"     /* nbytes = write */
++"        cmpl    %%ecx, %%eax\n"
++"        jbe     .L_do_copy\n"           /* if (nbytes >= len) */
++
++"        subl    %%ecx, %%eax\n"         /* len -= nbytes */
++"        rep     movsb\n"
++"        movl    %%edi, %%esi\n"
++"        subl    %%ebp, %%esi\n"         /* from = out - dist */
++"        jmp     .L_do_copy\n"
++
++".align 32,0x90\n"
++".L_contiguous_in_window:\n"
++"        addl    %%eax, %%esi\n"
++"        subl    %%ecx, %%esi\n"         /* from += write - nbytes */
++
++"        movl    64(%%esp), %%eax\n"     /* eax = len */
++"        cmpl    %%ecx, %%eax\n"
++"        jbe     .L_do_copy\n"           /* if (nbytes >= len) */
++
++"        subl    %%ecx, %%eax\n"         /* len -= nbytes */
++"        rep     movsb\n"
++"        movl    %%edi, %%esi\n"
++"        subl    %%ebp, %%esi\n"         /* from = out - dist */
++"        jmp     .L_do_copy\n"           /* if (nbytes >= len) */
++
++".align 32,0x90\n"
++".L_do_copy:\n"
++"        movl    %%eax, %%ecx\n"
++"        rep     movsb\n"
++
++"        movl    8(%%esp), %%esi\n"      /* move in back to %esi, toss from */
++"        movl    32(%%esp), %%ebp\n"     /* ebp = lcode */
++"        jmp     .L_while_test\n"
++
++".L_test_for_end_of_block:\n"
++"        testb   $32, %%al\n"
++"        jz      .L_invalid_literal_length_code\n"
++"        movl    $1, 72(%%esp)\n"
++"        jmp     .L_break_loop_with_status\n"
++
++".L_invalid_literal_length_code:\n"
++"        movl    $2, 72(%%esp)\n"
++"        jmp     .L_break_loop_with_status\n"
++
++".L_invalid_distance_code:\n"
++"        movl    $3, 72(%%esp)\n"
++"        jmp     .L_break_loop_with_status\n"
++
++".L_invalid_distance_too_far:\n"
++"        movl    8(%%esp), %%esi\n"
++"        movl    $4, 72(%%esp)\n"
++"        jmp     .L_break_loop_with_status\n"
++
++".L_break_loop:\n"
++"        movl    $0, 72(%%esp)\n"
++
++".L_break_loop_with_status:\n"
++/* put in, out, bits, and hold back into ar and pop esp */
++"        movl    %%esi, 8(%%esp)\n"      /* save in */
++"        movl    %%edi, 16(%%esp)\n"     /* save out */
++"        movl    %%ebx, 44(%%esp)\n"     /* save bits */
++"        movl    %%edx, 40(%%esp)\n"     /* save hold */
++"        movl    4(%%esp), %%ebp\n"      /* restore esp, ebp */
++"        movl    (%%esp), %%esp\n"
++          :
++          : "m" (ar)
++          : "memory", "%eax", "%ebx", "%ecx", "%edx", "%esi", "%edi"
++    );
++#elif defined( _MSC_VER ) && ! defined( _M_AMD64 )
++    __asm {
++	lea	eax, ar
++	mov	[eax], esp         /* save esp, ebp */
++	mov	[eax+4], ebp
++	mov	esp, eax
++	mov	esi, [esp+8]       /* esi = in */
++	mov	edi, [esp+16]      /* edi = out */
++	mov	edx, [esp+40]      /* edx = hold */
++	mov	ebx, [esp+44]      /* ebx = bits */
++	mov	ebp, [esp+32]      /* ebp = lcode */
++
++	cld
++	jmp	L_do_loop
++
++ALIGN 4
++L_while_test:
++	cmp	[esp+24], edi
++	jbe	L_break_loop
++	cmp	[esp+12], esi
++	jbe	L_break_loop
++
++L_do_loop:
++	cmp	bl, 15
++	ja	L_get_length_code    /* if (15 < bits) */
++
++	xor	eax, eax
++	lodsw                         /* al = *(ushort *)in++ */
++	mov	cl, bl            /* cl = bits, needs it for shifting */
++	add	bl, 16             /* bits += 16 */
++	shl	eax, cl
++	or	edx, eax        /* hold |= *((ushort *)in)++ << bits */
++
++L_get_length_code:
++	mov	eax, [esp+56]      /* eax = lmask */
++	and	eax, edx          /* eax &= hold */
++	mov	eax, [ebp+eax*4] /* eax = lcode[hold & lmask] */
++
++L_dolen:
++	mov	cl, ah            /* cl = this.bits */
++	sub	bl, ah            /* bits -= this.bits */
++	shr	edx, cl           /* hold >>= this.bits */
++
++	test	al, al
++	jnz	L_test_for_length_base /* if (op != 0) 45.7% */
++
++	shr	eax, 16            /* output this.val char */
++	stosb
++	jmp	L_while_test
++
++ALIGN 4
++L_test_for_length_base:
++	mov	ecx, eax          /* len = this */
++	shr	ecx, 16            /* len = this.val */
++	mov	[esp+64], ecx      /* save len */
++	mov	cl, al
++
++	test	al, 16
++	jz	L_test_for_second_level_length /* if ((op & 16) == 0) 8% */
++	and	cl, 15             /* op &= 15 */
++	jz	L_decode_distance    /* if (!op) */
++	cmp	bl, cl
++	jae	L_add_bits_to_len    /* if (op <= bits) */
++
++	mov	ch, cl            /* stash op in ch, freeing cl */
++	xor	eax, eax
++	lodsw                         /* al = *(ushort *)in++ */
++	mov	cl, bl            /* cl = bits, needs it for shifting */
++	add	bl, 16             /* bits += 16 */
++	shl	eax, cl
++	or	edx, eax         /* hold |= *((ushort *)in)++ << bits */
++	mov	cl, ch            /* move op back to ecx */
++
++L_add_bits_to_len:
++	sub	bl, cl
++	xor	eax, eax
++	inc	eax
++	shl	eax, cl
++	dec	eax
++	and	eax, edx          /* eax &= hold */
++	shr	edx, cl
++	add	[esp+64], eax      /* len += hold & mask[op] */
++
++L_decode_distance:
++	cmp	bl, 15
++	ja	L_get_distance_code  /* if (15 < bits) */
++
++	xor	eax, eax
++	lodsw                         /* al = *(ushort *)in++ */
++	mov	cl, bl            /* cl = bits, needs it for shifting */
++	add	bl, 16             /* bits += 16 */
++	shl	eax, cl
++	or	edx, eax         /* hold |= *((ushort *)in)++ << bits */
++
++L_get_distance_code:
++	mov	eax, [esp+60]      /* eax = dmask */
++	mov	ecx, [esp+36]      /* ecx = dcode */
++	and	eax, edx          /* eax &= hold */
++	mov	eax, [ecx+eax*4]/* eax = dcode[hold & dmask] */
++
++L_dodist:
++	mov	ebp, eax          /* dist = this */
++	shr	ebp, 16            /* dist = this.val */
++	mov	cl, ah
++	sub	bl, ah            /* bits -= this.bits */
++	shr	edx, cl           /* hold >>= this.bits */
++	mov	cl, al            /* cl = this.op */
++
++	test	al, 16             /* if ((op & 16) == 0) */
++	jz	L_test_for_second_level_dist
++	and	cl, 15             /* op &= 15 */
++	jz	L_check_dist_one
++	cmp	bl, cl
++	jae	L_add_bits_to_dist   /* if (op <= bits) 97.6% */
++
++	mov	ch, cl            /* stash op in ch, freeing cl */
++	xor	eax, eax
++	lodsw                         /* al = *(ushort *)in++ */
++	mov	cl, bl            /* cl = bits, needs it for shifting */
++	add	bl, 16             /* bits += 16 */
++	shl	eax, cl
++	or	edx, eax        /* hold |= *((ushort *)in)++ << bits */
++	mov	cl, ch            /* move op back to ecx */
++
++L_add_bits_to_dist:
++	sub	bl, cl
++	xor	eax, eax
++	inc	eax
++	shl	eax, cl
++	dec	eax                 /* (1 << op) - 1 */
++	and	eax, edx          /* eax &= hold */
++	shr	edx, cl
++	add	ebp, eax          /* dist += hold & ((1 << op) - 1) */
++
++L_check_window:
++	mov	[esp+8], esi       /* save in so from can use it's reg */
++	mov	eax, edi
++	sub	eax, [esp+20]      /* nbytes = out - beg */
++
++	cmp	eax, ebp
++	jb	L_clip_window        /* if (dist > nbytes) 4.2% */
++
++	mov	ecx, [esp+64]      /* ecx = len */
++	mov	esi, edi
++	sub	esi, ebp          /* from = out - dist */
++
++	sar	ecx, 1
++	jnc	L_copy_two
++
++	rep     movsw
++	mov	al, [esi]
++	mov	[edi], al
++	inc	edi
++
++	mov	esi, [esp+8]      /* move in back to %esi, toss from */
++	mov	ebp, [esp+32]     /* ebp = lcode */
++	jmp	L_while_test
++
++L_copy_two:
++	rep     movsw
++	mov	esi, [esp+8]      /* move in back to %esi, toss from */
++	mov	ebp, [esp+32]     /* ebp = lcode */
++	jmp	L_while_test
++
++ALIGN 4
++L_check_dist_one:
++	cmp	ebp, 1            /* if dist 1, is a memset */
++	jne	L_check_window
++	cmp	[esp+20], edi
++	je	L_check_window    /* out == beg, if outside window */
++
++	mov	ecx, [esp+64]     /* ecx = len */
++	mov	al, [edi-1]
++	mov	ah, al
++
++	sar	ecx, 1
++	jnc	L_set_two
++	mov	[edi], al         /* memset out with from[-1] */
++	inc	edi
++
++L_set_two:
++	rep     stosw
++	mov	ebp, [esp+32]     /* ebp = lcode */
++	jmp	L_while_test
++
++ALIGN 4
++L_test_for_second_level_length:
++	test	al, 64
++	jnz	L_test_for_end_of_block /* if ((op & 64) != 0) */
++
++	xor	eax, eax
++	inc	eax
++	shl	eax, cl
++	dec	eax
++	and	eax, edx         /* eax &= hold */
++	add	eax, [esp+64]     /* eax += len */
++	mov	eax, [ebp+eax*4] /* eax = lcode[val+(hold&mask[op])]*/
++	jmp	L_dolen
++
++ALIGN 4
++L_test_for_second_level_dist:
++	test	al, 64
++	jnz	L_invalid_distance_code /* if ((op & 64) != 0) */
++
++	xor	eax, eax
++	inc	eax
++	shl	eax, cl
++	dec	eax
++	and	eax, edx         /* eax &= hold */
++	add	eax, ebp         /* eax += dist */
++	mov	ecx, [esp+36]     /* ecx = dcode */
++	mov	eax, [ecx+eax*4] /* eax = dcode[val+(hold&mask[op])]*/
++	jmp	L_dodist
++
++ALIGN 4
++L_clip_window:
++	mov	ecx, eax
++	mov	eax, [esp+48]     /* eax = wsize */
++	neg	ecx                /* nbytes = -nbytes */
++	mov	esi, [esp+28]     /* from = window */
++
++	cmp	eax, ebp
++	jb	L_invalid_distance_too_far /* if (dist > wsize) */
++
++	add	ecx, ebp         /* nbytes = dist - nbytes */
++	cmp	dword ptr [esp+52], 0
++	jne	L_wrap_around_window /* if (write != 0) */
++
++	sub	eax, ecx
++	add	esi, eax         /* from += wsize - nbytes */
++
++	mov	eax, [esp+64]    /* eax = len */
++	cmp	eax, ecx
++	jbe	L_do_copy          /* if (nbytes >= len) */
++
++	sub	eax, ecx         /* len -= nbytes */
++	rep     movsb
++	mov	esi, edi
++	sub	esi, ebp         /* from = out - dist */
++	jmp	L_do_copy
++
++ALIGN 4
++L_wrap_around_window:
++	mov	eax, [esp+52]    /* eax = write */
++	cmp	ecx, eax
++	jbe	L_contiguous_in_window /* if (write >= nbytes) */
++
++	add	esi, [esp+48]    /* from += wsize */
++	add	esi, eax         /* from += write */
++	sub	esi, ecx         /* from -= nbytes */
++	sub	ecx, eax         /* nbytes -= write */
++
++	mov	eax, [esp+64]    /* eax = len */
++	cmp	eax, ecx
++	jbe	L_do_copy          /* if (nbytes >= len) */
++
++	sub	eax, ecx         /* len -= nbytes */
++	rep     movsb
++	mov	esi, [esp+28]     /* from = window */
++	mov	ecx, [esp+52]     /* nbytes = write */
++	cmp	eax, ecx
++	jbe	L_do_copy          /* if (nbytes >= len) */
++
++	sub	eax, ecx         /* len -= nbytes */
++	rep     movsb
++	mov	esi, edi
++	sub	esi, ebp         /* from = out - dist */
++	jmp	L_do_copy
++
++ALIGN 4
++L_contiguous_in_window:
++	add	esi, eax
++	sub	esi, ecx         /* from += write - nbytes */
++
++	mov	eax, [esp+64]    /* eax = len */
++	cmp	eax, ecx
++	jbe	L_do_copy          /* if (nbytes >= len) */
++
++	sub	eax, ecx         /* len -= nbytes */
++	rep     movsb
++	mov	esi, edi
++	sub	esi, ebp         /* from = out - dist */
++	jmp	L_do_copy
++
++ALIGN 4
++L_do_copy:
++	mov	ecx, eax
++	rep     movsb
++
++	mov	esi, [esp+8]      /* move in back to %esi, toss from */
++	mov	ebp, [esp+32]     /* ebp = lcode */
++	jmp	L_while_test
++
++L_test_for_end_of_block:
++	test	al, 32
++	jz	L_invalid_literal_length_code
++	mov	dword ptr [esp+72], 1
++	jmp	L_break_loop_with_status
++
++L_invalid_literal_length_code:
++	mov	dword ptr [esp+72], 2
++	jmp	L_break_loop_with_status
++
++L_invalid_distance_code:
++	mov	dword ptr [esp+72], 3
++	jmp	L_break_loop_with_status
++
++L_invalid_distance_too_far:
++	mov	esi, [esp+4]
++	mov	dword ptr [esp+72], 4
++	jmp	L_break_loop_with_status
++
++L_break_loop:
++	mov	dword ptr [esp+72], 0
++
++L_break_loop_with_status:
++/* put in, out, bits, and hold back into ar and pop esp */
++	mov	[esp+8], esi     /* save in */
++	mov	[esp+16], edi    /* save out */
++	mov	[esp+44], ebx    /* save bits */
++	mov	[esp+40], edx    /* save hold */
++	mov	ebp, [esp+4]     /* restore esp, ebp */
++	mov	esp, [esp]
++    }
++#else
++#error "x86 architecture not defined"
++#endif
++
++    if (ar.status > 1) {
++        if (ar.status == 2)
++            strm->msg = "invalid literal/length code";
++        else if (ar.status == 3)
++            strm->msg = "invalid distance code";
++        else
++            strm->msg = "invalid distance too far back";
++        state->mode = BAD;
++    }
++    else if ( ar.status == 1 ) {
++        state->mode = TYPE;
++    }
++
++    /* return unused bytes (on entry, bits < 8, so in won't go too far back) */
++    ar.len = ar.bits >> 3;
++    ar.in -= ar.len;
++    ar.bits -= ar.len << 3;
++    ar.hold &= (1U << ar.bits) - 1;
++
++    /* update state and return */
++    strm->next_in = ar.in;
++    strm->next_out = ar.out;
++    strm->avail_in = (unsigned)(ar.in < ar.last ?
++                                PAD_AVAIL_IN + (ar.last - ar.in) :
++                                PAD_AVAIL_IN - (ar.in - ar.last));
++    strm->avail_out = (unsigned)(ar.out < ar.end ?
++                                 PAD_AVAIL_OUT + (ar.end - ar.out) :
++                                 PAD_AVAIL_OUT - (ar.out - ar.end));
++    state->hold = ar.hold;
++    state->bits = ar.bits;
++    return;
++}
++
+--- a/contrib/inflate86/inffast.S	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/inflate86/inffast.S	1695412879.000000000
+@@ -0,0 +1,1368 @@
++/*
++ * inffast.S is a hand tuned assembler version of:
++ *
++ * inffast.c -- fast decoding
++ * Copyright (C) 1995-2003 Mark Adler
++ * For conditions of distribution and use, see copyright notice in zlib.h
++ *
++ * Copyright (C) 2003 Chris Anderson <christop@charm.net>
++ * Please use the copyright conditions above.
++ *
++ * This version (Jan-23-2003) of inflate_fast was coded and tested under
++ * GNU/Linux on a pentium 3, using the gcc-3.2 compiler distribution.  On that
++ * machine, I found that gzip style archives decompressed about 20% faster than
++ * the gcc-3.2 -O3 -fomit-frame-pointer compiled version.  Your results will
++ * depend on how large of a buffer is used for z_stream.next_in & next_out
++ * (8K-32K worked best for my 256K cpu cache) and how much overhead there is in
++ * stream processing I/O and crc32/addler32.  In my case, this routine used
++ * 70% of the cpu time and crc32 used 20%.
++ *
++ * I am confident that this version will work in the general case, but I have
++ * not tested a wide variety of datasets or a wide variety of platforms.
++ *
++ * Jan-24-2003 -- Added -DUSE_MMX define for slightly faster inflating.
++ * It should be a runtime flag instead of compile time flag...
++ *
++ * Jan-26-2003 -- Added runtime check for MMX support with cpuid instruction.
++ * With -DUSE_MMX, only MMX code is compiled.  With -DNO_MMX, only non-MMX code
++ * is compiled.  Without either option, runtime detection is enabled.  Runtime
++ * detection should work on all modern cpus and the recomended algorithm (flip
++ * ID bit on eflags and then use the cpuid instruction) is used in many
++ * multimedia applications.  Tested under win2k with gcc-2.95 and gas-2.12
++ * distributed with cygwin3.  Compiling with gcc-2.95 -c inffast.S -o
++ * inffast.obj generates a COFF object which can then be linked with MSVC++
++ * compiled code.  Tested under FreeBSD 4.7 with gcc-2.95.
++ *
++ * Jan-28-2003 -- Tested Athlon XP... MMX mode is slower than no MMX (and
++ * slower than compiler generated code).  Adjusted cpuid check to use the MMX
++ * code only for Pentiums < P4 until I have more data on the P4.  Speed
++ * improvment is only about 15% on the Athlon when compared with code generated
++ * with MSVC++.  Not sure yet, but I think the P4 will also be slower using the
++ * MMX mode because many of it's x86 ALU instructions execute in .5 cycles and
++ * have less latency than MMX ops.  Added code to buffer the last 11 bytes of
++ * the input stream since the MMX code grabs bits in chunks of 32, which
++ * differs from the inffast.c algorithm.  I don't think there would have been
++ * read overruns where a page boundary was crossed (a segfault), but there
++ * could have been overruns when next_in ends on unaligned memory (unintialized
++ * memory read).
++ *
++ * Mar-13-2003 -- P4 MMX is slightly slower than P4 NO_MMX.  I created a C
++ * version of the non-MMX code so that it doesn't depend on zstrm and zstate
++ * structure offsets which are hard coded in this file.  This was last tested
++ * with zlib-1.2.0 which is currently in beta testing, newer versions of this
++ * and inffas86.c can be found at http://www.eetbeetee.com/zlib/ and
++ * http://www.charm.net/~christop/zlib/
++ */
++
++
++/*
++ * if you have underscore linking problems (_inflate_fast undefined), try
++ * using -DGAS_COFF
++ */
++#if ! defined( GAS_COFF ) && ! defined( GAS_ELF )
++
++#if defined( WIN32 ) || defined( __CYGWIN__ )
++#define GAS_COFF /* windows object format */
++#else
++#define GAS_ELF
++#endif
++
++#endif /* ! GAS_COFF && ! GAS_ELF */
++
++
++#if defined( GAS_COFF )
++
++/* coff externals have underscores */
++#define inflate_fast _inflate_fast
++#define inflate_fast_use_mmx _inflate_fast_use_mmx
++
++#endif /* GAS_COFF */
++
++
++.file "inffast.S"
++
++.globl inflate_fast
++
++.text
++.align 4,0
++.L_invalid_literal_length_code_msg:
++.string "invalid literal/length code"
++
++.align 4,0
++.L_invalid_distance_code_msg:
++.string "invalid distance code"
++
++.align 4,0
++.L_invalid_distance_too_far_msg:
++.string "invalid distance too far back"
++
++#if ! defined( NO_MMX )
++.align 4,0
++.L_mask: /* mask[N] = ( 1 << N ) - 1 */
++.long 0
++.long 1
++.long 3
++.long 7
++.long 15
++.long 31
++.long 63
++.long 127
++.long 255
++.long 511
++.long 1023
++.long 2047
++.long 4095
++.long 8191
++.long 16383
++.long 32767
++.long 65535
++.long 131071
++.long 262143
++.long 524287
++.long 1048575
++.long 2097151
++.long 4194303
++.long 8388607
++.long 16777215
++.long 33554431
++.long 67108863
++.long 134217727
++.long 268435455
++.long 536870911
++.long 1073741823
++.long 2147483647
++.long 4294967295
++#endif /* NO_MMX */
++
++.text
++
++/*
++ * struct z_stream offsets, in zlib.h
++ */
++#define next_in_strm   0   /* strm->next_in */
++#define avail_in_strm  4   /* strm->avail_in */
++#define next_out_strm  12  /* strm->next_out */
++#define avail_out_strm 16  /* strm->avail_out */
++#define msg_strm       24  /* strm->msg */
++#define state_strm     28  /* strm->state */
++
++/*
++ * struct inflate_state offsets, in inflate.h
++ */
++#define mode_state     0   /* state->mode */
++#define wsize_state    32  /* state->wsize */
++#define write_state    40  /* state->write */
++#define window_state   44  /* state->window */
++#define hold_state     48  /* state->hold */
++#define bits_state     52  /* state->bits */
++#define lencode_state  68  /* state->lencode */
++#define distcode_state 72  /* state->distcode */
++#define lenbits_state  76  /* state->lenbits */
++#define distbits_state 80  /* state->distbits */
++
++/*
++ * inflate_fast's activation record
++ */
++#define local_var_size 64 /* how much local space for vars */
++#define strm_sp        88 /* first arg: z_stream * (local_var_size + 24) */
++#define start_sp       92 /* second arg: unsigned int (local_var_size + 28) */
++
++/*
++ * offsets for local vars on stack
++ */
++#define out            60  /* unsigned char* */
++#define window         56  /* unsigned char* */
++#define wsize          52  /* unsigned int */
++#define write          48  /* unsigned int */
++#define in             44  /* unsigned char* */
++#define beg            40  /* unsigned char* */
++#define buf            28  /* char[ 12 ] */
++#define len            24  /* unsigned int */
++#define last           20  /* unsigned char* */
++#define end            16  /* unsigned char* */
++#define dcode          12  /* code* */
++#define lcode           8  /* code* */
++#define dmask           4  /* unsigned int */
++#define lmask           0  /* unsigned int */
++
++/*
++ * typedef enum inflate_mode consts, in inflate.h
++ */
++#define INFLATE_MODE_TYPE 11  /* state->mode flags enum-ed in inflate.h */
++#define INFLATE_MODE_BAD  26
++
++
++#if ! defined( USE_MMX ) && ! defined( NO_MMX )
++
++#define RUN_TIME_MMX
++
++#define CHECK_MMX    1
++#define DO_USE_MMX   2
++#define DONT_USE_MMX 3
++
++.globl inflate_fast_use_mmx
++
++.data
++
++.align 4,0
++inflate_fast_use_mmx: /* integer flag for run time control 1=check,2=mmx,3=no */
++.long CHECK_MMX
++
++#if defined( GAS_ELF )
++/* elf info */
++.type   inflate_fast_use_mmx,@object
++.size   inflate_fast_use_mmx,4
++#endif
++
++#endif /* RUN_TIME_MMX */
++
++#if defined( GAS_COFF )
++/* coff info: scl 2 = extern, type 32 = function */
++.def inflate_fast; .scl 2; .type 32; .endef
++#endif
++
++.text
++
++.align 32,0x90
++inflate_fast:
++        pushl   %edi
++        pushl   %esi
++        pushl   %ebp
++        pushl   %ebx
++        pushf   /* save eflags (strm_sp, state_sp assumes this is 32 bits) */
++        subl    $local_var_size, %esp
++        cld
++
++#define strm_r  %esi
++#define state_r %edi
++
++        movl    strm_sp(%esp), strm_r
++        movl    state_strm(strm_r), state_r
++
++        /* in = strm->next_in;
++         * out = strm->next_out;
++         * last = in + strm->avail_in - 11;
++         * beg = out - (start - strm->avail_out);
++         * end = out + (strm->avail_out - 257);
++         */
++        movl    avail_in_strm(strm_r), %edx
++        movl    next_in_strm(strm_r), %eax
++
++        addl    %eax, %edx      /* avail_in += next_in */
++        subl    $11, %edx       /* avail_in -= 11 */
++
++        movl    %eax, in(%esp)
++        movl    %edx, last(%esp)
++
++        movl    start_sp(%esp), %ebp
++        movl    avail_out_strm(strm_r), %ecx
++        movl    next_out_strm(strm_r), %ebx
++
++        subl    %ecx, %ebp      /* start -= avail_out */
++        negl    %ebp            /* start = -start */
++        addl    %ebx, %ebp      /* start += next_out */
++
++        subl    $257, %ecx      /* avail_out -= 257 */
++        addl    %ebx, %ecx      /* avail_out += out */
++
++        movl    %ebx, out(%esp)
++        movl    %ebp, beg(%esp)
++        movl    %ecx, end(%esp)
++
++        /* wsize = state->wsize;
++         * write = state->write;
++         * window = state->window;
++         * hold = state->hold;
++         * bits = state->bits;
++         * lcode = state->lencode;
++         * dcode = state->distcode;
++         * lmask = ( 1 << state->lenbits ) - 1;
++         * dmask = ( 1 << state->distbits ) - 1;
++         */
++
++        movl    lencode_state(state_r), %eax
++        movl    distcode_state(state_r), %ecx
++
++        movl    %eax, lcode(%esp)
++        movl    %ecx, dcode(%esp)
++
++        movl    $1, %eax
++        movl    lenbits_state(state_r), %ecx
++        shll    %cl, %eax
++        decl    %eax
++        movl    %eax, lmask(%esp)
++
++        movl    $1, %eax
++        movl    distbits_state(state_r), %ecx
++        shll    %cl, %eax
++        decl    %eax
++        movl    %eax, dmask(%esp)
++
++        movl    wsize_state(state_r), %eax
++        movl    write_state(state_r), %ecx
++        movl    window_state(state_r), %edx
++
++        movl    %eax, wsize(%esp)
++        movl    %ecx, write(%esp)
++        movl    %edx, window(%esp)
++
++        movl    hold_state(state_r), %ebp
++        movl    bits_state(state_r), %ebx
++
++#undef strm_r
++#undef state_r
++
++#define in_r       %esi
++#define from_r     %esi
++#define out_r      %edi
++
++        movl    in(%esp), in_r
++        movl    last(%esp), %ecx
++        cmpl    in_r, %ecx
++        ja      .L_align_long           /* if in < last */
++
++        addl    $11, %ecx               /* ecx = &in[ avail_in ] */
++        subl    in_r, %ecx              /* ecx = avail_in */
++        movl    $12, %eax
++        subl    %ecx, %eax              /* eax = 12 - avail_in */
++        leal    buf(%esp), %edi
++        rep     movsb                   /* memcpy( buf, in, avail_in ) */
++        movl    %eax, %ecx
++        xorl    %eax, %eax
++        rep     stosb         /* memset( &buf[ avail_in ], 0, 12 - avail_in ) */
++        leal    buf(%esp), in_r         /* in = buf */
++        movl    in_r, last(%esp)        /* last = in, do just one iteration */
++        jmp     .L_is_aligned
++
++        /* align in_r on long boundary */
++.L_align_long:
++        testl   $3, in_r
++        jz      .L_is_aligned
++        xorl    %eax, %eax
++        movb    (in_r), %al
++        incl    in_r
++        movl    %ebx, %ecx
++        addl    $8, %ebx
++        shll    %cl, %eax
++        orl     %eax, %ebp
++        jmp     .L_align_long
++
++.L_is_aligned:
++        movl    out(%esp), out_r
++
++#if defined( NO_MMX )
++        jmp     .L_do_loop
++#endif
++
++#if defined( USE_MMX )
++        jmp     .L_init_mmx
++#endif
++
++/*** Runtime MMX check ***/
++
++#if defined( RUN_TIME_MMX )
++.L_check_mmx:
++        cmpl    $DO_USE_MMX, inflate_fast_use_mmx
++        je      .L_init_mmx
++        ja      .L_do_loop /* > 2 */
++
++        pushl   %eax
++        pushl   %ebx
++        pushl   %ecx
++        pushl   %edx
++        pushf
++        movl    (%esp), %eax      /* copy eflags to eax */
++        xorl    $0x200000, (%esp) /* try toggling ID bit of eflags (bit 21)
++                                   * to see if cpu supports cpuid...
++                                   * ID bit method not supported by NexGen but
++                                   * bios may load a cpuid instruction and
++                                   * cpuid may be disabled on Cyrix 5-6x86 */
++        popf
++        pushf
++        popl    %edx              /* copy new eflags to edx */
++        xorl    %eax, %edx        /* test if ID bit is flipped */
++        jz      .L_dont_use_mmx   /* not flipped if zero */
++        xorl    %eax, %eax
++        cpuid
++        cmpl    $0x756e6547, %ebx /* check for GenuineIntel in ebx,ecx,edx */
++        jne     .L_dont_use_mmx
++        cmpl    $0x6c65746e, %ecx
++        jne     .L_dont_use_mmx
++        cmpl    $0x49656e69, %edx
++        jne     .L_dont_use_mmx
++        movl    $1, %eax
++        cpuid                     /* get cpu features */
++        shrl    $8, %eax
++        andl    $15, %eax
++        cmpl    $6, %eax          /* check for Pentium family, is 0xf for P4 */
++        jne     .L_dont_use_mmx
++        testl   $0x800000, %edx   /* test if MMX feature is set (bit 23) */
++        jnz     .L_use_mmx
++        jmp     .L_dont_use_mmx
++.L_use_mmx:
++        movl    $DO_USE_MMX, inflate_fast_use_mmx
++        jmp     .L_check_mmx_pop
++.L_dont_use_mmx:
++        movl    $DONT_USE_MMX, inflate_fast_use_mmx
++.L_check_mmx_pop:
++        popl    %edx
++        popl    %ecx
++        popl    %ebx
++        popl    %eax
++        jmp     .L_check_mmx
++#endif
++
++
++/*** Non-MMX code ***/
++
++#if defined ( NO_MMX ) || defined( RUN_TIME_MMX )
++
++#define hold_r     %ebp
++#define bits_r     %bl
++#define bitslong_r %ebx
++
++.align 32,0x90
++.L_while_test:
++        /* while (in < last && out < end)
++         */
++        cmpl    out_r, end(%esp)
++        jbe     .L_break_loop           /* if (out >= end) */
++
++        cmpl    in_r, last(%esp)
++        jbe     .L_break_loop
++
++.L_do_loop:
++        /* regs: %esi = in, %ebp = hold, %bl = bits, %edi = out
++         *
++         * do {
++         *   if (bits < 15) {
++         *     hold |= *((unsigned short *)in)++ << bits;
++         *     bits += 16
++         *   }
++         *   this = lcode[hold & lmask]
++         */
++        cmpb    $15, bits_r
++        ja      .L_get_length_code      /* if (15 < bits) */
++
++        xorl    %eax, %eax
++        lodsw                           /* al = *(ushort *)in++ */
++        movb    bits_r, %cl             /* cl = bits, needs it for shifting */
++        addb    $16, bits_r             /* bits += 16 */
++        shll    %cl, %eax
++        orl     %eax, hold_r            /* hold |= *((ushort *)in)++ << bits */
++
++.L_get_length_code:
++        movl    lmask(%esp), %edx       /* edx = lmask */
++        movl    lcode(%esp), %ecx       /* ecx = lcode */
++        andl    hold_r, %edx            /* edx &= hold */
++        movl    (%ecx,%edx,4), %eax     /* eax = lcode[hold & lmask] */
++
++.L_dolen:
++        /* regs: %esi = in, %ebp = hold, %bl = bits, %edi = out
++         *
++         * dolen:
++         *    bits -= this.bits;
++         *    hold >>= this.bits
++         */
++        movb    %ah, %cl                /* cl = this.bits */
++        subb    %ah, bits_r             /* bits -= this.bits */
++        shrl    %cl, hold_r             /* hold >>= this.bits */
++
++        /* check if op is a literal
++         * if (op == 0) {
++         *    PUP(out) = this.val;
++         *  }
++         */
++        testb   %al, %al
++        jnz     .L_test_for_length_base /* if (op != 0) 45.7% */
++
++        shrl    $16, %eax               /* output this.val char */
++        stosb
++        jmp     .L_while_test
++
++.L_test_for_length_base:
++        /* regs: %esi = in, %ebp = hold, %bl = bits, %edi = out, %edx = len
++         *
++         * else if (op & 16) {
++         *   len = this.val
++         *   op &= 15
++         *   if (op) {
++         *     if (op > bits) {
++         *       hold |= *((unsigned short *)in)++ << bits;
++         *       bits += 16
++         *     }
++         *     len += hold & mask[op];
++         *     bits -= op;
++         *     hold >>= op;
++         *   }
++         */
++#define len_r %edx
++        movl    %eax, len_r             /* len = this */
++        shrl    $16, len_r              /* len = this.val */
++        movb    %al, %cl
++
++        testb   $16, %al
++        jz      .L_test_for_second_level_length /* if ((op & 16) == 0) 8% */
++        andb    $15, %cl                /* op &= 15 */
++        jz      .L_save_len             /* if (!op) */
++        cmpb    %cl, bits_r
++        jae     .L_add_bits_to_len      /* if (op <= bits) */
++
++        movb    %cl, %ch                /* stash op in ch, freeing cl */
++        xorl    %eax, %eax
++        lodsw                           /* al = *(ushort *)in++ */
++        movb    bits_r, %cl             /* cl = bits, needs it for shifting */
++        addb    $16, bits_r             /* bits += 16 */
++        shll    %cl, %eax
++        orl     %eax, hold_r            /* hold |= *((ushort *)in)++ << bits */
++        movb    %ch, %cl                /* move op back to ecx */
++
++.L_add_bits_to_len:
++        movl    $1, %eax
++        shll    %cl, %eax
++        decl    %eax
++        subb    %cl, bits_r
++        andl    hold_r, %eax            /* eax &= hold */
++        shrl    %cl, hold_r
++        addl    %eax, len_r             /* len += hold & mask[op] */
++
++.L_save_len:
++        movl    len_r, len(%esp)        /* save len */
++#undef  len_r
++
++.L_decode_distance:
++        /* regs: %esi = in, %ebp = hold, %bl = bits, %edi = out, %edx = dist
++         *
++         *   if (bits < 15) {
++         *     hold |= *((unsigned short *)in)++ << bits;
++         *     bits += 16
++         *   }
++         *   this = dcode[hold & dmask];
++         * dodist:
++         *   bits -= this.bits;
++         *   hold >>= this.bits;
++         *   op = this.op;
++         */
++
++        cmpb    $15, bits_r
++        ja      .L_get_distance_code    /* if (15 < bits) */
++
++        xorl    %eax, %eax
++        lodsw                           /* al = *(ushort *)in++ */
++        movb    bits_r, %cl             /* cl = bits, needs it for shifting */
++        addb    $16, bits_r             /* bits += 16 */
++        shll    %cl, %eax
++        orl     %eax, hold_r            /* hold |= *((ushort *)in)++ << bits */
++
++.L_get_distance_code:
++        movl    dmask(%esp), %edx       /* edx = dmask */
++        movl    dcode(%esp), %ecx       /* ecx = dcode */
++        andl    hold_r, %edx            /* edx &= hold */
++        movl    (%ecx,%edx,4), %eax     /* eax = dcode[hold & dmask] */
++
++#define dist_r %edx
++.L_dodist:
++        movl    %eax, dist_r            /* dist = this */
++        shrl    $16, dist_r             /* dist = this.val */
++        movb    %ah, %cl
++        subb    %ah, bits_r             /* bits -= this.bits */
++        shrl    %cl, hold_r             /* hold >>= this.bits */
++
++        /* if (op & 16) {
++         *   dist = this.val
++         *   op &= 15
++         *   if (op > bits) {
++         *     hold |= *((unsigned short *)in)++ << bits;
++         *     bits += 16
++         *   }
++         *   dist += hold & mask[op];
++         *   bits -= op;
++         *   hold >>= op;
++         */
++        movb    %al, %cl                /* cl = this.op */
++
++        testb   $16, %al                /* if ((op & 16) == 0) */
++        jz      .L_test_for_second_level_dist
++        andb    $15, %cl                /* op &= 15 */
++        jz      .L_check_dist_one
++        cmpb    %cl, bits_r
++        jae     .L_add_bits_to_dist     /* if (op <= bits) 97.6% */
++
++        movb    %cl, %ch                /* stash op in ch, freeing cl */
++        xorl    %eax, %eax
++        lodsw                           /* al = *(ushort *)in++ */
++        movb    bits_r, %cl             /* cl = bits, needs it for shifting */
++        addb    $16, bits_r             /* bits += 16 */
++        shll    %cl, %eax
++        orl     %eax, hold_r            /* hold |= *((ushort *)in)++ << bits */
++        movb    %ch, %cl                /* move op back to ecx */
++
++.L_add_bits_to_dist:
++        movl    $1, %eax
++        shll    %cl, %eax
++        decl    %eax                    /* (1 << op) - 1 */
++        subb    %cl, bits_r
++        andl    hold_r, %eax            /* eax &= hold */
++        shrl    %cl, hold_r
++        addl    %eax, dist_r            /* dist += hold & ((1 << op) - 1) */
++        jmp     .L_check_window
++
++.L_check_window:
++        /* regs: %esi = from, %ebp = hold, %bl = bits, %edi = out, %edx = dist
++         *       %ecx = nbytes
++         *
++         * nbytes = out - beg;
++         * if (dist <= nbytes) {
++         *   from = out - dist;
++         *   do {
++         *     PUP(out) = PUP(from);
++         *   } while (--len > 0) {
++         * }
++         */
++
++        movl    in_r, in(%esp)          /* save in so from can use it's reg */
++        movl    out_r, %eax
++        subl    beg(%esp), %eax         /* nbytes = out - beg */
++
++        cmpl    dist_r, %eax
++        jb      .L_clip_window          /* if (dist > nbytes) 4.2% */
++
++        movl    len(%esp), %ecx
++        movl    out_r, from_r
++        subl    dist_r, from_r          /* from = out - dist */
++
++        subl    $3, %ecx
++        movb    (from_r), %al
++        movb    %al, (out_r)
++        movb    1(from_r), %al
++        movb    2(from_r), %dl
++        addl    $3, from_r
++        movb    %al, 1(out_r)
++        movb    %dl, 2(out_r)
++        addl    $3, out_r
++        rep     movsb
++
++        movl    in(%esp), in_r          /* move in back to %esi, toss from */
++        jmp     .L_while_test
++
++.align 16,0x90
++.L_check_dist_one:
++        cmpl    $1, dist_r
++        jne     .L_check_window
++        cmpl    out_r, beg(%esp)
++        je      .L_check_window
++
++        decl    out_r
++        movl    len(%esp), %ecx
++        movb    (out_r), %al
++        subl    $3, %ecx
++
++        movb    %al, 1(out_r)
++        movb    %al, 2(out_r)
++        movb    %al, 3(out_r)
++        addl    $4, out_r
++        rep     stosb
++
++        jmp     .L_while_test
++
++.align 16,0x90
++.L_test_for_second_level_length:
++        /* else if ((op & 64) == 0) {
++         *   this = lcode[this.val + (hold & mask[op])];
++         * }
++         */
++        testb   $64, %al
++        jnz     .L_test_for_end_of_block  /* if ((op & 64) != 0) */
++
++        movl    $1, %eax
++        shll    %cl, %eax
++        decl    %eax
++        andl    hold_r, %eax            /* eax &= hold */
++        addl    %edx, %eax              /* eax += this.val */
++        movl    lcode(%esp), %edx       /* edx = lcode */
++        movl    (%edx,%eax,4), %eax     /* eax = lcode[val + (hold&mask[op])] */
++        jmp     .L_dolen
++
++.align 16,0x90
++.L_test_for_second_level_dist:
++        /* else if ((op & 64) == 0) {
++         *   this = dcode[this.val + (hold & mask[op])];
++         * }
++         */
++        testb   $64, %al
++        jnz     .L_invalid_distance_code  /* if ((op & 64) != 0) */
++
++        movl    $1, %eax
++        shll    %cl, %eax
++        decl    %eax
++        andl    hold_r, %eax            /* eax &= hold */
++        addl    %edx, %eax              /* eax += this.val */
++        movl    dcode(%esp), %edx       /* edx = dcode */
++        movl    (%edx,%eax,4), %eax     /* eax = dcode[val + (hold&mask[op])] */
++        jmp     .L_dodist
++
++.align 16,0x90
++.L_clip_window:
++        /* regs: %esi = from, %ebp = hold, %bl = bits, %edi = out, %edx = dist
++         *       %ecx = nbytes
++         *
++         * else {
++         *   if (dist > wsize) {
++         *     invalid distance
++         *   }
++         *   from = window;
++         *   nbytes = dist - nbytes;
++         *   if (write == 0) {
++         *     from += wsize - nbytes;
++         */
++#define nbytes_r %ecx
++        movl    %eax, nbytes_r
++        movl    wsize(%esp), %eax       /* prepare for dist compare */
++        negl    nbytes_r                /* nbytes = -nbytes */
++        movl    window(%esp), from_r    /* from = window */
++
++        cmpl    dist_r, %eax
++        jb      .L_invalid_distance_too_far /* if (dist > wsize) */
++
++        addl    dist_r, nbytes_r        /* nbytes = dist - nbytes */
++        cmpl    $0, write(%esp)
++        jne     .L_wrap_around_window   /* if (write != 0) */
++
++        subl    nbytes_r, %eax
++        addl    %eax, from_r            /* from += wsize - nbytes */
++
++        /* regs: %esi = from, %ebp = hold, %bl = bits, %edi = out, %edx = dist
++         *       %ecx = nbytes, %eax = len
++         *
++         *     if (nbytes < len) {
++         *       len -= nbytes;
++         *       do {
++         *         PUP(out) = PUP(from);
++         *       } while (--nbytes);
++         *       from = out - dist;
++         *     }
++         *   }
++         */
++#define len_r %eax
++        movl    len(%esp), len_r
++        cmpl    nbytes_r, len_r
++        jbe     .L_do_copy1             /* if (nbytes >= len) */
++
++        subl    nbytes_r, len_r         /* len -= nbytes */
++        rep     movsb
++        movl    out_r, from_r
++        subl    dist_r, from_r          /* from = out - dist */
++        jmp     .L_do_copy1
++
++        cmpl    nbytes_r, len_r
++        jbe     .L_do_copy1             /* if (nbytes >= len) */
++
++        subl    nbytes_r, len_r         /* len -= nbytes */
++        rep     movsb
++        movl    out_r, from_r
++        subl    dist_r, from_r          /* from = out - dist */
++        jmp     .L_do_copy1
++
++.L_wrap_around_window:
++        /* regs: %esi = from, %ebp = hold, %bl = bits, %edi = out, %edx = dist
++         *       %ecx = nbytes, %eax = write, %eax = len
++         *
++         *   else if (write < nbytes) {
++         *     from += wsize + write - nbytes;
++         *     nbytes -= write;
++         *     if (nbytes < len) {
++         *       len -= nbytes;
++         *       do {
++         *         PUP(out) = PUP(from);
++         *       } while (--nbytes);
++         *       from = window;
++         *       nbytes = write;
++         *       if (nbytes < len) {
++         *         len -= nbytes;
++         *         do {
++         *           PUP(out) = PUP(from);
++         *         } while(--nbytes);
++         *         from = out - dist;
++         *       }
++         *     }
++         *   }
++         */
++#define write_r %eax
++        movl    write(%esp), write_r
++        cmpl    write_r, nbytes_r
++        jbe     .L_contiguous_in_window /* if (write >= nbytes) */
++
++        addl    wsize(%esp), from_r
++        addl    write_r, from_r
++        subl    nbytes_r, from_r        /* from += wsize + write - nbytes */
++        subl    write_r, nbytes_r       /* nbytes -= write */
++#undef write_r
++
++        movl    len(%esp), len_r
++        cmpl    nbytes_r, len_r
++        jbe     .L_do_copy1             /* if (nbytes >= len) */
++
++        subl    nbytes_r, len_r         /* len -= nbytes */
++        rep     movsb
++        movl    window(%esp), from_r    /* from = window */
++        movl    write(%esp), nbytes_r   /* nbytes = write */
++        cmpl    nbytes_r, len_r
++        jbe     .L_do_copy1             /* if (nbytes >= len) */
++
++        subl    nbytes_r, len_r         /* len -= nbytes */
++        rep     movsb
++        movl    out_r, from_r
++        subl    dist_r, from_r          /* from = out - dist */
++        jmp     .L_do_copy1
++
++.L_contiguous_in_window:
++        /* regs: %esi = from, %ebp = hold, %bl = bits, %edi = out, %edx = dist
++         *       %ecx = nbytes, %eax = write, %eax = len
++         *
++         *   else {
++         *     from += write - nbytes;
++         *     if (nbytes < len) {
++         *       len -= nbytes;
++         *       do {
++         *         PUP(out) = PUP(from);
++         *       } while (--nbytes);
++         *       from = out - dist;
++         *     }
++         *   }
++         */
++#define write_r %eax
++        addl    write_r, from_r
++        subl    nbytes_r, from_r        /* from += write - nbytes */
++#undef write_r
++
++        movl    len(%esp), len_r
++        cmpl    nbytes_r, len_r
++        jbe     .L_do_copy1             /* if (nbytes >= len) */
++
++        subl    nbytes_r, len_r         /* len -= nbytes */
++        rep     movsb
++        movl    out_r, from_r
++        subl    dist_r, from_r          /* from = out - dist */
++
++.L_do_copy1:
++        /* regs: %esi = from, %esi = in, %ebp = hold, %bl = bits, %edi = out
++         *       %eax = len
++         *
++         *     while (len > 0) {
++         *       PUP(out) = PUP(from);
++         *       len--;
++         *     }
++         *   }
++         * } while (in < last && out < end);
++         */
++#undef nbytes_r
++#define in_r %esi
++        movl    len_r, %ecx
++        rep     movsb
++
++        movl    in(%esp), in_r          /* move in back to %esi, toss from */
++        jmp     .L_while_test
++
++#undef len_r
++#undef dist_r
++
++#endif /* NO_MMX || RUN_TIME_MMX */
++
++
++/*** MMX code ***/
++
++#if defined( USE_MMX ) || defined( RUN_TIME_MMX )
++
++.align 32,0x90
++.L_init_mmx:
++        emms
++
++#undef  bits_r
++#undef  bitslong_r
++#define bitslong_r %ebp
++#define hold_mm    %mm0
++        movd    %ebp, hold_mm
++        movl    %ebx, bitslong_r
++
++#define used_mm   %mm1
++#define dmask2_mm %mm2
++#define lmask2_mm %mm3
++#define lmask_mm  %mm4
++#define dmask_mm  %mm5
++#define tmp_mm    %mm6
++
++        movd    lmask(%esp), lmask_mm
++        movq    lmask_mm, lmask2_mm
++        movd    dmask(%esp), dmask_mm
++        movq    dmask_mm, dmask2_mm
++        pxor    used_mm, used_mm
++        movl    lcode(%esp), %ebx       /* ebx = lcode */
++        jmp     .L_do_loop_mmx
++
++.align 32,0x90
++.L_while_test_mmx:
++        /* while (in < last && out < end)
++         */
++        cmpl    out_r, end(%esp)
++        jbe     .L_break_loop           /* if (out >= end) */
++
++        cmpl    in_r, last(%esp)
++        jbe     .L_break_loop
++
++.L_do_loop_mmx:
++        psrlq   used_mm, hold_mm        /* hold_mm >>= last bit length */
++
++        cmpl    $32, bitslong_r
++        ja      .L_get_length_code_mmx  /* if (32 < bits) */
++
++        movd    bitslong_r, tmp_mm
++        movd    (in_r), %mm7
++        addl    $4, in_r
++        psllq   tmp_mm, %mm7
++        addl    $32, bitslong_r
++        por     %mm7, hold_mm           /* hold_mm |= *((uint *)in)++ << bits */
++
++.L_get_length_code_mmx:
++        pand    hold_mm, lmask_mm
++        movd    lmask_mm, %eax
++        movq    lmask2_mm, lmask_mm
++        movl    (%ebx,%eax,4), %eax     /* eax = lcode[hold & lmask] */
++
++.L_dolen_mmx:
++        movzbl  %ah, %ecx               /* ecx = this.bits */
++        movd    %ecx, used_mm
++        subl    %ecx, bitslong_r        /* bits -= this.bits */
++
++        testb   %al, %al
++        jnz     .L_test_for_length_base_mmx /* if (op != 0) 45.7% */
++
++        shrl    $16, %eax               /* output this.val char */
++        stosb
++        jmp     .L_while_test_mmx
++
++.L_test_for_length_base_mmx:
++#define len_r  %edx
++        movl    %eax, len_r             /* len = this */
++        shrl    $16, len_r              /* len = this.val */
++
++        testb   $16, %al
++        jz      .L_test_for_second_level_length_mmx /* if ((op & 16) == 0) 8% */
++        andl    $15, %eax               /* op &= 15 */
++        jz      .L_decode_distance_mmx  /* if (!op) */
++
++        psrlq   used_mm, hold_mm        /* hold_mm >>= last bit length */
++        movd    %eax, used_mm
++        movd    hold_mm, %ecx
++        subl    %eax, bitslong_r
++        andl    .L_mask(,%eax,4), %ecx
++        addl    %ecx, len_r             /* len += hold & mask[op] */
++
++.L_decode_distance_mmx:
++        psrlq   used_mm, hold_mm        /* hold_mm >>= last bit length */
++
++        cmpl    $32, bitslong_r
++        ja      .L_get_dist_code_mmx    /* if (32 < bits) */
++
++        movd    bitslong_r, tmp_mm
++        movd    (in_r), %mm7
++        addl    $4, in_r
++        psllq   tmp_mm, %mm7
++        addl    $32, bitslong_r
++        por     %mm7, hold_mm           /* hold_mm |= *((uint *)in)++ << bits */
++
++.L_get_dist_code_mmx:
++        movl    dcode(%esp), %ebx       /* ebx = dcode */
++        pand    hold_mm, dmask_mm
++        movd    dmask_mm, %eax
++        movq    dmask2_mm, dmask_mm
++        movl    (%ebx,%eax,4), %eax     /* eax = dcode[hold & lmask] */
++
++.L_dodist_mmx:
++#define dist_r %ebx
++        movzbl  %ah, %ecx               /* ecx = this.bits */
++        movl    %eax, dist_r
++        shrl    $16, dist_r             /* dist  = this.val */
++        subl    %ecx, bitslong_r        /* bits -= this.bits */
++        movd    %ecx, used_mm
++
++        testb   $16, %al                /* if ((op & 16) == 0) */
++        jz      .L_test_for_second_level_dist_mmx
++        andl    $15, %eax               /* op &= 15 */
++        jz      .L_check_dist_one_mmx
++
++.L_add_bits_to_dist_mmx:
++        psrlq   used_mm, hold_mm        /* hold_mm >>= last bit length */
++        movd    %eax, used_mm           /* save bit length of current op */
++        movd    hold_mm, %ecx           /* get the next bits on input stream */
++        subl    %eax, bitslong_r        /* bits -= op bits */
++        andl    .L_mask(,%eax,4), %ecx  /* ecx   = hold & mask[op] */
++        addl    %ecx, dist_r            /* dist += hold & mask[op] */
++
++.L_check_window_mmx:
++        movl    in_r, in(%esp)          /* save in so from can use it's reg */
++        movl    out_r, %eax
++        subl    beg(%esp), %eax         /* nbytes = out - beg */
++
++        cmpl    dist_r, %eax
++        jb      .L_clip_window_mmx      /* if (dist > nbytes) 4.2% */
++
++        movl    len_r, %ecx
++        movl    out_r, from_r
++        subl    dist_r, from_r          /* from = out - dist */
++
++        subl    $3, %ecx
++        movb    (from_r), %al
++        movb    %al, (out_r)
++        movb    1(from_r), %al
++        movb    2(from_r), %dl
++        addl    $3, from_r
++        movb    %al, 1(out_r)
++        movb    %dl, 2(out_r)
++        addl    $3, out_r
++        rep     movsb
++
++        movl    in(%esp), in_r          /* move in back to %esi, toss from */
++        movl    lcode(%esp), %ebx       /* move lcode back to %ebx, toss dist */
++        jmp     .L_while_test_mmx
++
++.align 16,0x90
++.L_check_dist_one_mmx:
++        cmpl    $1, dist_r
++        jne     .L_check_window_mmx
++        cmpl    out_r, beg(%esp)
++        je      .L_check_window_mmx
++
++        decl    out_r
++        movl    len_r, %ecx
++        movb    (out_r), %al
++        subl    $3, %ecx
++
++        movb    %al, 1(out_r)
++        movb    %al, 2(out_r)
++        movb    %al, 3(out_r)
++        addl    $4, out_r
++        rep     stosb
++
++        movl    lcode(%esp), %ebx       /* move lcode back to %ebx, toss dist */
++        jmp     .L_while_test_mmx
++
++.align 16,0x90
++.L_test_for_second_level_length_mmx:
++        testb   $64, %al
++        jnz     .L_test_for_end_of_block  /* if ((op & 64) != 0) */
++
++        andl    $15, %eax
++        psrlq   used_mm, hold_mm        /* hold_mm >>= last bit length */
++        movd    hold_mm, %ecx
++        andl    .L_mask(,%eax,4), %ecx
++        addl    len_r, %ecx
++        movl    (%ebx,%ecx,4), %eax     /* eax = lcode[hold & lmask] */
++        jmp     .L_dolen_mmx
++
++.align 16,0x90
++.L_test_for_second_level_dist_mmx:
++        testb   $64, %al
++        jnz     .L_invalid_distance_code  /* if ((op & 64) != 0) */
++
++        andl    $15, %eax
++        psrlq   used_mm, hold_mm        /* hold_mm >>= last bit length */
++        movd    hold_mm, %ecx
++        andl    .L_mask(,%eax,4), %ecx
++        movl    dcode(%esp), %eax       /* ecx = dcode */
++        addl    dist_r, %ecx
++        movl    (%eax,%ecx,4), %eax     /* eax = lcode[hold & lmask] */
++        jmp     .L_dodist_mmx
++
++.align 16,0x90
++.L_clip_window_mmx:
++#define nbytes_r %ecx
++        movl    %eax, nbytes_r
++        movl    wsize(%esp), %eax       /* prepare for dist compare */
++        negl    nbytes_r                /* nbytes = -nbytes */
++        movl    window(%esp), from_r    /* from = window */
++
++        cmpl    dist_r, %eax
++        jb      .L_invalid_distance_too_far /* if (dist > wsize) */
++
++        addl    dist_r, nbytes_r        /* nbytes = dist - nbytes */
++        cmpl    $0, write(%esp)
++        jne     .L_wrap_around_window_mmx /* if (write != 0) */
++
++        subl    nbytes_r, %eax
++        addl    %eax, from_r            /* from += wsize - nbytes */
++
++        cmpl    nbytes_r, len_r
++        jbe     .L_do_copy1_mmx         /* if (nbytes >= len) */
++
++        subl    nbytes_r, len_r         /* len -= nbytes */
++        rep     movsb
++        movl    out_r, from_r
++        subl    dist_r, from_r          /* from = out - dist */
++        jmp     .L_do_copy1_mmx
++
++        cmpl    nbytes_r, len_r
++        jbe     .L_do_copy1_mmx         /* if (nbytes >= len) */
++
++        subl    nbytes_r, len_r         /* len -= nbytes */
++        rep     movsb
++        movl    out_r, from_r
++        subl    dist_r, from_r          /* from = out - dist */
++        jmp     .L_do_copy1_mmx
++
++.L_wrap_around_window_mmx:
++#define write_r %eax
++        movl    write(%esp), write_r
++        cmpl    write_r, nbytes_r
++        jbe     .L_contiguous_in_window_mmx /* if (write >= nbytes) */
++
++        addl    wsize(%esp), from_r
++        addl    write_r, from_r
++        subl    nbytes_r, from_r        /* from += wsize + write - nbytes */
++        subl    write_r, nbytes_r       /* nbytes -= write */
++#undef write_r
++
++        cmpl    nbytes_r, len_r
++        jbe     .L_do_copy1_mmx         /* if (nbytes >= len) */
++
++        subl    nbytes_r, len_r         /* len -= nbytes */
++        rep     movsb
++        movl    window(%esp), from_r    /* from = window */
++        movl    write(%esp), nbytes_r   /* nbytes = write */
++        cmpl    nbytes_r, len_r
++        jbe     .L_do_copy1_mmx         /* if (nbytes >= len) */
++
++        subl    nbytes_r, len_r         /* len -= nbytes */
++        rep     movsb
++        movl    out_r, from_r
++        subl    dist_r, from_r          /* from = out - dist */
++        jmp     .L_do_copy1_mmx
++
++.L_contiguous_in_window_mmx:
++#define write_r %eax
++        addl    write_r, from_r
++        subl    nbytes_r, from_r        /* from += write - nbytes */
++#undef write_r
++
++        cmpl    nbytes_r, len_r
++        jbe     .L_do_copy1_mmx         /* if (nbytes >= len) */
++
++        subl    nbytes_r, len_r         /* len -= nbytes */
++        rep     movsb
++        movl    out_r, from_r
++        subl    dist_r, from_r          /* from = out - dist */
++
++.L_do_copy1_mmx:
++#undef nbytes_r
++#define in_r %esi
++        movl    len_r, %ecx
++        rep     movsb
++
++        movl    in(%esp), in_r          /* move in back to %esi, toss from */
++        movl    lcode(%esp), %ebx       /* move lcode back to %ebx, toss dist */
++        jmp     .L_while_test_mmx
++
++#undef hold_r
++#undef bitslong_r
++
++#endif /* USE_MMX || RUN_TIME_MMX */
++
++
++/*** USE_MMX, NO_MMX, and RUNTIME_MMX from here on ***/
++
++.L_invalid_distance_code:
++        /* else {
++         *   strm->msg = "invalid distance code";
++         *   state->mode = BAD;
++         * }
++         */
++        movl    $.L_invalid_distance_code_msg, %ecx
++        movl    $INFLATE_MODE_BAD, %edx
++        jmp     .L_update_stream_state
++
++.L_test_for_end_of_block:
++        /* else if (op & 32) {
++         *   state->mode = TYPE;
++         *   break;
++         * }
++         */
++        testb   $32, %al
++        jz      .L_invalid_literal_length_code  /* if ((op & 32) == 0) */
++
++        movl    $0, %ecx
++        movl    $INFLATE_MODE_TYPE, %edx
++        jmp     .L_update_stream_state
++
++.L_invalid_literal_length_code:
++        /* else {
++         *   strm->msg = "invalid literal/length code";
++         *   state->mode = BAD;
++         * }
++         */
++        movl    $.L_invalid_literal_length_code_msg, %ecx
++        movl    $INFLATE_MODE_BAD, %edx
++        jmp     .L_update_stream_state
++
++.L_invalid_distance_too_far:
++        /* strm->msg = "invalid distance too far back";
++         * state->mode = BAD;
++         */
++        movl    in(%esp), in_r          /* from_r has in's reg, put in back */
++        movl    $.L_invalid_distance_too_far_msg, %ecx
++        movl    $INFLATE_MODE_BAD, %edx
++        jmp     .L_update_stream_state
++
++.L_update_stream_state:
++        /* set strm->msg = %ecx, strm->state->mode = %edx */
++        movl    strm_sp(%esp), %eax
++        testl   %ecx, %ecx              /* if (msg != NULL) */
++        jz      .L_skip_msg
++        movl    %ecx, msg_strm(%eax)    /* strm->msg = msg */
++.L_skip_msg:
++        movl    state_strm(%eax), %eax  /* state = strm->state */
++        movl    %edx, mode_state(%eax)  /* state->mode = edx (BAD | TYPE) */
++        jmp     .L_break_loop
++
++.align 32,0x90
++.L_break_loop:
++
++/*
++ * Regs:
++ *
++ * bits = %ebp when mmx, and in %ebx when non-mmx
++ * hold = %hold_mm when mmx, and in %ebp when non-mmx
++ * in   = %esi
++ * out  = %edi
++ */
++
++#if defined( USE_MMX ) || defined( RUN_TIME_MMX )
++
++#if defined( RUN_TIME_MMX )
++
++        cmpl    $DO_USE_MMX, inflate_fast_use_mmx
++        jne     .L_update_next_in
++
++#endif /* RUN_TIME_MMX */
++
++        movl    %ebp, %ebx
++
++.L_update_next_in:
++
++#endif
++
++#define strm_r  %eax
++#define state_r %edx
++
++        /* len = bits >> 3;
++         * in -= len;
++         * bits -= len << 3;
++         * hold &= (1U << bits) - 1;
++         * state->hold = hold;
++         * state->bits = bits;
++         * strm->next_in = in;
++         * strm->next_out = out;
++         */
++        movl    strm_sp(%esp), strm_r
++        movl    %ebx, %ecx
++        movl    state_strm(strm_r), state_r
++        shrl    $3, %ecx
++        subl    %ecx, in_r
++        shll    $3, %ecx
++        subl    %ecx, %ebx
++        movl    out_r, next_out_strm(strm_r)
++        movl    %ebx, bits_state(state_r)
++        movl    %ebx, %ecx
++
++        leal    buf(%esp), %ebx
++        cmpl    %ebx, last(%esp)
++        jne     .L_buf_not_used         /* if buf != last */
++
++        subl    %ebx, in_r              /* in -= buf */
++        movl    next_in_strm(strm_r), %ebx
++        movl    %ebx, last(%esp)        /* last = strm->next_in */
++        addl    %ebx, in_r              /* in += strm->next_in */
++        movl    avail_in_strm(strm_r), %ebx
++        subl    $11, %ebx
++        addl    %ebx, last(%esp)    /* last = &strm->next_in[ avail_in - 11 ] */
++
++.L_buf_not_used:
++        movl    in_r, next_in_strm(strm_r)
++
++        movl    $1, %ebx
++        shll    %cl, %ebx
++        decl    %ebx
++
++#if defined( USE_MMX ) || defined( RUN_TIME_MMX )
++
++#if defined( RUN_TIME_MMX )
++
++        cmpl    $DO_USE_MMX, inflate_fast_use_mmx
++        jne     .L_update_hold
++
++#endif /* RUN_TIME_MMX */
++
++        psrlq   used_mm, hold_mm        /* hold_mm >>= last bit length */
++        movd    hold_mm, %ebp
++
++        emms
++
++.L_update_hold:
++
++#endif /* USE_MMX || RUN_TIME_MMX */
++
++        andl    %ebx, %ebp
++        movl    %ebp, hold_state(state_r)
++
++#define last_r %ebx
++
++        /* strm->avail_in = in < last ? 11 + (last - in) : 11 - (in - last) */
++        movl    last(%esp), last_r
++        cmpl    in_r, last_r
++        jbe     .L_last_is_smaller     /* if (in >= last) */
++
++        subl    in_r, last_r           /* last -= in */
++        addl    $11, last_r            /* last += 11 */
++        movl    last_r, avail_in_strm(strm_r)
++        jmp     .L_fixup_out
++.L_last_is_smaller:
++        subl    last_r, in_r           /* in -= last */
++        negl    in_r                   /* in = -in */
++        addl    $11, in_r              /* in += 11 */
++        movl    in_r, avail_in_strm(strm_r)
++
++#undef last_r
++#define end_r %ebx
++
++.L_fixup_out:
++        /* strm->avail_out = out < end ? 257 + (end - out) : 257 - (out - end)*/
++        movl    end(%esp), end_r
++        cmpl    out_r, end_r
++        jbe     .L_end_is_smaller      /* if (out >= end) */
++
++        subl    out_r, end_r           /* end -= out */
++        addl    $257, end_r            /* end += 257 */
++        movl    end_r, avail_out_strm(strm_r)
++        jmp     .L_done
++.L_end_is_smaller:
++        subl    end_r, out_r           /* out -= end */
++        negl    out_r                  /* out = -out */
++        addl    $257, out_r            /* out += 257 */
++        movl    out_r, avail_out_strm(strm_r)
++
++#undef end_r
++#undef strm_r
++#undef state_r
++
++.L_done:
++        addl    $local_var_size, %esp
++        popf
++        popl    %ebx
++        popl    %ebp
++        popl    %esi
++        popl    %edi
++        ret
++
++#if defined( GAS_ELF )
++/* elf info */
++.type inflate_fast,@function
++.size inflate_fast,.-inflate_fast
++#endif
+--- a/contrib/masmx64/bld_ml64.bat	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/masmx64/bld_ml64.bat	1695412879.000000000
+@@ -0,0 +1,2 @@
++ml64.exe /Flinffasx64 /c /Zi inffasx64.asm
++ml64.exe /Flgvmat64   /c /Zi gvmat64.asm
+--- a/contrib/masmx64/gvmat64.asm	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/masmx64/gvmat64.asm	1695412879.000000000
+@@ -0,0 +1,553 @@
++;uInt longest_match_x64(
++;    deflate_state *s,
++;    IPos cur_match);                             /* current match */
++
++; gvmat64.asm -- Asm portion of the optimized longest_match for 32 bits x86_64
++;  (AMD64 on Athlon 64, Opteron, Phenom
++;     and Intel EM64T on Pentium 4 with EM64T, Pentium D, Core 2 Duo, Core I5/I7)
++; Copyright (C) 1995-2010 Jean-loup Gailly, Brian Raiter and Gilles Vollant.
++;
++; File written by Gilles Vollant, by converting to assembly the longest_match
++;  from Jean-loup Gailly in deflate.c of zLib and infoZip zip.
++;
++;  and by taking inspiration on asm686 with masm, optimised assembly code
++;        from Brian Raiter, written 1998
++;
++;  This software is provided 'as-is', without any express or implied
++;  warranty.  In no event will the authors be held liable for any damages
++;  arising from the use of this software.
++;
++;  Permission is granted to anyone to use this software for any purpose,
++;  including commercial applications, and to alter it and redistribute it
++;  freely, subject to the following restrictions:
++;
++;  1. The origin of this software must not be misrepresented; you must not
++;     claim that you wrote the original software. If you use this software
++;     in a product, an acknowledgment in the product documentation would be
++;     appreciated but is not required.
++;  2. Altered source versions must be plainly marked as such, and must not be
++;     misrepresented as being the original software
++;  3. This notice may not be removed or altered from any source distribution.
++;
++;
++;
++;         http://www.zlib.net
++;         http://www.winimage.com/zLibDll
++;         http://www.muppetlabs.com/~breadbox/software/assembly.html
++;
++; to compile this file for infozip Zip, I use option:
++;   ml64.exe /Flgvmat64 /c /Zi /DINFOZIP gvmat64.asm
++;
++; to compile this file for zLib, I use option:
++;   ml64.exe /Flgvmat64 /c /Zi gvmat64.asm
++; Be carrefull to adapt zlib1222add below to your version of zLib
++;   (if you use a version of zLib before 1.0.4 or after 1.2.2.2, change
++;    value of zlib1222add later)
++;
++; This file compile with Microsoft Macro Assembler (x64) for AMD64
++;
++;   ml64.exe is given with Visual Studio 2005/2008/2010 and Windows WDK
++;
++;   (you can get Windows WDK with ml64 for AMD64 from
++;      http://www.microsoft.com/whdc/Devtools/wdk/default.mspx for low price)
++;
++
++
++;uInt longest_match(s, cur_match)
++;    deflate_state *s;
++;    IPos cur_match;                             /* current match */
++.code
++longest_match PROC
++
++
++;LocalVarsSize   equ 88
++ LocalVarsSize   equ 72
++
++; register used : rax,rbx,rcx,rdx,rsi,rdi,r8,r9,r10,r11,r12
++; free register :  r14,r15
++; register can be saved : rsp
++
++ chainlenwmask   equ  rsp + 8 - LocalVarsSize    ; high word: current chain len
++                                                 ; low word: s->wmask
++;window          equ  rsp + xx - LocalVarsSize   ; local copy of s->window ; stored in r10
++;windowbestlen   equ  rsp + xx - LocalVarsSize   ; s->window + bestlen , use r10+r11
++;scanstart       equ  rsp + xx - LocalVarsSize   ; first two bytes of string ; stored in r12w
++;scanend         equ  rsp + xx - LocalVarsSize   ; last two bytes of string use ebx
++;scanalign       equ  rsp + xx - LocalVarsSize   ; dword-misalignment of string r13
++;bestlen         equ  rsp + xx - LocalVarsSize   ; size of best match so far -> r11d
++;scan            equ  rsp + xx - LocalVarsSize   ; ptr to string wanting match -> r9
++IFDEF INFOZIP
++ELSE
++ nicematch       equ  (rsp + 16 - LocalVarsSize) ; a good enough match size
++ENDIF
++
++save_rdi        equ  rsp + 24 - LocalVarsSize
++save_rsi        equ  rsp + 32 - LocalVarsSize
++save_rbx        equ  rsp + 40 - LocalVarsSize
++save_rbp        equ  rsp + 48 - LocalVarsSize
++save_r12        equ  rsp + 56 - LocalVarsSize
++save_r13        equ  rsp + 64 - LocalVarsSize
++;save_r14        equ  rsp + 72 - LocalVarsSize
++;save_r15        equ  rsp + 80 - LocalVarsSize
++
++
++; summary of register usage
++; scanend     ebx
++; scanendw    bx
++; chainlenwmask   edx
++; curmatch    rsi
++; curmatchd   esi
++; windowbestlen   r8
++; scanalign   r9
++; scanalignd  r9d
++; window      r10
++; bestlen     r11
++; bestlend    r11d
++; scanstart   r12d
++; scanstartw  r12w
++; scan        r13
++; nicematch   r14d
++; limit       r15
++; limitd      r15d
++; prev        rcx
++
++;  all the +4 offsets are due to the addition of pending_buf_size (in zlib
++;  in the deflate_state structure since the asm code was first written
++;  (if you compile with zlib 1.0.4 or older, remove the +4).
++;  Note : these value are good with a 8 bytes boundary pack structure
++
++
++    MAX_MATCH           equ     258
++    MIN_MATCH           equ     3
++    MIN_LOOKAHEAD       equ     (MAX_MATCH+MIN_MATCH+1)
++
++
++;;; Offsets for fields in the deflate_state structure. These numbers
++;;; are calculated from the definition of deflate_state, with the
++;;; assumption that the compiler will dword-align the fields. (Thus,
++;;; changing the definition of deflate_state could easily cause this
++;;; program to crash horribly, without so much as a warning at
++;;; compile time. Sigh.)
++
++;  all the +zlib1222add offsets are due to the addition of fields
++;  in zlib in the deflate_state structure since the asm code was first written
++;  (if you compile with zlib 1.0.4 or older, use "zlib1222add equ (-4)").
++;  (if you compile with zlib between 1.0.5 and 1.2.2.1, use "zlib1222add equ 0").
++;  if you compile with zlib 1.2.2.2 or later , use "zlib1222add equ 8").
++
++
++IFDEF INFOZIP
++
++_DATA   SEGMENT
++COMM    window_size:DWORD
++; WMask ; 7fff
++COMM    window:BYTE:010040H
++COMM    prev:WORD:08000H
++; MatchLen : unused
++; PrevMatch : unused
++COMM    strstart:DWORD
++COMM    match_start:DWORD
++; Lookahead : ignore
++COMM    prev_length:DWORD ; PrevLen
++COMM    max_chain_length:DWORD
++COMM    good_match:DWORD
++COMM    nice_match:DWORD
++prev_ad equ OFFSET prev
++window_ad equ OFFSET window
++nicematch equ nice_match
++_DATA ENDS
++WMask equ 07fffh
++
++ELSE
++
++  IFNDEF zlib1222add
++    zlib1222add equ 8
++  ENDIF
++dsWSize         equ 56+zlib1222add+(zlib1222add/2)
++dsWMask         equ 64+zlib1222add+(zlib1222add/2)
++dsWindow        equ 72+zlib1222add
++dsPrev          equ 88+zlib1222add
++dsMatchLen      equ 128+zlib1222add
++dsPrevMatch     equ 132+zlib1222add
++dsStrStart      equ 140+zlib1222add
++dsMatchStart    equ 144+zlib1222add
++dsLookahead     equ 148+zlib1222add
++dsPrevLen       equ 152+zlib1222add
++dsMaxChainLen   equ 156+zlib1222add
++dsGoodMatch     equ 172+zlib1222add
++dsNiceMatch     equ 176+zlib1222add
++
++window_size     equ [ rcx + dsWSize]
++WMask           equ [ rcx + dsWMask]
++window_ad       equ [ rcx + dsWindow]
++prev_ad         equ [ rcx + dsPrev]
++strstart        equ [ rcx + dsStrStart]
++match_start     equ [ rcx + dsMatchStart]
++Lookahead       equ [ rcx + dsLookahead] ; 0ffffffffh on infozip
++prev_length     equ [ rcx + dsPrevLen]
++max_chain_length equ [ rcx + dsMaxChainLen]
++good_match      equ [ rcx + dsGoodMatch]
++nice_match      equ [ rcx + dsNiceMatch]
++ENDIF
++
++; parameter 1 in r8(deflate state s), param 2 in rdx (cur match)
++
++; see http://weblogs.asp.net/oldnewthing/archive/2004/01/14/58579.aspx and
++; http://msdn.microsoft.com/library/en-us/kmarch/hh/kmarch/64bitAMD_8e951dd2-ee77-4728-8702-55ce4b5dd24a.xml.asp
++;
++; All registers must be preserved across the call, except for
++;   rax, rcx, rdx, r8, r9, r10, and r11, which are scratch.
++
++
++
++;;; Save registers that the compiler may be using, and adjust esp to
++;;; make room for our stack frame.
++
++
++;;; Retrieve the function arguments. r8d will hold cur_match
++;;; throughout the entire function. edx will hold the pointer to the
++;;; deflate_state structure during the function's setup (before
++;;; entering the main loop.
++
++; parameter 1 in rcx (deflate_state* s), param 2 in edx -> r8 (cur match)
++
++; this clear high 32 bits of r8, which can be garbage in both r8 and rdx
++
++        mov [save_rdi],rdi
++        mov [save_rsi],rsi
++        mov [save_rbx],rbx
++        mov [save_rbp],rbp
++IFDEF INFOZIP
++        mov r8d,ecx
++ELSE
++        mov r8d,edx
++ENDIF
++        mov [save_r12],r12
++        mov [save_r13],r13
++;        mov [save_r14],r14
++;        mov [save_r15],r15
++
++
++;;; uInt wmask = s->w_mask;
++;;; unsigned chain_length = s->max_chain_length;
++;;; if (s->prev_length >= s->good_match) {
++;;;     chain_length >>= 2;
++;;; }
++
++        mov edi, prev_length
++        mov esi, good_match
++        mov eax, WMask
++        mov ebx, max_chain_length
++        cmp edi, esi
++        jl  LastMatchGood
++        shr ebx, 2
++LastMatchGood:
++
++;;; chainlen is decremented once beforehand so that the function can
++;;; use the sign flag instead of the zero flag for the exit test.
++;;; It is then shifted into the high word, to make room for the wmask
++;;; value, which it will always accompany.
++
++        dec ebx
++        shl ebx, 16
++        or  ebx, eax
++
++;;; on zlib only
++;;; if ((uInt)nice_match > s->lookahead) nice_match = s->lookahead;
++
++IFDEF INFOZIP
++        mov [chainlenwmask], ebx
++; on infozip nice_match = [nice_match]
++ELSE
++        mov eax, nice_match
++        mov [chainlenwmask], ebx
++        mov r10d, Lookahead
++        cmp r10d, eax
++        cmovnl r10d, eax
++        mov [nicematch],r10d
++ENDIF
++
++;;; register Bytef *scan = s->window + s->strstart;
++        mov r10, window_ad
++        mov ebp, strstart
++        lea r13, [r10 + rbp]
++
++;;; Determine how many bytes the scan ptr is off from being
++;;; dword-aligned.
++
++         mov r9,r13
++         neg r13
++         and r13,3
++
++;;; IPos limit = s->strstart > (IPos)MAX_DIST(s) ?
++;;;     s->strstart - (IPos)MAX_DIST(s) : NIL;
++IFDEF INFOZIP
++        mov eax,07efah ; MAX_DIST = (WSIZE-MIN_LOOKAHEAD) (0x8000-(3+8+1))
++ELSE
++        mov eax, window_size
++        sub eax, MIN_LOOKAHEAD
++ENDIF
++        xor edi,edi
++        sub ebp, eax
++
++        mov r11d, prev_length
++
++        cmovng ebp,edi
++
++;;; int best_len = s->prev_length;
++
++
++;;; Store the sum of s->window + best_len in esi locally, and in esi.
++
++       lea  rsi,[r10+r11]
++
++;;; register ush scan_start = *(ushf*)scan;
++;;; register ush scan_end   = *(ushf*)(scan+best_len-1);
++;;; Posf *prev = s->prev;
++
++        movzx r12d,word ptr [r9]
++        movzx ebx, word ptr [r9 + r11 - 1]
++
++        mov rdi, prev_ad
++
++;;; Jump into the main loop.
++
++        mov edx, [chainlenwmask]
++
++        cmp bx,word ptr [rsi + r8 - 1]
++        jz  LookupLoopIsZero
++
++LookupLoop1:
++        and r8d, edx
++
++        movzx   r8d, word ptr [rdi + r8*2]
++        cmp r8d, ebp
++        jbe LeaveNow
++        sub edx, 00010000h
++        js  LeaveNow
++
++LoopEntry1:
++        cmp bx,word ptr [rsi + r8 - 1]
++        jz  LookupLoopIsZero
++
++LookupLoop2:
++        and r8d, edx
++
++        movzx   r8d, word ptr [rdi + r8*2]
++        cmp r8d, ebp
++        jbe LeaveNow
++        sub edx, 00010000h
++        js  LeaveNow
++
++LoopEntry2:
++        cmp bx,word ptr [rsi + r8 - 1]
++        jz  LookupLoopIsZero
++
++LookupLoop4:
++        and r8d, edx
++
++        movzx   r8d, word ptr [rdi + r8*2]
++        cmp r8d, ebp
++        jbe LeaveNow
++        sub edx, 00010000h
++        js  LeaveNow
++
++LoopEntry4:
++
++        cmp bx,word ptr [rsi + r8 - 1]
++        jnz LookupLoop1
++        jmp LookupLoopIsZero
++
++
++;;; do {
++;;;     match = s->window + cur_match;
++;;;     if (*(ushf*)(match+best_len-1) != scan_end ||
++;;;         *(ushf*)match != scan_start) continue;
++;;;     [...]
++;;; } while ((cur_match = prev[cur_match & wmask]) > limit
++;;;          && --chain_length != 0);
++;;;
++;;; Here is the inner loop of the function. The function will spend the
++;;; majority of its time in this loop, and majority of that time will
++;;; be spent in the first ten instructions.
++;;;
++;;; Within this loop:
++;;; ebx = scanend
++;;; r8d = curmatch
++;;; edx = chainlenwmask - i.e., ((chainlen << 16) | wmask)
++;;; esi = windowbestlen - i.e., (window + bestlen)
++;;; edi = prev
++;;; ebp = limit
++
++LookupLoop:
++        and r8d, edx
++
++        movzx   r8d, word ptr [rdi + r8*2]
++        cmp r8d, ebp
++        jbe LeaveNow
++        sub edx, 00010000h
++        js  LeaveNow
++
++LoopEntry:
++
++        cmp bx,word ptr [rsi + r8 - 1]
++        jnz LookupLoop1
++LookupLoopIsZero:
++        cmp     r12w, word ptr [r10 + r8]
++        jnz LookupLoop1
++
++
++;;; Store the current value of chainlen.
++        mov [chainlenwmask], edx
++
++;;; Point edi to the string under scrutiny, and esi to the string we
++;;; are hoping to match it up with. In actuality, esi and edi are
++;;; both pointed (MAX_MATCH_8 - scanalign) bytes ahead, and edx is
++;;; initialized to -(MAX_MATCH_8 - scanalign).
++
++        lea rsi,[r8+r10]
++        mov rdx, 0fffffffffffffef8h; -(MAX_MATCH_8)
++        lea rsi, [rsi + r13 + 0108h] ;MAX_MATCH_8]
++        lea rdi, [r9 + r13 + 0108h] ;MAX_MATCH_8]
++
++        prefetcht1 [rsi+rdx]
++        prefetcht1 [rdi+rdx]
++
++
++;;; Test the strings for equality, 8 bytes at a time. At the end,
++;;; adjust rdx so that it is offset to the exact byte that mismatched.
++;;;
++;;; We already know at this point that the first three bytes of the
++;;; strings match each other, and they can be safely passed over before
++;;; starting the compare loop. So what this code does is skip over 0-3
++;;; bytes, as much as necessary in order to dword-align the edi
++;;; pointer. (rsi will still be misaligned three times out of four.)
++;;;
++;;; It should be confessed that this loop usually does not represent
++;;; much of the total running time. Replacing it with a more
++;;; straightforward "rep cmpsb" would not drastically degrade
++;;; performance.
++
++
++LoopCmps:
++        mov rax, [rsi + rdx]
++        xor rax, [rdi + rdx]
++        jnz LeaveLoopCmps
++
++        mov rax, [rsi + rdx + 8]
++        xor rax, [rdi + rdx + 8]
++        jnz LeaveLoopCmps8
++
++
++        mov rax, [rsi + rdx + 8+8]
++        xor rax, [rdi + rdx + 8+8]
++        jnz LeaveLoopCmps16
++
++        add rdx,8+8+8
++
++        jnz short LoopCmps
++        jmp short LenMaximum
++LeaveLoopCmps16: add rdx,8
++LeaveLoopCmps8: add rdx,8
++LeaveLoopCmps:
++
++        test    eax, 0000FFFFh
++        jnz LenLower
++
++        test eax,0ffffffffh
++
++        jnz LenLower32
++
++        add rdx,4
++        shr rax,32
++        or ax,ax
++        jnz LenLower
++
++LenLower32:
++        shr eax,16
++        add rdx,2
++LenLower:   sub al, 1
++        adc rdx, 0
++;;; Calculate the length of the match. If it is longer than MAX_MATCH,
++;;; then automatically accept it as the best possible match and leave.
++
++        lea rax, [rdi + rdx]
++        sub rax, r9
++        cmp eax, MAX_MATCH
++        jge LenMaximum
++
++;;; If the length of the match is not longer than the best match we
++;;; have so far, then forget it and return to the lookup loop.
++;///////////////////////////////////
++
++        cmp eax, r11d
++        jg  LongerMatch
++
++        lea rsi,[r10+r11]
++
++        mov rdi, prev_ad
++        mov edx, [chainlenwmask]
++        jmp LookupLoop
++
++;;;         s->match_start = cur_match;
++;;;         best_len = len;
++;;;         if (len >= nice_match) break;
++;;;         scan_end = *(ushf*)(scan+best_len-1);
++
++LongerMatch:
++        mov r11d, eax
++        mov match_start, r8d
++        cmp eax, [nicematch]
++        jge LeaveNow
++
++        lea rsi,[r10+rax]
++
++        movzx   ebx, word ptr [r9 + rax - 1]
++        mov rdi, prev_ad
++        mov edx, [chainlenwmask]
++        jmp LookupLoop
++
++;;; Accept the current string, with the maximum possible length.
++
++LenMaximum:
++        mov r11d,MAX_MATCH
++        mov match_start, r8d
++
++;;; if ((uInt)best_len <= s->lookahead) return (uInt)best_len;
++;;; return s->lookahead;
++
++LeaveNow:
++IFDEF INFOZIP
++        mov eax,r11d
++ELSE
++        mov eax, Lookahead
++        cmp r11d, eax
++        cmovng eax, r11d
++ENDIF
++
++;;; Restore the stack and return from whence we came.
++
++
++        mov rsi,[save_rsi]
++        mov rdi,[save_rdi]
++        mov rbx,[save_rbx]
++        mov rbp,[save_rbp]
++        mov r12,[save_r12]
++        mov r13,[save_r13]
++;        mov r14,[save_r14]
++;        mov r15,[save_r15]
++
++
++        ret 0
++; please don't remove this string !
++; Your can freely use gvmat64 in any free or commercial app
++; but it is far better don't remove the string in the binary!
++    db     0dh,0ah,"asm686 with masm, optimised assembly code from Brian Raiter, written 1998, converted to amd 64 by Gilles Vollant 2005",0dh,0ah,0
++longest_match   ENDP
++
++match_init PROC
++  ret 0
++match_init ENDP
++
++
++END
+--- a/contrib/masmx64/inffas8664.c	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/masmx64/inffas8664.c	1695412879.000000000
+@@ -0,0 +1,186 @@
++/* inffas8664.c is a hand tuned assembler version of inffast.c - fast decoding
++ * version for AMD64 on Windows using Microsoft C compiler
++ *
++ * Copyright (C) 1995-2003 Mark Adler
++ * For conditions of distribution and use, see copyright notice in zlib.h
++ *
++ * Copyright (C) 2003 Chris Anderson <christop@charm.net>
++ * Please use the copyright conditions above.
++ *
++ * 2005 - Adaptation to Microsoft C Compiler for AMD64 by Gilles Vollant
++ *
++ * inffas8664.c call function inffas8664fnc in inffasx64.asm
++ *  inffasx64.asm is automatically convert from AMD64 portion of inffas86.c
++ *
++ * Dec-29-2003 -- I added AMD64 inflate asm support.  This version is also
++ * slightly quicker on x86 systems because, instead of using rep movsb to copy
++ * data, it uses rep movsw, which moves data in 2-byte chunks instead of single
++ * bytes.  I've tested the AMD64 code on a Fedora Core 1 + the x86_64 updates
++ * from http://fedora.linux.duke.edu/fc1_x86_64
++ * which is running on an Athlon 64 3000+ / Gigabyte GA-K8VT800M system with
++ * 1GB ram.  The 64-bit version is about 4% faster than the 32-bit version,
++ * when decompressing mozilla-source-1.3.tar.gz.
++ *
++ * Mar-13-2003 -- Most of this is derived from inffast.S which is derived from
++ * the gcc -S output of zlib-1.2.0/inffast.c.  Zlib-1.2.0 is in beta release at
++ * the moment.  I have successfully compiled and tested this code with gcc2.96,
++ * gcc3.2, icc5.0, msvc6.0.  It is very close to the speed of inffast.S
++ * compiled with gcc -DNO_MMX, but inffast.S is still faster on the P3 with MMX
++ * enabled.  I will attempt to merge the MMX code into this version.  Newer
++ * versions of this and inffast.S can be found at
++ * http://www.eetbeetee.com/zlib/ and http://www.charm.net/~christop/zlib/
++ *
++ */
++
++#include <stdio.h>
++#include "zutil.h"
++#include "inftrees.h"
++#include "inflate.h"
++#include "inffast.h"
++
++/* Mark Adler's comments from inffast.c: */
++
++/*
++   Decode literal, length, and distance codes and write out the resulting
++   literal and match bytes until either not enough input or output is
++   available, an end-of-block is encountered, or a data error is encountered.
++   When large enough input and output buffers are supplied to inflate(), for
++   example, a 16K input buffer and a 64K output buffer, more than 95% of the
++   inflate execution time is spent in this routine.
++
++   Entry assumptions:
++
++        state->mode == LEN
++        strm->avail_in >= 6
++        strm->avail_out >= 258
++        start >= strm->avail_out
++        state->bits < 8
++
++   On return, state->mode is one of:
++
++        LEN -- ran out of enough output space or enough available input
++        TYPE -- reached end of block code, inflate() to interpret next block
++        BAD -- error in block data
++
++   Notes:
++
++    - The maximum input bits used by a length/distance pair is 15 bits for the
++      length code, 5 bits for the length extra, 15 bits for the distance code,
++      and 13 bits for the distance extra.  This totals 48 bits, or six bytes.
++      Therefore if strm->avail_in >= 6, then there is enough input to avoid
++      checking for available input while decoding.
++
++    - The maximum bytes that a single length/distance pair can output is 258
++      bytes, which is the maximum length that can be coded.  inflate_fast()
++      requires strm->avail_out >= 258 for each loop to avoid checking for
++      output space.
++ */
++
++
++
++    typedef struct inffast_ar {
++/* 64   32                               x86  x86_64 */
++/* ar offset                              register */
++/*  0    0 */ void *esp;                /* esp save */
++/*  8    4 */ void *ebp;                /* ebp save */
++/* 16    8 */ unsigned char FAR *in;    /* esi rsi  local strm->next_in */
++/* 24   12 */ unsigned char FAR *last;  /*     r9   while in < last */
++/* 32   16 */ unsigned char FAR *out;   /* edi rdi  local strm->next_out */
++/* 40   20 */ unsigned char FAR *beg;   /*          inflate()'s init next_out */
++/* 48   24 */ unsigned char FAR *end;   /*     r10  while out < end */
++/* 56   28 */ unsigned char FAR *window;/*          size of window, wsize!=0 */
++/* 64   32 */ code const FAR *lcode;    /* ebp rbp  local strm->lencode */
++/* 72   36 */ code const FAR *dcode;    /*     r11  local strm->distcode */
++/* 80   40 */ size_t /*unsigned long */hold;       /* edx rdx  local strm->hold */
++/* 88   44 */ unsigned bits;            /* ebx rbx  local strm->bits */
++/* 92   48 */ unsigned wsize;           /*          window size */
++/* 96   52 */ unsigned write;           /*          window write index */
++/*100   56 */ unsigned lmask;           /*     r12  mask for lcode */
++/*104   60 */ unsigned dmask;           /*     r13  mask for dcode */
++/*108   64 */ unsigned len;             /*     r14  match length */
++/*112   68 */ unsigned dist;            /*     r15  match distance */
++/*116   72 */ unsigned status;          /*          set when state chng*/
++    } type_ar;
++#ifdef ASMINF
++
++void inflate_fast(strm, start)
++z_streamp strm;
++unsigned start;         /* inflate()'s starting value for strm->avail_out */
++{
++    struct inflate_state FAR *state;
++    type_ar ar;
++    void inffas8664fnc(struct inffast_ar * par);
++
++
++
++#if (defined( __GNUC__ ) && defined( __amd64__ ) && ! defined( __i386 )) || (defined(_MSC_VER) && defined(_M_AMD64))
++#define PAD_AVAIL_IN 6
++#define PAD_AVAIL_OUT 258
++#else
++#define PAD_AVAIL_IN 5
++#define PAD_AVAIL_OUT 257
++#endif
++
++    /* copy state to local variables */
++    state = (struct inflate_state FAR *)strm->state;
++
++    ar.in = strm->next_in;
++    ar.last = ar.in + (strm->avail_in - PAD_AVAIL_IN);
++    ar.out = strm->next_out;
++    ar.beg = ar.out - (start - strm->avail_out);
++    ar.end = ar.out + (strm->avail_out - PAD_AVAIL_OUT);
++    ar.wsize = state->wsize;
++    ar.write = state->wnext;
++    ar.window = state->window;
++    ar.hold = state->hold;
++    ar.bits = state->bits;
++    ar.lcode = state->lencode;
++    ar.dcode = state->distcode;
++    ar.lmask = (1U << state->lenbits) - 1;
++    ar.dmask = (1U << state->distbits) - 1;
++
++    /* decode literals and length/distances until end-of-block or not enough
++       input data or output space */
++
++    /* align in on 1/2 hold size boundary */
++    while (((size_t)(void *)ar.in & (sizeof(ar.hold) / 2 - 1)) != 0) {
++        ar.hold += (unsigned long)*ar.in++ << ar.bits;
++        ar.bits += 8;
++    }
++
++    inffas8664fnc(&ar);
++
++    if (ar.status > 1) {
++        if (ar.status == 2)
++            strm->msg = "invalid literal/length code";
++        else if (ar.status == 3)
++            strm->msg = "invalid distance code";
++        else
++            strm->msg = "invalid distance too far back";
++        state->mode = BAD;
++    }
++    else if ( ar.status == 1 ) {
++        state->mode = TYPE;
++    }
++
++    /* return unused bytes (on entry, bits < 8, so in won't go too far back) */
++    ar.len = ar.bits >> 3;
++    ar.in -= ar.len;
++    ar.bits -= ar.len << 3;
++    ar.hold &= (1U << ar.bits) - 1;
++
++    /* update state and return */
++    strm->next_in = ar.in;
++    strm->next_out = ar.out;
++    strm->avail_in = (unsigned)(ar.in < ar.last ?
++                                PAD_AVAIL_IN + (ar.last - ar.in) :
++                                PAD_AVAIL_IN - (ar.in - ar.last));
++    strm->avail_out = (unsigned)(ar.out < ar.end ?
++                                 PAD_AVAIL_OUT + (ar.end - ar.out) :
++                                 PAD_AVAIL_OUT - (ar.out - ar.end));
++    state->hold = (unsigned long)ar.hold;
++    state->bits = ar.bits;
++    return;
++}
++
++#endif
+--- a/contrib/masmx64/inffasx64.asm	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/masmx64/inffasx64.asm	1695412879.000000000
+@@ -0,0 +1,396 @@
++; inffasx64.asm is a hand tuned assembler version of inffast.c - fast decoding
++; version for AMD64 on Windows using Microsoft C compiler
++;
++; inffasx64.asm is automatically convert from AMD64 portion of inffas86.c
++; inffasx64.asm is called by inffas8664.c, which contain more info.
++
++
++; to compile this file, I use option
++;   ml64.exe /Flinffasx64 /c /Zi inffasx64.asm
++;   with Microsoft Macro Assembler (x64) for AMD64
++;
++
++; This file compile with Microsoft Macro Assembler (x64) for AMD64
++;
++;   ml64.exe is given with Visual Studio 2005/2008/2010 and Windows WDK
++;
++;   (you can get Windows WDK with ml64 for AMD64 from
++;      http://www.microsoft.com/whdc/Devtools/wdk/default.mspx for low price)
++;
++
++
++.code
++inffas8664fnc PROC
++
++; see http://weblogs.asp.net/oldnewthing/archive/2004/01/14/58579.aspx and
++; http://msdn.microsoft.com/library/en-us/kmarch/hh/kmarch/64bitAMD_8e951dd2-ee77-4728-8702-55ce4b5dd24a.xml.asp
++;
++; All registers must be preserved across the call, except for
++;   rax, rcx, rdx, r8, r-9, r10, and r11, which are scratch.
++
++
++	mov [rsp-8],rsi
++	mov [rsp-16],rdi
++	mov [rsp-24],r12
++	mov [rsp-32],r13
++	mov [rsp-40],r14
++	mov [rsp-48],r15
++	mov [rsp-56],rbx
++
++	mov rax,rcx
++
++	mov	[rax+8], rbp       ; /* save regs rbp and rsp */
++	mov	[rax], rsp
++
++	mov	rsp, rax          ; /* make rsp point to &ar */
++
++	mov	rsi, [rsp+16]      ; /* rsi  = in */
++	mov	rdi, [rsp+32]      ; /* rdi  = out */
++	mov	r9, [rsp+24]       ; /* r9   = last */
++	mov	r10, [rsp+48]      ; /* r10  = end */
++	mov	rbp, [rsp+64]      ; /* rbp  = lcode */
++	mov	r11, [rsp+72]      ; /* r11  = dcode */
++	mov	rdx, [rsp+80]      ; /* rdx  = hold */
++	mov	ebx, [rsp+88]      ; /* ebx  = bits */
++	mov	r12d, [rsp+100]    ; /* r12d = lmask */
++	mov	r13d, [rsp+104]    ; /* r13d = dmask */
++                                          ; /* r14d = len */
++                                          ; /* r15d = dist */
++
++
++	cld
++	cmp	r10, rdi
++	je	L_one_time           ; /* if only one decode left */
++	cmp	r9, rsi
++
++    jne L_do_loop
++
++
++L_one_time:
++	mov	r8, r12           ; /* r8 = lmask */
++	cmp	bl, 32
++	ja	L_get_length_code_one_time
++
++	lodsd                         ; /* eax = *(uint *)in++ */
++	mov	cl, bl            ; /* cl = bits, needs it for shifting */
++	add	bl, 32             ; /* bits += 32 */
++	shl	rax, cl
++	or	rdx, rax          ; /* hold |= *((uint *)in)++ << bits */
++	jmp	L_get_length_code_one_time
++
++ALIGN 4
++L_while_test:
++	cmp	r10, rdi
++	jbe	L_break_loop
++	cmp	r9, rsi
++	jbe	L_break_loop
++
++L_do_loop:
++	mov	r8, r12           ; /* r8 = lmask */
++	cmp	bl, 32
++	ja	L_get_length_code    ; /* if (32 < bits) */
++
++	lodsd                         ; /* eax = *(uint *)in++ */
++	mov	cl, bl            ; /* cl = bits, needs it for shifting */
++	add	bl, 32             ; /* bits += 32 */
++	shl	rax, cl
++	or	rdx, rax          ; /* hold |= *((uint *)in)++ << bits */
++
++L_get_length_code:
++	and	r8, rdx            ; /* r8 &= hold */
++	mov	eax, [rbp+r8*4]  ; /* eax = lcode[hold & lmask] */
++
++	mov	cl, ah            ; /* cl = this.bits */
++	sub	bl, ah            ; /* bits -= this.bits */
++	shr	rdx, cl           ; /* hold >>= this.bits */
++
++	test	al, al
++	jnz	L_test_for_length_base ; /* if (op != 0) 45.7% */
++
++	mov	r8, r12            ; /* r8 = lmask */
++	shr	eax, 16            ; /* output this.val char */
++	stosb
++
++L_get_length_code_one_time:
++	and	r8, rdx            ; /* r8 &= hold */
++	mov	eax, [rbp+r8*4] ; /* eax = lcode[hold & lmask] */
++
++L_dolen:
++	mov	cl, ah            ; /* cl = this.bits */
++	sub	bl, ah            ; /* bits -= this.bits */
++	shr	rdx, cl           ; /* hold >>= this.bits */
++
++	test	al, al
++	jnz	L_test_for_length_base ; /* if (op != 0) 45.7% */
++
++	shr	eax, 16            ; /* output this.val char */
++	stosb
++	jmp	L_while_test
++
++ALIGN 4
++L_test_for_length_base:
++	mov	r14d, eax         ; /* len = this */
++	shr	r14d, 16           ; /* len = this.val */
++	mov	cl, al
++
++	test	al, 16
++	jz	L_test_for_second_level_length ; /* if ((op & 16) == 0) 8% */
++	and	cl, 15             ; /* op &= 15 */
++	jz	L_decode_distance    ; /* if (!op) */
++
++L_add_bits_to_len:
++	sub	bl, cl
++	xor	eax, eax
++	inc	eax
++	shl	eax, cl
++	dec	eax
++	and	eax, edx          ; /* eax &= hold */
++	shr	rdx, cl
++	add	r14d, eax         ; /* len += hold & mask[op] */
++
++L_decode_distance:
++	mov	r8, r13           ; /* r8 = dmask */
++	cmp	bl, 32
++	ja	L_get_distance_code  ; /* if (32 < bits) */
++
++	lodsd                         ; /* eax = *(uint *)in++ */
++	mov	cl, bl            ; /* cl = bits, needs it for shifting */
++	add	bl, 32             ; /* bits += 32 */
++	shl	rax, cl
++	or	rdx, rax          ; /* hold |= *((uint *)in)++ << bits */
++
++L_get_distance_code:
++	and	r8, rdx           ; /* r8 &= hold */
++	mov	eax, [r11+r8*4] ; /* eax = dcode[hold & dmask] */
++
++L_dodist:
++	mov	r15d, eax         ; /* dist = this */
++	shr	r15d, 16           ; /* dist = this.val */
++	mov	cl, ah
++	sub	bl, ah            ; /* bits -= this.bits */
++	shr	rdx, cl           ; /* hold >>= this.bits */
++	mov	cl, al            ; /* cl = this.op */
++
++	test	al, 16             ; /* if ((op & 16) == 0) */
++	jz	L_test_for_second_level_dist
++	and	cl, 15             ; /* op &= 15 */
++	jz	L_check_dist_one
++
++L_add_bits_to_dist:
++	sub	bl, cl
++	xor	eax, eax
++	inc	eax
++	shl	eax, cl
++	dec	eax                 ; /* (1 << op) - 1 */
++	and	eax, edx          ; /* eax &= hold */
++	shr	rdx, cl
++	add	r15d, eax         ; /* dist += hold & ((1 << op) - 1) */
++
++L_check_window:
++	mov	r8, rsi           ; /* save in so from can use it's reg */
++	mov	rax, rdi
++	sub	rax, [rsp+40]      ; /* nbytes = out - beg */
++
++	cmp	eax, r15d
++	jb	L_clip_window        ; /* if (dist > nbytes) 4.2% */
++
++	mov	ecx, r14d         ; /* ecx = len */
++	mov	rsi, rdi
++	sub	rsi, r15          ; /* from = out - dist */
++
++	sar	ecx, 1
++	jnc	L_copy_two           ; /* if len % 2 == 0 */
++
++	rep     movsw
++	mov	al, [rsi]
++	mov	[rdi], al
++	inc	rdi
++
++	mov	rsi, r8           ; /* move in back to %rsi, toss from */
++	jmp	L_while_test
++
++L_copy_two:
++	rep     movsw
++	mov	rsi, r8           ; /* move in back to %rsi, toss from */
++	jmp	L_while_test
++
++ALIGN 4
++L_check_dist_one:
++	cmp	r15d, 1            ; /* if dist 1, is a memset */
++	jne	L_check_window
++	cmp	[rsp+40], rdi      ; /* if out == beg, outside window */
++	je	L_check_window
++
++	mov	ecx, r14d         ; /* ecx = len */
++	mov	al, [rdi-1]
++	mov	ah, al
++
++	sar	ecx, 1
++	jnc	L_set_two
++	mov	[rdi], al
++	inc	rdi
++
++L_set_two:
++	rep     stosw
++	jmp	L_while_test
++
++ALIGN 4
++L_test_for_second_level_length:
++	test	al, 64
++	jnz	L_test_for_end_of_block ; /* if ((op & 64) != 0) */
++
++	xor	eax, eax
++	inc	eax
++	shl	eax, cl
++	dec	eax
++	and	eax, edx         ; /* eax &= hold */
++	add	eax, r14d        ; /* eax += len */
++	mov	eax, [rbp+rax*4] ; /* eax = lcode[val+(hold&mask[op])]*/
++	jmp	L_dolen
++
++ALIGN 4
++L_test_for_second_level_dist:
++	test	al, 64
++	jnz	L_invalid_distance_code ; /* if ((op & 64) != 0) */
++
++	xor	eax, eax
++	inc	eax
++	shl	eax, cl
++	dec	eax
++	and	eax, edx         ; /* eax &= hold */
++	add	eax, r15d        ; /* eax += dist */
++	mov	eax, [r11+rax*4] ; /* eax = dcode[val+(hold&mask[op])]*/
++	jmp	L_dodist
++
++ALIGN 4
++L_clip_window:
++	mov	ecx, eax         ; /* ecx = nbytes */
++	mov	eax, [rsp+92]     ; /* eax = wsize, prepare for dist cmp */
++	neg	ecx                ; /* nbytes = -nbytes */
++
++	cmp	eax, r15d
++	jb	L_invalid_distance_too_far ; /* if (dist > wsize) */
++
++	add	ecx, r15d         ; /* nbytes = dist - nbytes */
++	cmp	dword ptr [rsp+96], 0
++	jne	L_wrap_around_window ; /* if (write != 0) */
++
++	mov	rsi, [rsp+56]     ; /* from  = window */
++	sub	eax, ecx         ; /* eax  -= nbytes */
++	add	rsi, rax         ; /* from += wsize - nbytes */
++
++	mov	eax, r14d        ; /* eax = len */
++	cmp	r14d, ecx
++	jbe	L_do_copy           ; /* if (nbytes >= len) */
++
++	sub	eax, ecx         ; /* eax -= nbytes */
++	rep     movsb
++	mov	rsi, rdi
++	sub	rsi, r15         ; /* from = &out[ -dist ] */
++	jmp	L_do_copy
++
++ALIGN 4
++L_wrap_around_window:
++	mov	eax, [rsp+96]     ; /* eax = write */
++	cmp	ecx, eax
++	jbe	L_contiguous_in_window ; /* if (write >= nbytes) */
++
++	mov	esi, [rsp+92]     ; /* from  = wsize */
++	add	rsi, [rsp+56]     ; /* from += window */
++	add	rsi, rax         ; /* from += write */
++	sub	rsi, rcx         ; /* from -= nbytes */
++	sub	ecx, eax         ; /* nbytes -= write */
++
++	mov	eax, r14d        ; /* eax = len */
++	cmp	eax, ecx
++	jbe	L_do_copy           ; /* if (nbytes >= len) */
++
++	sub	eax, ecx         ; /* len -= nbytes */
++	rep     movsb
++	mov	rsi, [rsp+56]     ; /* from = window */
++	mov	ecx, [rsp+96]     ; /* nbytes = write */
++	cmp	eax, ecx
++	jbe	L_do_copy           ; /* if (nbytes >= len) */
++
++	sub	eax, ecx         ; /* len -= nbytes */
++	rep     movsb
++	mov	rsi, rdi
++	sub	rsi, r15         ; /* from = out - dist */
++	jmp	L_do_copy
++
++ALIGN 4
++L_contiguous_in_window:
++	mov	rsi, [rsp+56]     ; /* rsi = window */
++	add	rsi, rax
++	sub	rsi, rcx         ; /* from += write - nbytes */
++
++	mov	eax, r14d        ; /* eax = len */
++	cmp	eax, ecx
++	jbe	L_do_copy           ; /* if (nbytes >= len) */
++
++	sub	eax, ecx         ; /* len -= nbytes */
++	rep     movsb
++	mov	rsi, rdi
++	sub	rsi, r15         ; /* from = out - dist */
++	jmp	L_do_copy           ; /* if (nbytes >= len) */
++
++ALIGN 4
++L_do_copy:
++	mov	ecx, eax         ; /* ecx = len */
++	rep     movsb
++
++	mov	rsi, r8          ; /* move in back to %esi, toss from */
++	jmp	L_while_test
++
++L_test_for_end_of_block:
++	test	al, 32
++	jz	L_invalid_literal_length_code
++	mov	dword ptr [rsp+116], 1
++	jmp	L_break_loop_with_status
++
++L_invalid_literal_length_code:
++	mov	dword ptr [rsp+116], 2
++	jmp	L_break_loop_with_status
++
++L_invalid_distance_code:
++	mov	dword ptr [rsp+116], 3
++	jmp	L_break_loop_with_status
++
++L_invalid_distance_too_far:
++	mov	dword ptr [rsp+116], 4
++	jmp	L_break_loop_with_status
++
++L_break_loop:
++	mov	dword ptr [rsp+116], 0
++
++L_break_loop_with_status:
++; /* put in, out, bits, and hold back into ar and pop esp */
++	mov	[rsp+16], rsi     ; /* in */
++	mov	[rsp+32], rdi     ; /* out */
++	mov	[rsp+88], ebx     ; /* bits */
++	mov	[rsp+80], rdx     ; /* hold */
++
++	mov	rax, [rsp]       ; /* restore rbp and rsp */
++	mov	rbp, [rsp+8]
++	mov	rsp, rax
++
++
++
++	mov rsi,[rsp-8]
++	mov rdi,[rsp-16]
++	mov r12,[rsp-24]
++	mov r13,[rsp-32]
++	mov r14,[rsp-40]
++	mov r15,[rsp-48]
++	mov rbx,[rsp-56]
++
++    ret 0
++;          :
++;          : "m" (ar)
++;          : "memory", "%rax", "%rbx", "%rcx", "%rdx", "%rsi", "%rdi",
++;            "%r8", "%r9", "%r10", "%r11", "%r12", "%r13", "%r14", "%r15"
++;    );
++
++inffas8664fnc 	ENDP
++;_TEXT	ENDS
++END
+--- a/contrib/masmx64/readme.txt	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/masmx64/readme.txt	1695412879.000000000
+@@ -0,0 +1,31 @@
++Summary
++-------
++This directory contains ASM implementations of the functions
++longest_match() and inflate_fast(), for 64 bits x86 (both AMD64 and Intel EM64t),
++for use with Microsoft Macro Assembler (x64) for AMD64 and Microsoft C++ 64 bits.
++
++gvmat64.asm is written by Gilles Vollant (2005), by using Brian Raiter 686/32 bits
++   assembly optimized version from Jean-loup Gailly original longest_match function
++
++inffasx64.asm and inffas8664.c were written by Chris Anderson, by optimizing
++   original function from Mark Adler
++
++Use instructions
++----------------
++Assemble the .asm files using MASM and put the object files into the zlib source
++directory.  You can also get object files here:
++
++     http://www.winimage.com/zLibDll/zlib124_masm_obj.zip
++
++define ASMV and ASMINF in your project. Include inffas8664.c in your source tree,
++and inffasx64.obj and gvmat64.obj as object to link.
++
++
++Build instructions
++------------------
++run bld_64.bat with Microsoft Macro Assembler (x64) for AMD64 (ml64.exe)
++
++ml64.exe is given with Visual Studio 2005, Windows 2003 server DDK
++
++You can get Windows 2003 server DDK with ml64 and cl for AMD64 from
++  http://www.microsoft.com/whdc/devtools/ddk/default.mspx for low price)
+--- a/contrib/masmx86/bld_ml32.bat	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/masmx86/bld_ml32.bat	1695412879.000000000
+@@ -0,0 +1,2 @@
++ml /coff /Zi /c /Flmatch686.lst match686.asm
++ml /coff /Zi /c /Flinffas32.lst inffas32.asm
+--- a/contrib/masmx86/inffas32.asm	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/masmx86/inffas32.asm	1695412879.000000000
+@@ -0,0 +1,1080 @@
++;/* inffas32.asm is a hand tuned assembler version of inffast.c -- fast decoding
++; *
++; * inffas32.asm is derivated from inffas86.c, with translation of assembly code
++; *
++; * Copyright (C) 1995-2003 Mark Adler
++; * For conditions of distribution and use, see copyright notice in zlib.h
++; *
++; * Copyright (C) 2003 Chris Anderson <christop@charm.net>
++; * Please use the copyright conditions above.
++; *
++; * Mar-13-2003 -- Most of this is derived from inffast.S which is derived from
++; * the gcc -S output of zlib-1.2.0/inffast.c.  Zlib-1.2.0 is in beta release at
++; * the moment.  I have successfully compiled and tested this code with gcc2.96,
++; * gcc3.2, icc5.0, msvc6.0.  It is very close to the speed of inffast.S
++; * compiled with gcc -DNO_MMX, but inffast.S is still faster on the P3 with MMX
++; * enabled.  I will attempt to merge the MMX code into this version.  Newer
++; * versions of this and inffast.S can be found at
++; * http://www.eetbeetee.com/zlib/ and http://www.charm.net/~christop/zlib/
++; *
++; * 2005 : modification by Gilles Vollant
++; */
++; For Visual C++ 4.x and higher and ML 6.x and higher
++;   ml.exe is in directory \MASM611C of Win95 DDK
++;   ml.exe is also distributed in http://www.masm32.com/masmdl.htm
++;    and in VC++2003 toolkit at http://msdn.microsoft.com/visualc/vctoolkit2003/
++;
++;
++;   compile with command line option
++;   ml  /coff /Zi /c /Flinffas32.lst inffas32.asm
++
++;   if you define NO_GZIP (see inflate.h), compile with
++;   ml  /coff /Zi /c /Flinffas32.lst /DNO_GUNZIP inffas32.asm
++
++
++; zlib122sup is 0 fort zlib 1.2.2.1 and lower
++; zlib122sup is 8 fort zlib 1.2.2.2 and more (with addition of dmax and head
++;        in inflate_state in inflate.h)
++zlib1222sup      equ    8
++
++
++IFDEF GUNZIP
++  INFLATE_MODE_TYPE    equ 11
++  INFLATE_MODE_BAD     equ 26
++ELSE
++  IFNDEF NO_GUNZIP
++    INFLATE_MODE_TYPE    equ 11
++    INFLATE_MODE_BAD     equ 26
++  ELSE
++    INFLATE_MODE_TYPE    equ 3
++    INFLATE_MODE_BAD     equ 17
++  ENDIF
++ENDIF
++
++
++; 75 "inffast.S"
++;FILE "inffast.S"
++
++;;;GLOBAL _inflate_fast
++
++;;;SECTION .text
++
++
++
++	.586p
++	.mmx
++
++	name	inflate_fast_x86
++	.MODEL	FLAT
++
++_DATA			segment
++inflate_fast_use_mmx:
++	dd	1
++
++
++_TEXT			segment
++
++
++
++ALIGN 4
++	db	'Fast decoding Code from Chris Anderson'
++	db	0
++
++ALIGN 4
++invalid_literal_length_code_msg:
++	db	'invalid literal/length code'
++	db	0
++
++ALIGN 4
++invalid_distance_code_msg:
++	db	'invalid distance code'
++	db	0
++
++ALIGN 4
++invalid_distance_too_far_msg:
++	db	'invalid distance too far back'
++	db	0
++
++
++ALIGN 4
++inflate_fast_mask:
++dd	0
++dd	1
++dd	3
++dd	7
++dd	15
++dd	31
++dd	63
++dd	127
++dd	255
++dd	511
++dd	1023
++dd	2047
++dd	4095
++dd	8191
++dd	16383
++dd	32767
++dd	65535
++dd	131071
++dd	262143
++dd	524287
++dd	1048575
++dd	2097151
++dd	4194303
++dd	8388607
++dd	16777215
++dd	33554431
++dd	67108863
++dd	134217727
++dd	268435455
++dd	536870911
++dd	1073741823
++dd	2147483647
++dd	4294967295
++
++
++mode_state	 equ	0	;/* state->mode	*/
++wsize_state	 equ	(32+zlib1222sup)	;/* state->wsize */
++write_state	 equ	(36+4+zlib1222sup)	;/* state->write */
++window_state	 equ	(40+4+zlib1222sup)	;/* state->window */
++hold_state	 equ	(44+4+zlib1222sup)	;/* state->hold	*/
++bits_state	 equ	(48+4+zlib1222sup)	;/* state->bits	*/
++lencode_state	 equ	(64+4+zlib1222sup)	;/* state->lencode */
++distcode_state	 equ	(68+4+zlib1222sup)	;/* state->distcode */
++lenbits_state	 equ	(72+4+zlib1222sup)	;/* state->lenbits */
++distbits_state	 equ	(76+4+zlib1222sup)	;/* state->distbits */
++
++
++;;SECTION .text
++; 205 "inffast.S"
++;GLOBAL	inflate_fast_use_mmx
++
++;SECTION .data
++
++
++; GLOBAL inflate_fast_use_mmx:object
++;.size inflate_fast_use_mmx, 4
++; 226 "inffast.S"
++;SECTION .text
++
++ALIGN 4
++_inflate_fast proc near
++.FPO (16, 4, 0, 0, 1, 0)
++	push  edi
++	push  esi
++	push  ebp
++	push  ebx
++	pushfd
++	sub  esp,64
++	cld
++
++
++
++
++	mov  esi, [esp+88]
++	mov  edi, [esi+28]
++
++
++
++
++
++
++
++	mov  edx, [esi+4]
++	mov  eax, [esi+0]
++
++	add  edx,eax
++	sub  edx,11
++
++	mov  [esp+44],eax
++	mov  [esp+20],edx
++
++	mov  ebp, [esp+92]
++	mov  ecx, [esi+16]
++	mov  ebx, [esi+12]
++
++	sub  ebp,ecx
++	neg  ebp
++	add  ebp,ebx
++
++	sub  ecx,257
++	add  ecx,ebx
++
++	mov  [esp+60],ebx
++	mov  [esp+40],ebp
++	mov  [esp+16],ecx
++; 285 "inffast.S"
++	mov  eax, [edi+lencode_state]
++	mov  ecx, [edi+distcode_state]
++
++	mov  [esp+8],eax
++	mov  [esp+12],ecx
++
++	mov  eax,1
++	mov  ecx, [edi+lenbits_state]
++	shl  eax,cl
++	dec  eax
++	mov  [esp+0],eax
++
++	mov  eax,1
++	mov  ecx, [edi+distbits_state]
++	shl  eax,cl
++	dec  eax
++	mov  [esp+4],eax
++
++	mov  eax, [edi+wsize_state]
++	mov  ecx, [edi+write_state]
++	mov  edx, [edi+window_state]
++
++	mov  [esp+52],eax
++	mov  [esp+48],ecx
++	mov  [esp+56],edx
++
++	mov  ebp, [edi+hold_state]
++	mov  ebx, [edi+bits_state]
++; 321 "inffast.S"
++	mov  esi, [esp+44]
++	mov  ecx, [esp+20]
++	cmp  ecx,esi
++	ja   L_align_long
++
++	add  ecx,11
++	sub  ecx,esi
++	mov  eax,12
++	sub  eax,ecx
++	lea  edi, [esp+28]
++	rep movsb
++	mov  ecx,eax
++	xor  eax,eax
++	rep stosb
++	lea  esi, [esp+28]
++	mov  [esp+20],esi
++	jmp  L_is_aligned
++
++
++L_align_long:
++	test  esi,3
++	jz   L_is_aligned
++	xor  eax,eax
++	mov  al, [esi]
++	inc  esi
++	mov  ecx,ebx
++	add  ebx,8
++	shl  eax,cl
++	or  ebp,eax
++	jmp L_align_long
++
++L_is_aligned:
++	mov  edi, [esp+60]
++; 366 "inffast.S"
++L_check_mmx:
++	cmp  dword ptr [inflate_fast_use_mmx],2
++	je   L_init_mmx
++	ja   L_do_loop
++
++	push  eax
++	push  ebx
++	push  ecx
++	push  edx
++	pushfd
++	mov  eax, [esp]
++	xor  dword ptr [esp],0200000h
++
++
++
++
++	popfd
++	pushfd
++	pop  edx
++	xor  edx,eax
++	jz   L_dont_use_mmx
++	xor  eax,eax
++	cpuid
++	cmp  ebx,0756e6547h
++	jne  L_dont_use_mmx
++	cmp  ecx,06c65746eh
++	jne  L_dont_use_mmx
++	cmp  edx,049656e69h
++	jne  L_dont_use_mmx
++	mov  eax,1
++	cpuid
++	shr  eax,8
++	and  eax,15
++	cmp  eax,6
++	jne  L_dont_use_mmx
++	test  edx,0800000h
++	jnz  L_use_mmx
++	jmp  L_dont_use_mmx
++L_use_mmx:
++	mov  dword ptr [inflate_fast_use_mmx],2
++	jmp  L_check_mmx_pop
++L_dont_use_mmx:
++	mov  dword ptr [inflate_fast_use_mmx],3
++L_check_mmx_pop:
++	pop  edx
++	pop  ecx
++	pop  ebx
++	pop  eax
++	jmp  L_check_mmx
++; 426 "inffast.S"
++ALIGN 4
++L_do_loop:
++; 437 "inffast.S"
++	cmp  bl,15
++	ja   L_get_length_code
++
++	xor  eax,eax
++	lodsw
++	mov  cl,bl
++	add  bl,16
++	shl  eax,cl
++	or  ebp,eax
++
++L_get_length_code:
++	mov  edx, [esp+0]
++	mov  ecx, [esp+8]
++	and  edx,ebp
++	mov  eax, [ecx+edx*4]
++
++L_dolen:
++
++
++
++
++
++
++	mov  cl,ah
++	sub  bl,ah
++	shr  ebp,cl
++
++
++
++
++
++
++	test  al,al
++	jnz   L_test_for_length_base
++
++	shr  eax,16
++	stosb
++
++L_while_test:
++
++
++	cmp  [esp+16],edi
++	jbe  L_break_loop
++
++	cmp  [esp+20],esi
++	ja   L_do_loop
++	jmp  L_break_loop
++
++L_test_for_length_base:
++; 502 "inffast.S"
++	mov  edx,eax
++	shr  edx,16
++	mov  cl,al
++
++	test  al,16
++	jz   L_test_for_second_level_length
++	and  cl,15
++	jz   L_save_len
++	cmp  bl,cl
++	jae  L_add_bits_to_len
++
++	mov  ch,cl
++	xor  eax,eax
++	lodsw
++	mov  cl,bl
++	add  bl,16
++	shl  eax,cl
++	or  ebp,eax
++	mov  cl,ch
++
++L_add_bits_to_len:
++	mov  eax,1
++	shl  eax,cl
++	dec  eax
++	sub  bl,cl
++	and  eax,ebp
++	shr  ebp,cl
++	add  edx,eax
++
++L_save_len:
++	mov  [esp+24],edx
++
++
++L_decode_distance:
++; 549 "inffast.S"
++	cmp  bl,15
++	ja   L_get_distance_code
++
++	xor  eax,eax
++	lodsw
++	mov  cl,bl
++	add  bl,16
++	shl  eax,cl
++	or  ebp,eax
++
++L_get_distance_code:
++	mov  edx, [esp+4]
++	mov  ecx, [esp+12]
++	and  edx,ebp
++	mov  eax, [ecx+edx*4]
++
++
++L_dodist:
++	mov  edx,eax
++	shr  edx,16
++	mov  cl,ah
++	sub  bl,ah
++	shr  ebp,cl
++; 584 "inffast.S"
++	mov  cl,al
++
++	test  al,16
++	jz  L_test_for_second_level_dist
++	and  cl,15
++	jz  L_check_dist_one
++	cmp  bl,cl
++	jae  L_add_bits_to_dist
++
++	mov  ch,cl
++	xor  eax,eax
++	lodsw
++	mov  cl,bl
++	add  bl,16
++	shl  eax,cl
++	or  ebp,eax
++	mov  cl,ch
++
++L_add_bits_to_dist:
++	mov  eax,1
++	shl  eax,cl
++	dec  eax
++	sub  bl,cl
++	and  eax,ebp
++	shr  ebp,cl
++	add  edx,eax
++	jmp  L_check_window
++
++L_check_window:
++; 625 "inffast.S"
++	mov  [esp+44],esi
++	mov  eax,edi
++	sub  eax, [esp+40]
++
++	cmp  eax,edx
++	jb   L_clip_window
++
++	mov  ecx, [esp+24]
++	mov  esi,edi
++	sub  esi,edx
++
++	sub  ecx,3
++	mov  al, [esi]
++	mov  [edi],al
++	mov  al, [esi+1]
++	mov  dl, [esi+2]
++	add  esi,3
++	mov  [edi+1],al
++	mov  [edi+2],dl
++	add  edi,3
++	rep movsb
++
++	mov  esi, [esp+44]
++	jmp  L_while_test
++
++ALIGN 4
++L_check_dist_one:
++	cmp  edx,1
++	jne  L_check_window
++	cmp  [esp+40],edi
++	je  L_check_window
++
++	dec  edi
++	mov  ecx, [esp+24]
++	mov  al, [edi]
++	sub  ecx,3
++
++	mov  [edi+1],al
++	mov  [edi+2],al
++	mov  [edi+3],al
++	add  edi,4
++	rep stosb
++
++	jmp  L_while_test
++
++ALIGN 4
++L_test_for_second_level_length:
++
++
++
++
++	test  al,64
++	jnz   L_test_for_end_of_block
++
++	mov  eax,1
++	shl  eax,cl
++	dec  eax
++	and  eax,ebp
++	add  eax,edx
++	mov  edx, [esp+8]
++	mov  eax, [edx+eax*4]
++	jmp  L_dolen
++
++ALIGN 4
++L_test_for_second_level_dist:
++
++
++
++
++	test  al,64
++	jnz   L_invalid_distance_code
++
++	mov  eax,1
++	shl  eax,cl
++	dec  eax
++	and  eax,ebp
++	add  eax,edx
++	mov  edx, [esp+12]
++	mov  eax, [edx+eax*4]
++	jmp  L_dodist
++
++ALIGN 4
++L_clip_window:
++; 721 "inffast.S"
++	mov  ecx,eax
++	mov  eax, [esp+52]
++	neg  ecx
++	mov  esi, [esp+56]
++
++	cmp  eax,edx
++	jb   L_invalid_distance_too_far
++
++	add  ecx,edx
++	cmp  dword ptr [esp+48],0
++	jne  L_wrap_around_window
++
++	sub  eax,ecx
++	add  esi,eax
++; 749 "inffast.S"
++	mov  eax, [esp+24]
++	cmp  eax,ecx
++	jbe  L_do_copy1
++
++	sub  eax,ecx
++	rep movsb
++	mov  esi,edi
++	sub  esi,edx
++	jmp  L_do_copy1
++
++	cmp  eax,ecx
++	jbe  L_do_copy1
++
++	sub  eax,ecx
++	rep movsb
++	mov  esi,edi
++	sub  esi,edx
++	jmp  L_do_copy1
++
++L_wrap_around_window:
++; 793 "inffast.S"
++	mov  eax, [esp+48]
++	cmp  ecx,eax
++	jbe  L_contiguous_in_window
++
++	add  esi, [esp+52]
++	add  esi,eax
++	sub  esi,ecx
++	sub  ecx,eax
++
++
++	mov  eax, [esp+24]
++	cmp  eax,ecx
++	jbe  L_do_copy1
++
++	sub  eax,ecx
++	rep movsb
++	mov  esi, [esp+56]
++	mov  ecx, [esp+48]
++	cmp  eax,ecx
++	jbe  L_do_copy1
++
++	sub  eax,ecx
++	rep movsb
++	mov  esi,edi
++	sub  esi,edx
++	jmp  L_do_copy1
++
++L_contiguous_in_window:
++; 836 "inffast.S"
++	add  esi,eax
++	sub  esi,ecx
++
++
++	mov  eax, [esp+24]
++	cmp  eax,ecx
++	jbe  L_do_copy1
++
++	sub  eax,ecx
++	rep movsb
++	mov  esi,edi
++	sub  esi,edx
++
++L_do_copy1:
++; 862 "inffast.S"
++	mov  ecx,eax
++	rep movsb
++
++	mov  esi, [esp+44]
++	jmp  L_while_test
++; 878 "inffast.S"
++ALIGN 4
++L_init_mmx:
++	emms
++
++
++
++
++
++	movd mm0,ebp
++	mov  ebp,ebx
++; 896 "inffast.S"
++	movd mm4,dword ptr [esp+0]
++	movq mm3,mm4
++	movd mm5,dword ptr [esp+4]
++	movq mm2,mm5
++	pxor mm1,mm1
++	mov  ebx, [esp+8]
++	jmp  L_do_loop_mmx
++
++ALIGN 4
++L_do_loop_mmx:
++	psrlq mm0,mm1
++
++	cmp  ebp,32
++	ja  L_get_length_code_mmx
++
++	movd mm6,ebp
++	movd mm7,dword ptr [esi]
++	add  esi,4
++	psllq mm7,mm6
++	add  ebp,32
++	por mm0,mm7
++
++L_get_length_code_mmx:
++	pand mm4,mm0
++	movd eax,mm4
++	movq mm4,mm3
++	mov  eax, [ebx+eax*4]
++
++L_dolen_mmx:
++	movzx  ecx,ah
++	movd mm1,ecx
++	sub  ebp,ecx
++
++	test  al,al
++	jnz L_test_for_length_base_mmx
++
++	shr  eax,16
++	stosb
++
++L_while_test_mmx:
++
++
++	cmp  [esp+16],edi
++	jbe L_break_loop
++
++	cmp  [esp+20],esi
++	ja L_do_loop_mmx
++	jmp L_break_loop
++
++L_test_for_length_base_mmx:
++
++	mov  edx,eax
++	shr  edx,16
++
++	test  al,16
++	jz  L_test_for_second_level_length_mmx
++	and  eax,15
++	jz L_decode_distance_mmx
++
++	psrlq mm0,mm1
++	movd mm1,eax
++	movd ecx,mm0
++	sub  ebp,eax
++	and  ecx, [inflate_fast_mask+eax*4]
++	add  edx,ecx
++
++L_decode_distance_mmx:
++	psrlq mm0,mm1
++
++	cmp  ebp,32
++	ja L_get_dist_code_mmx
++
++	movd mm6,ebp
++	movd mm7,dword ptr [esi]
++	add  esi,4
++	psllq mm7,mm6
++	add  ebp,32
++	por mm0,mm7
++
++L_get_dist_code_mmx:
++	mov  ebx, [esp+12]
++	pand mm5,mm0
++	movd eax,mm5
++	movq mm5,mm2
++	mov  eax, [ebx+eax*4]
++
++L_dodist_mmx:
++
++	movzx  ecx,ah
++	mov  ebx,eax
++	shr  ebx,16
++	sub  ebp,ecx
++	movd mm1,ecx
++
++	test  al,16
++	jz L_test_for_second_level_dist_mmx
++	and  eax,15
++	jz L_check_dist_one_mmx
++
++L_add_bits_to_dist_mmx:
++	psrlq mm0,mm1
++	movd mm1,eax
++	movd ecx,mm0
++	sub  ebp,eax
++	and  ecx, [inflate_fast_mask+eax*4]
++	add  ebx,ecx
++
++L_check_window_mmx:
++	mov  [esp+44],esi
++	mov  eax,edi
++	sub  eax, [esp+40]
++
++	cmp  eax,ebx
++	jb L_clip_window_mmx
++
++	mov  ecx,edx
++	mov  esi,edi
++	sub  esi,ebx
++
++	sub  ecx,3
++	mov  al, [esi]
++	mov  [edi],al
++	mov  al, [esi+1]
++	mov  dl, [esi+2]
++	add  esi,3
++	mov  [edi+1],al
++	mov  [edi+2],dl
++	add  edi,3
++	rep movsb
++
++	mov  esi, [esp+44]
++	mov  ebx, [esp+8]
++	jmp  L_while_test_mmx
++
++ALIGN 4
++L_check_dist_one_mmx:
++	cmp  ebx,1
++	jne  L_check_window_mmx
++	cmp  [esp+40],edi
++	je   L_check_window_mmx
++
++	dec  edi
++	mov  ecx,edx
++	mov  al, [edi]
++	sub  ecx,3
++
++	mov  [edi+1],al
++	mov  [edi+2],al
++	mov  [edi+3],al
++	add  edi,4
++	rep stosb
++
++	mov  ebx, [esp+8]
++	jmp  L_while_test_mmx
++
++ALIGN 4
++L_test_for_second_level_length_mmx:
++	test  al,64
++	jnz L_test_for_end_of_block
++
++	and  eax,15
++	psrlq mm0,mm1
++	movd ecx,mm0
++	and  ecx, [inflate_fast_mask+eax*4]
++	add  ecx,edx
++	mov  eax, [ebx+ecx*4]
++	jmp L_dolen_mmx
++
++ALIGN 4
++L_test_for_second_level_dist_mmx:
++	test  al,64
++	jnz L_invalid_distance_code
++
++	and  eax,15
++	psrlq mm0,mm1
++	movd ecx,mm0
++	and  ecx, [inflate_fast_mask+eax*4]
++	mov  eax, [esp+12]
++	add  ecx,ebx
++	mov  eax, [eax+ecx*4]
++	jmp  L_dodist_mmx
++
++ALIGN 4
++L_clip_window_mmx:
++
++	mov  ecx,eax
++	mov  eax, [esp+52]
++	neg  ecx
++	mov  esi, [esp+56]
++
++	cmp  eax,ebx
++	jb  L_invalid_distance_too_far
++
++	add  ecx,ebx
++	cmp  dword ptr [esp+48],0
++	jne  L_wrap_around_window_mmx
++
++	sub  eax,ecx
++	add  esi,eax
++
++	cmp  edx,ecx
++	jbe  L_do_copy1_mmx
++
++	sub  edx,ecx
++	rep movsb
++	mov  esi,edi
++	sub  esi,ebx
++	jmp  L_do_copy1_mmx
++
++	cmp  edx,ecx
++	jbe  L_do_copy1_mmx
++
++	sub  edx,ecx
++	rep movsb
++	mov  esi,edi
++	sub  esi,ebx
++	jmp  L_do_copy1_mmx
++
++L_wrap_around_window_mmx:
++
++	mov  eax, [esp+48]
++	cmp  ecx,eax
++	jbe  L_contiguous_in_window_mmx
++
++	add  esi, [esp+52]
++	add  esi,eax
++	sub  esi,ecx
++	sub  ecx,eax
++
++
++	cmp  edx,ecx
++	jbe  L_do_copy1_mmx
++
++	sub  edx,ecx
++	rep movsb
++	mov  esi, [esp+56]
++	mov  ecx, [esp+48]
++	cmp  edx,ecx
++	jbe  L_do_copy1_mmx
++
++	sub  edx,ecx
++	rep movsb
++	mov  esi,edi
++	sub  esi,ebx
++	jmp  L_do_copy1_mmx
++
++L_contiguous_in_window_mmx:
++
++	add  esi,eax
++	sub  esi,ecx
++
++
++	cmp  edx,ecx
++	jbe  L_do_copy1_mmx
++
++	sub  edx,ecx
++	rep movsb
++	mov  esi,edi
++	sub  esi,ebx
++
++L_do_copy1_mmx:
++
++
++	mov  ecx,edx
++	rep movsb
++
++	mov  esi, [esp+44]
++	mov  ebx, [esp+8]
++	jmp  L_while_test_mmx
++; 1174 "inffast.S"
++L_invalid_distance_code:
++
++
++
++
++
++	mov  ecx, invalid_distance_code_msg
++	mov  edx,INFLATE_MODE_BAD
++	jmp  L_update_stream_state
++
++L_test_for_end_of_block:
++
++
++
++
++
++	test  al,32
++	jz  L_invalid_literal_length_code
++
++	mov  ecx,0
++	mov  edx,INFLATE_MODE_TYPE
++	jmp  L_update_stream_state
++
++L_invalid_literal_length_code:
++
++
++
++
++
++	mov  ecx, invalid_literal_length_code_msg
++	mov  edx,INFLATE_MODE_BAD
++	jmp  L_update_stream_state
++
++L_invalid_distance_too_far:
++
++
++
++	mov  esi, [esp+44]
++	mov  ecx, invalid_distance_too_far_msg
++	mov  edx,INFLATE_MODE_BAD
++	jmp  L_update_stream_state
++
++L_update_stream_state:
++
++	mov  eax, [esp+88]
++	test  ecx,ecx
++	jz  L_skip_msg
++	mov  [eax+24],ecx
++L_skip_msg:
++	mov  eax, [eax+28]
++	mov  [eax+mode_state],edx
++	jmp  L_break_loop
++
++ALIGN 4
++L_break_loop:
++; 1243 "inffast.S"
++	cmp  dword ptr [inflate_fast_use_mmx],2
++	jne  L_update_next_in
++
++
++
++	mov  ebx,ebp
++
++L_update_next_in:
++; 1266 "inffast.S"
++	mov  eax, [esp+88]
++	mov  ecx,ebx
++	mov  edx, [eax+28]
++	shr  ecx,3
++	sub  esi,ecx
++	shl  ecx,3
++	sub  ebx,ecx
++	mov  [eax+12],edi
++	mov  [edx+bits_state],ebx
++	mov  ecx,ebx
++
++	lea  ebx, [esp+28]
++	cmp  [esp+20],ebx
++	jne  L_buf_not_used
++
++	sub  esi,ebx
++	mov  ebx, [eax+0]
++	mov  [esp+20],ebx
++	add  esi,ebx
++	mov  ebx, [eax+4]
++	sub  ebx,11
++	add  [esp+20],ebx
++
++L_buf_not_used:
++	mov  [eax+0],esi
++
++	mov  ebx,1
++	shl  ebx,cl
++	dec  ebx
++
++
++
++
++
++	cmp  dword ptr [inflate_fast_use_mmx],2
++	jne  L_update_hold
++
++
++
++	psrlq mm0,mm1
++	movd ebp,mm0
++
++	emms
++
++L_update_hold:
++
++
++
++	and  ebp,ebx
++	mov  [edx+hold_state],ebp
++
++
++
++
++	mov  ebx, [esp+20]
++	cmp  ebx,esi
++	jbe  L_last_is_smaller
++
++	sub  ebx,esi
++	add  ebx,11
++	mov  [eax+4],ebx
++	jmp  L_fixup_out
++L_last_is_smaller:
++	sub  esi,ebx
++	neg  esi
++	add  esi,11
++	mov  [eax+4],esi
++
++
++
++
++L_fixup_out:
++
++	mov  ebx, [esp+16]
++	cmp  ebx,edi
++	jbe  L_end_is_smaller
++
++	sub  ebx,edi
++	add  ebx,257
++	mov  [eax+16],ebx
++	jmp  L_done
++L_end_is_smaller:
++	sub  edi,ebx
++	neg  edi
++	add  edi,257
++	mov  [eax+16],edi
++
++
++
++
++
++L_done:
++	add  esp,64
++	popfd
++	pop  ebx
++	pop  ebp
++	pop  esi
++	pop  edi
++	ret
++_inflate_fast endp
++
++_TEXT	ends
++end
+--- a/contrib/masmx86/match686.asm	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/masmx86/match686.asm	1695412879.000000000
+@@ -0,0 +1,479 @@
++; match686.asm -- Asm portion of the optimized longest_match for 32 bits x86
++; Copyright (C) 1995-1996 Jean-loup Gailly, Brian Raiter and Gilles Vollant.
++; File written by Gilles Vollant, by converting match686.S from Brian Raiter
++; for MASM. This is as assembly version of longest_match
++;  from Jean-loup Gailly in deflate.c
++;
++;         http://www.zlib.net
++;         http://www.winimage.com/zLibDll
++;         http://www.muppetlabs.com/~breadbox/software/assembly.html
++;
++; For Visual C++ 4.x and higher and ML 6.x and higher
++;   ml.exe is distributed in
++;  http://www.microsoft.com/downloads/details.aspx?FamilyID=7a1c9da0-0510-44a2-b042-7ef370530c64
++;
++; this file contain two implementation of longest_match
++;
++;  this longest_match was written by Brian raiter (1998), optimized for Pentium Pro
++;   (and the faster known version of match_init on modern Core 2 Duo and AMD Phenom)
++;
++;  for using an assembly version of longest_match, you need define ASMV in project
++;
++;    compile the asm file running
++;           ml /coff /Zi /c /Flmatch686.lst match686.asm
++;    and do not include match686.obj in your project
++;
++; note: contrib of zLib 1.2.3 and earlier contained both a deprecated version for
++;  Pentium (prior Pentium Pro) and this version for Pentium Pro and modern processor
++;  with autoselect (with cpu detection code)
++;  if you want support the old pentium optimization, you can still use these version
++;
++; this file is not optimized for old pentium, but it compatible with all x86 32 bits
++; processor (starting 80386)
++;
++;
++; see below : zlib1222add must be adjuster if you use a zlib version < 1.2.2.2
++
++;uInt longest_match(s, cur_match)
++;    deflate_state *s;
++;    IPos cur_match;                             /* current match */
++
++    NbStack         equ     76
++    cur_match       equ     dword ptr[esp+NbStack-0]
++    str_s           equ     dword ptr[esp+NbStack-4]
++; 5 dword on top (ret,ebp,esi,edi,ebx)
++    adrret          equ     dword ptr[esp+NbStack-8]
++    pushebp         equ     dword ptr[esp+NbStack-12]
++    pushedi         equ     dword ptr[esp+NbStack-16]
++    pushesi         equ     dword ptr[esp+NbStack-20]
++    pushebx         equ     dword ptr[esp+NbStack-24]
++
++    chain_length    equ     dword ptr [esp+NbStack-28]
++    limit           equ     dword ptr [esp+NbStack-32]
++    best_len        equ     dword ptr [esp+NbStack-36]
++    window          equ     dword ptr [esp+NbStack-40]
++    prev            equ     dword ptr [esp+NbStack-44]
++    scan_start      equ      word ptr [esp+NbStack-48]
++    wmask           equ     dword ptr [esp+NbStack-52]
++    match_start_ptr equ     dword ptr [esp+NbStack-56]
++    nice_match      equ     dword ptr [esp+NbStack-60]
++    scan            equ     dword ptr [esp+NbStack-64]
++
++    windowlen       equ     dword ptr [esp+NbStack-68]
++    match_start     equ     dword ptr [esp+NbStack-72]
++    strend          equ     dword ptr [esp+NbStack-76]
++    NbStackAdd      equ     (NbStack-24)
++
++    .386p
++
++    name    gvmatch
++    .MODEL  FLAT
++
++
++
++;  all the +zlib1222add offsets are due to the addition of fields
++;  in zlib in the deflate_state structure since the asm code was first written
++;  (if you compile with zlib 1.0.4 or older, use "zlib1222add equ (-4)").
++;  (if you compile with zlib between 1.0.5 and 1.2.2.1, use "zlib1222add equ 0").
++;  if you compile with zlib 1.2.2.2 or later , use "zlib1222add equ 8").
++
++    zlib1222add         equ     8
++
++;  Note : these value are good with a 8 bytes boundary pack structure
++    dep_chain_length    equ     74h+zlib1222add
++    dep_window          equ     30h+zlib1222add
++    dep_strstart        equ     64h+zlib1222add
++    dep_prev_length     equ     70h+zlib1222add
++    dep_nice_match      equ     88h+zlib1222add
++    dep_w_size          equ     24h+zlib1222add
++    dep_prev            equ     38h+zlib1222add
++    dep_w_mask          equ     2ch+zlib1222add
++    dep_good_match      equ     84h+zlib1222add
++    dep_match_start     equ     68h+zlib1222add
++    dep_lookahead       equ     6ch+zlib1222add
++
++
++_TEXT                   segment
++
++IFDEF NOUNDERLINE
++            public  longest_match
++            public  match_init
++ELSE
++            public  _longest_match
++            public  _match_init
++ENDIF
++
++    MAX_MATCH           equ     258
++    MIN_MATCH           equ     3
++    MIN_LOOKAHEAD       equ     (MAX_MATCH+MIN_MATCH+1)
++
++
++
++MAX_MATCH       equ     258
++MIN_MATCH       equ     3
++MIN_LOOKAHEAD   equ     (MAX_MATCH + MIN_MATCH + 1)
++MAX_MATCH_8_     equ     ((MAX_MATCH + 7) AND 0FFF0h)
++
++
++;;; stack frame offsets
++
++chainlenwmask   equ  esp + 0    ; high word: current chain len
++                    ; low word: s->wmask
++window      equ  esp + 4    ; local copy of s->window
++windowbestlen   equ  esp + 8    ; s->window + bestlen
++scanstart   equ  esp + 16   ; first two bytes of string
++scanend     equ  esp + 12   ; last two bytes of string
++scanalign   equ  esp + 20   ; dword-misalignment of string
++nicematch   equ  esp + 24   ; a good enough match size
++bestlen     equ  esp + 28   ; size of best match so far
++scan        equ  esp + 32   ; ptr to string wanting match
++
++LocalVarsSize   equ 36
++;   saved ebx   byte esp + 36
++;   saved edi   byte esp + 40
++;   saved esi   byte esp + 44
++;   saved ebp   byte esp + 48
++;   return address  byte esp + 52
++deflatestate    equ  esp + 56   ; the function arguments
++curmatch    equ  esp + 60
++
++;;; Offsets for fields in the deflate_state structure. These numbers
++;;; are calculated from the definition of deflate_state, with the
++;;; assumption that the compiler will dword-align the fields. (Thus,
++;;; changing the definition of deflate_state could easily cause this
++;;; program to crash horribly, without so much as a warning at
++;;; compile time. Sigh.)
++
++dsWSize     equ 36+zlib1222add
++dsWMask     equ 44+zlib1222add
++dsWindow    equ 48+zlib1222add
++dsPrev      equ 56+zlib1222add
++dsMatchLen  equ 88+zlib1222add
++dsPrevMatch equ 92+zlib1222add
++dsStrStart  equ 100+zlib1222add
++dsMatchStart    equ 104+zlib1222add
++dsLookahead equ 108+zlib1222add
++dsPrevLen   equ 112+zlib1222add
++dsMaxChainLen   equ 116+zlib1222add
++dsGoodMatch equ 132+zlib1222add
++dsNiceMatch equ 136+zlib1222add
++
++
++;;; match686.asm -- Pentium-Pro-optimized version of longest_match()
++;;; Written for zlib 1.1.2
++;;; Copyright (C) 1998 Brian Raiter <breadbox@muppetlabs.com>
++;;; You can look at http://www.muppetlabs.com/~breadbox/software/assembly.html
++;;;
++;;
++;;  This software is provided 'as-is', without any express or implied
++;;  warranty.  In no event will the authors be held liable for any damages
++;;  arising from the use of this software.
++;;
++;;  Permission is granted to anyone to use this software for any purpose,
++;;  including commercial applications, and to alter it and redistribute it
++;;  freely, subject to the following restrictions:
++;;
++;;  1. The origin of this software must not be misrepresented; you must not
++;;     claim that you wrote the original software. If you use this software
++;;     in a product, an acknowledgment in the product documentation would be
++;;     appreciated but is not required.
++;;  2. Altered source versions must be plainly marked as such, and must not be
++;;     misrepresented as being the original software
++;;  3. This notice may not be removed or altered from any source distribution.
++;;
++
++;GLOBAL _longest_match, _match_init
++
++
++;SECTION    .text
++
++;;; uInt longest_match(deflate_state *deflatestate, IPos curmatch)
++
++;_longest_match:
++    IFDEF NOUNDERLINE
++    longest_match       proc near
++    ELSE
++    _longest_match      proc near
++    ENDIF
++.FPO (9, 4, 0, 0, 1, 0)
++
++;;; Save registers that the compiler may be using, and adjust esp to
++;;; make room for our stack frame.
++
++        push    ebp
++        push    edi
++        push    esi
++        push    ebx
++        sub esp, LocalVarsSize
++
++;;; Retrieve the function arguments. ecx will hold cur_match
++;;; throughout the entire function. edx will hold the pointer to the
++;;; deflate_state structure during the function's setup (before
++;;; entering the main loop.
++
++        mov edx, [deflatestate]
++        mov ecx, [curmatch]
++
++;;; uInt wmask = s->w_mask;
++;;; unsigned chain_length = s->max_chain_length;
++;;; if (s->prev_length >= s->good_match) {
++;;;     chain_length >>= 2;
++;;; }
++
++        mov eax, [edx + dsPrevLen]
++        mov ebx, [edx + dsGoodMatch]
++        cmp eax, ebx
++        mov eax, [edx + dsWMask]
++        mov ebx, [edx + dsMaxChainLen]
++        jl  LastMatchGood
++        shr ebx, 2
++LastMatchGood:
++
++;;; chainlen is decremented once beforehand so that the function can
++;;; use the sign flag instead of the zero flag for the exit test.
++;;; It is then shifted into the high word, to make room for the wmask
++;;; value, which it will always accompany.
++
++        dec ebx
++        shl ebx, 16
++        or  ebx, eax
++        mov [chainlenwmask], ebx
++
++;;; if ((uInt)nice_match > s->lookahead) nice_match = s->lookahead;
++
++        mov eax, [edx + dsNiceMatch]
++        mov ebx, [edx + dsLookahead]
++        cmp ebx, eax
++        jl  LookaheadLess
++        mov ebx, eax
++LookaheadLess:  mov [nicematch], ebx
++
++;;; register Bytef *scan = s->window + s->strstart;
++
++        mov esi, [edx + dsWindow]
++        mov [window], esi
++        mov ebp, [edx + dsStrStart]
++        lea edi, [esi + ebp]
++        mov [scan], edi
++
++;;; Determine how many bytes the scan ptr is off from being
++;;; dword-aligned.
++
++        mov eax, edi
++        neg eax
++        and eax, 3
++        mov [scanalign], eax
++
++;;; IPos limit = s->strstart > (IPos)MAX_DIST(s) ?
++;;;     s->strstart - (IPos)MAX_DIST(s) : NIL;
++
++        mov eax, [edx + dsWSize]
++        sub eax, MIN_LOOKAHEAD
++        sub ebp, eax
++        jg  LimitPositive
++        xor ebp, ebp
++LimitPositive:
++
++;;; int best_len = s->prev_length;
++
++        mov eax, [edx + dsPrevLen]
++        mov [bestlen], eax
++
++;;; Store the sum of s->window + best_len in esi locally, and in esi.
++
++        add esi, eax
++        mov [windowbestlen], esi
++
++;;; register ush scan_start = *(ushf*)scan;
++;;; register ush scan_end   = *(ushf*)(scan+best_len-1);
++;;; Posf *prev = s->prev;
++
++        movzx   ebx, word ptr [edi]
++        mov [scanstart], ebx
++        movzx   ebx, word ptr [edi + eax - 1]
++        mov [scanend], ebx
++        mov edi, [edx + dsPrev]
++
++;;; Jump into the main loop.
++
++        mov edx, [chainlenwmask]
++        jmp short LoopEntry
++
++align 4
++
++;;; do {
++;;;     match = s->window + cur_match;
++;;;     if (*(ushf*)(match+best_len-1) != scan_end ||
++;;;         *(ushf*)match != scan_start) continue;
++;;;     [...]
++;;; } while ((cur_match = prev[cur_match & wmask]) > limit
++;;;          && --chain_length != 0);
++;;;
++;;; Here is the inner loop of the function. The function will spend the
++;;; majority of its time in this loop, and majority of that time will
++;;; be spent in the first ten instructions.
++;;;
++;;; Within this loop:
++;;; ebx = scanend
++;;; ecx = curmatch
++;;; edx = chainlenwmask - i.e., ((chainlen << 16) | wmask)
++;;; esi = windowbestlen - i.e., (window + bestlen)
++;;; edi = prev
++;;; ebp = limit
++
++LookupLoop:
++        and ecx, edx
++        movzx   ecx, word ptr [edi + ecx*2]
++        cmp ecx, ebp
++        jbe LeaveNow
++        sub edx, 00010000h
++        js  LeaveNow
++LoopEntry:  movzx   eax, word ptr [esi + ecx - 1]
++        cmp eax, ebx
++        jnz LookupLoop
++        mov eax, [window]
++        movzx   eax, word ptr [eax + ecx]
++        cmp eax, [scanstart]
++        jnz LookupLoop
++
++;;; Store the current value of chainlen.
++
++        mov [chainlenwmask], edx
++
++;;; Point edi to the string under scrutiny, and esi to the string we
++;;; are hoping to match it up with. In actuality, esi and edi are
++;;; both pointed (MAX_MATCH_8 - scanalign) bytes ahead, and edx is
++;;; initialized to -(MAX_MATCH_8 - scanalign).
++
++        mov esi, [window]
++        mov edi, [scan]
++        add esi, ecx
++        mov eax, [scanalign]
++        mov edx, 0fffffef8h; -(MAX_MATCH_8)
++        lea edi, [edi + eax + 0108h] ;MAX_MATCH_8]
++        lea esi, [esi + eax + 0108h] ;MAX_MATCH_8]
++
++;;; Test the strings for equality, 8 bytes at a time. At the end,
++;;; adjust edx so that it is offset to the exact byte that mismatched.
++;;;
++;;; We already know at this point that the first three bytes of the
++;;; strings match each other, and they can be safely passed over before
++;;; starting the compare loop. So what this code does is skip over 0-3
++;;; bytes, as much as necessary in order to dword-align the edi
++;;; pointer. (esi will still be misaligned three times out of four.)
++;;;
++;;; It should be confessed that this loop usually does not represent
++;;; much of the total running time. Replacing it with a more
++;;; straightforward "rep cmpsb" would not drastically degrade
++;;; performance.
++
++LoopCmps:
++        mov eax, [esi + edx]
++        xor eax, [edi + edx]
++        jnz LeaveLoopCmps
++        mov eax, [esi + edx + 4]
++        xor eax, [edi + edx + 4]
++        jnz LeaveLoopCmps4
++        add edx, 8
++        jnz LoopCmps
++        jmp short LenMaximum
++LeaveLoopCmps4: add edx, 4
++LeaveLoopCmps:  test    eax, 0000FFFFh
++        jnz LenLower
++        add edx,  2
++        shr eax, 16
++LenLower:   sub al, 1
++        adc edx, 0
++
++;;; Calculate the length of the match. If it is longer than MAX_MATCH,
++;;; then automatically accept it as the best possible match and leave.
++
++        lea eax, [edi + edx]
++        mov edi, [scan]
++        sub eax, edi
++        cmp eax, MAX_MATCH
++        jge LenMaximum
++
++;;; If the length of the match is not longer than the best match we
++;;; have so far, then forget it and return to the lookup loop.
++
++        mov edx, [deflatestate]
++        mov ebx, [bestlen]
++        cmp eax, ebx
++        jg  LongerMatch
++        mov esi, [windowbestlen]
++        mov edi, [edx + dsPrev]
++        mov ebx, [scanend]
++        mov edx, [chainlenwmask]
++        jmp LookupLoop
++
++;;;         s->match_start = cur_match;
++;;;         best_len = len;
++;;;         if (len >= nice_match) break;
++;;;         scan_end = *(ushf*)(scan+best_len-1);
++
++LongerMatch:    mov ebx, [nicematch]
++        mov [bestlen], eax
++        mov [edx + dsMatchStart], ecx
++        cmp eax, ebx
++        jge LeaveNow
++        mov esi, [window]
++        add esi, eax
++        mov [windowbestlen], esi
++        movzx   ebx, word ptr [edi + eax - 1]
++        mov edi, [edx + dsPrev]
++        mov [scanend], ebx
++        mov edx, [chainlenwmask]
++        jmp LookupLoop
++
++;;; Accept the current string, with the maximum possible length.
++
++LenMaximum: mov edx, [deflatestate]
++        mov dword ptr [bestlen], MAX_MATCH
++        mov [edx + dsMatchStart], ecx
++
++;;; if ((uInt)best_len <= s->lookahead) return (uInt)best_len;
++;;; return s->lookahead;
++
++LeaveNow:
++        mov edx, [deflatestate]
++        mov ebx, [bestlen]
++        mov eax, [edx + dsLookahead]
++        cmp ebx, eax
++        jg  LookaheadRet
++        mov eax, ebx
++LookaheadRet:
++
++;;; Restore the stack and return from whence we came.
++
++        add esp, LocalVarsSize
++        pop ebx
++        pop esi
++        pop edi
++        pop ebp
++
++        ret
++; please don't remove this string !
++; Your can freely use match686 in any free or commercial app if you don't remove the string in the binary!
++    db     0dh,0ah,"asm686 with masm, optimised assembly code from Brian Raiter, written 1998",0dh,0ah
++
++
++    IFDEF NOUNDERLINE
++    longest_match       endp
++    ELSE
++    _longest_match      endp
++    ENDIF
++
++    IFDEF NOUNDERLINE
++    match_init      proc near
++                    ret
++    match_init      endp
++    ELSE
++    _match_init     proc near
++                    ret
++    _match_init     endp
++    ENDIF
++
++
++_TEXT   ends
++end
+--- a/contrib/masmx86/readme.txt	1900-01-00 00:00:00.000000000 +0000
++++ b/contrib/masmx86/readme.txt	1695412879.000000000
+@@ -0,0 +1,27 @@
++
++Summary
++-------
++This directory contains ASM implementations of the functions
++longest_match() and inflate_fast().
++
++
++Use instructions
++----------------
++Assemble using MASM, and copy the object files into the zlib source
++directory, then run the appropriate makefile, as suggested below.  You can
++donwload MASM from here:
++
++    http://www.microsoft.com/downloads/details.aspx?displaylang=en&FamilyID=7a1c9da0-0510-44a2-b042-7ef370530c64
++
++You can also get objects files here:
++
++    http://www.winimage.com/zLibDll/zlib124_masm_obj.zip
++
++Build instructions
++------------------
++* With Microsoft C and MASM:
++nmake -f win32/Makefile.msc LOC="-DASMV -DASMINF" OBJA="match686.obj inffas32.obj"
++
++* With Borland C and TASM:
++make -f win32/Makefile.bor LOCAL_ZLIB="-DASMV -DASMINF" OBJA="match686.obj inffas32.obj" OBJPA="+match686c.obj+match686.obj+inffas32.obj"
++

@@ -1,0 +1,637 @@
+--- a/adler32.c	1681618651.000000000
++++ b/adler32.c	1696232673.711194393
+@@ -93,6 +93,24 @@ uLong ZEXPORT adler32_z(uLong adler, con
+         return adler | (sum2 << 16);
+     }
+ 
++#if defined(VEC_OPTIMIZE)
++#if defined(__i386__) || defined(__x86_64__) || defined(_ARM_ARCH_6) || defined(__arm64__)
++    {
++      /* align and/or fix edge case */
++      while ((((uintptr_t)buf)&15) || (len > INT32_MAX))
++      {
++        len--;
++        adler += *buf++;
++        sum2 += adler;
++        if (adler >= BASE) adler -= BASE;
++        MOD28(sum2);             /* only added so many BASE's */
++      }
++      
++      return adler32_vec((unsigned int)adler, (unsigned int)sum2, buf, (int)len);
++    }
++#endif // Architectures
++#endif
++
+     /* do length NMAX blocks -- requires just one modulo operation */
+     while (len >= NMAX) {
+         len -= NMAX;
+--- a/crc32.c	1691096004.000000000
++++ b/crc32.c	1696233045.232346903
+@@ -29,6 +29,10 @@
+ 
+ #include "zutil.h"      /* for Z_U4, Z_U8, z_crc_t, and FAR definitions */
+ 
++#if defined(VEC_OPTIMIZE) && defined(__x86_64__)
++#include <machine/cpu_capabilities.h>
++#endif
++
+  /*
+   A CRC of a message is computed on N braids of words in the message, where
+   each word consists of W bytes (4 or 8). If N is 3, for example, then three
+@@ -100,7 +104,9 @@
+ 
+ /* If available, use the ARM processor CRC32 instruction. */
+ #if defined(__aarch64__) && defined(__ARM_FEATURE_CRC32) && W == 8
++# if !defined(VEC_OPTIMIZE)
+ #  define ARMCRC32
++# endif
+ #endif
+ 
+ #if defined(W) && (!defined(ARMCRC32) || defined(DYNAMIC_CRC_TABLE))
+@@ -701,8 +707,43 @@ unsigned long ZEXPORT crc32_z(unsigned l
+ #endif /* DYNAMIC_CRC_TABLE */
+ 
+     /* Pre-condition the CRC */
+-    crc = (~crc) & 0xffffffff;
++    crc = (uint32_t)~crc; // rdar://105249137
++
++#if defined(VEC_OPTIMIZE)
++#if defined(__x86_64__) || defined(__arm64__)
++  {
++    int vector_code = 1; // default use vector code
++
++#if defined(__x86_64__)
++#   define cc (*(uint32_t*)(uintptr_t)_COMM_PAGE_CPU_CAPABILITIES)
++    if ((cc & kHasAES) == 0) vector_code = 0;  // for x86_64 without aesni, turn off the vector code
++#endif
+ 
++    if (vector_code)
++    {
++      // aligned bug to 16-bytes
++      while (len && ((ptrdiff_t)buf & 15))
++      {
++        len--;
++        crc = (crc >> 8) ^ crc_table[(crc ^ *buf++) & 0xff];
++      }
++      
++      // we can do this if len == 16, but the vector code runs slower than scalar at len=16
++      while (len >= 32)
++      {
++        uint32_t k = 1u << 30;
++        if (k > len) k = (uint32_t)len;
++        k &= ~15;
++
++        crc = crc32_little_aligned_vector((uint32_t)crc, buf, k); // will process until len < 16
++        buf += k;
++        len -= k;
++      }
++    }
++  }
++#endif // Architectures
++#endif
++  
+ #ifdef W
+ 
+     /* If provided enough bytes, do a braided CRC calculation. */
+--- a/gzwrite.c	1681618651.000000000
++++ b/gzwrite.c	1696233141.944818462
+@@ -356,6 +356,7 @@ int ZEXPORT gzputs(gzFile file, const ch
+ #include <stdarg.h>
+ 
+ /* -- see zlib.h -- */
++__attribute__((format(printf, 2, 0)))
+ int ZEXPORTVA gzvprintf(gzFile file, const char *format, va_list va) {
+     int len;
+     unsigned left;
+@@ -427,6 +428,7 @@ int ZEXPORTVA gzvprintf(gzFile file, con
+     return len;
+ }
+ 
++__attribute__((format(printf, 2, 3)))
+ int ZEXPORTVA gzprintf(gzFile file, const char *format, ...) {
+     va_list va;
+     int ret;
+--- a/infback.c	1681618651.000000000
++++ b/infback.c	1696233147.921565723
+@@ -93,14 +93,14 @@ local void fixedtables(struct inflate_st
+         next = fixed;
+         lenfix = next;
+         bits = 9;
+-        inflate_table(LENS, state->lens, 288, &(next), &(bits), state->work);
++        inflate_table(LENS, state->lens, 288, &(next), &(bits), state->work, ENOUGH_LENS);
+ 
+         /* distance table */
+         sym = 0;
+         while (sym < 32) state->lens[sym++] = 5;
+         distfix = next;
+         bits = 5;
+-        inflate_table(DISTS, state->lens, 32, &(next), &(bits), state->work);
++        inflate_table(DISTS, state->lens, 32, &(next), &(bits), state->work, ENOUGH_DISTS);
+ 
+         /* do this just once */
+         virgin = 0;
+@@ -373,7 +373,7 @@ int ZEXPORT inflateBack(z_streamp strm,
+             state->lencode = (code const FAR *)(state->next);
+             state->lenbits = 7;
+             ret = inflate_table(CODES, state->lens, 19, &(state->next),
+-                                &(state->lenbits), state->work);
++                                &(state->lenbits), state->work, 0);
+             if (ret) {
+                 strm->msg = (char *)"invalid code lengths set";
+                 state->mode = BAD;
+@@ -386,6 +386,9 @@ int ZEXPORT inflateBack(z_streamp strm,
+             while (state->have < state->nlen + state->ndist) {
+                 for (;;) {
+                     here = state->lencode[BITS(state->lenbits)];
++#if defined(INFFAST_OPT)
++                    INFLATE_SUB_EXTRA_BITS(here);
++#endif
+                     if ((unsigned)(here.bits) <= bits) break;
+                     PULLBYTE();
+                 }
+@@ -443,32 +446,36 @@ int ZEXPORT inflateBack(z_streamp strm,
+             /* build code tables -- note: do not change the lenbits or distbits
+                values here (9 and 6) without reading the comments in inftrees.h
+                concerning the ENOUGH constants, which depend on those values */
++#if defined(INFFAST_OPT)
++            if (inffast_tables(strm)) break;
++#else
+             state->next = state->codes;
+             state->lencode = (code const FAR *)(state->next);
+-            state->lenbits = 9;
++            state->lenbits = INFLATE_LEN_BITS;
+             ret = inflate_table(LENS, state->lens, state->nlen, &(state->next),
+-                                &(state->lenbits), state->work);
++                                &(state->lenbits), state->work, ENOUGH_LENS);
+             if (ret) {
+                 strm->msg = (char *)"invalid literal/lengths set";
+                 state->mode = BAD;
+                 break;
+             }
+             state->distcode = (code const FAR *)(state->next);
+-            state->distbits = 6;
++            state->distbits = INFLATE_DIST_BITS;
+             ret = inflate_table(DISTS, state->lens + state->nlen, state->ndist,
+-                            &(state->next), &(state->distbits), state->work);
++                            &(state->next), &(state->distbits), state->work, ENOUGH_DISTS);
+             if (ret) {
+                 strm->msg = (char *)"invalid distances set";
+                 state->mode = BAD;
+                 break;
+             }
++#endif
+             Tracev((stderr, "inflate:       codes ok\n"));
+             state->mode = LEN;
+                 /* fallthrough */
+ 
+         case LEN:
+             /* use inflate_fast() if we have enough input and output */
+-            if (have >= 6 && left >= 258) {
++            if (have >= INFLATE_MIN_INPUT && left >= INFLATE_MIN_OUTPUT) {
+                 RESTORE();
+                 if (state->whave < state->wsize)
+                     state->whave = state->wsize - left;
+@@ -480,6 +487,9 @@ int ZEXPORT inflateBack(z_streamp strm,
+             /* get a literal, length, or end-of-block code */
+             for (;;) {
+                 here = state->lencode[BITS(state->lenbits)];
++#if defined(INFFAST_OPT)
++                INFLATE_SUB_EXTRA_BITS(here);
++#endif
+                 if ((unsigned)(here.bits) <= bits) break;
+                 PULLBYTE();
+             }
+@@ -488,6 +498,9 @@ int ZEXPORT inflateBack(z_streamp strm,
+                 for (;;) {
+                     here = state->lencode[last.val +
+                             (BITS(last.bits + last.op) >> last.bits)];
++#if defined(INFFAST_OPT)
++                    INFLATE_SUB_EXTRA_BITS(here);
++#endif
+                     if ((unsigned)(last.bits + here.bits) <= bits) break;
+                     PULLBYTE();
+                 }
+@@ -534,6 +547,9 @@ int ZEXPORT inflateBack(z_streamp strm,
+             /* get distance code */
+             for (;;) {
+                 here = state->distcode[BITS(state->distbits)];
++#if defined(INFFAST_OPT)
++                INFLATE_SUB_EXTRA_BITS(here);
++#endif
+                 if ((unsigned)(here.bits) <= bits) break;
+                 PULLBYTE();
+             }
+@@ -542,6 +558,9 @@ int ZEXPORT inflateBack(z_streamp strm,
+                 for (;;) {
+                     here = state->distcode[last.val +
+                             (BITS(last.bits + last.op) >> last.bits)];
++#if defined(INFFAST_OPT)
++                    INFLATE_SUB_EXTRA_BITS(here);
++#endif
+                     if ((unsigned)(last.bits + here.bits) <= bits) break;
+                     PULLBYTE();
+                 }
+--- a/inffixed.h	1317871952.000000000
++++ b/inffixed.h	1696233153.533841880
+@@ -1,3 +1,8 @@
++
++#if defined(INFFAST_OPT)
++# include "../AddOn/zopt_inffixed.h"
++#else
++
+     /* inffixed.h -- table for decoding fixed codes
+      * Generated automatically by makefixed().
+      */
+@@ -92,3 +97,4 @@
+         {16,5,4},{24,5,769},{20,5,49},{28,5,12289},{18,5,13},{26,5,3073},
+         {22,5,193},{64,5,0}
+     };
++#endif
+--- a/inflate.c	1681618651.000000000
++++ b/inflate.c	1696233156.766092443
+@@ -269,14 +269,14 @@ local void fixedtables(struct inflate_st
+         next = fixed;
+         lenfix = next;
+         bits = 9;
+-        inflate_table(LENS, state->lens, 288, &(next), &(bits), state->work);
++        inflate_table(LENS, state->lens, 288, &(next), &(bits), state->work, ENOUGH_LENS);
+ 
+         /* distance table */
+         sym = 0;
+         while (sym < 32) state->lens[sym++] = 5;
+         distfix = next;
+         bits = 5;
+-        inflate_table(DISTS, state->lens, 32, &(next), &(bits), state->work);
++        inflate_table(DISTS, state->lens, 32, &(next), &(bits), state->work, ENOUGH_DISTS);
+ 
+         /* do this just once */
+         virgin = 0;
+@@ -926,7 +926,7 @@ int ZEXPORT inflate(z_streamp strm, int
+             state->lencode = (const code FAR *)(state->next);
+             state->lenbits = 7;
+             ret = inflate_table(CODES, state->lens, 19, &(state->next),
+-                                &(state->lenbits), state->work);
++                                &(state->lenbits), state->work, 0);
+             if (ret) {
+                 strm->msg = (char *)"invalid code lengths set";
+                 state->mode = BAD;
+@@ -940,6 +940,9 @@ int ZEXPORT inflate(z_streamp strm, int
+             while (state->have < state->nlen + state->ndist) {
+                 for (;;) {
+                     here = state->lencode[BITS(state->lenbits)];
++#if defined(INFFAST_OPT)
++                    INFLATE_SUB_EXTRA_BITS(here);
++#endif
+                     if ((unsigned)(here.bits) <= bits) break;
+                     PULLBYTE();
+                 }
+@@ -994,28 +997,32 @@ int ZEXPORT inflate(z_streamp strm, int
+                 break;
+             }
+ 
++#if defined(INFFAST_OPT)
++            if (inffast_tables(strm)) break;
++#else
+             /* build code tables -- note: do not change the lenbits or distbits
+                values here (9 and 6) without reading the comments in inftrees.h
+                concerning the ENOUGH constants, which depend on those values */
+             state->next = state->codes;
+             state->lencode = (const code FAR *)(state->next);
+-            state->lenbits = 9;
++            state->lenbits = INFLATE_LEN_BITS;
+             ret = inflate_table(LENS, state->lens, state->nlen, &(state->next),
+-                                &(state->lenbits), state->work);
++                                &(state->lenbits), state->work, ENOUGH_LENS);
+             if (ret) {
+                 strm->msg = (char *)"invalid literal/lengths set";
+                 state->mode = BAD;
+                 break;
+             }
+             state->distcode = (const code FAR *)(state->next);
+-            state->distbits = 6;
++            state->distbits = INFLATE_DIST_BITS;
+             ret = inflate_table(DISTS, state->lens + state->nlen, state->ndist,
+-                            &(state->next), &(state->distbits), state->work);
++                            &(state->next), &(state->distbits), state->work, ENOUGH_DISTS);
+             if (ret) {
+                 strm->msg = (char *)"invalid distances set";
+                 state->mode = BAD;
+                 break;
+             }
++#endif
+             Tracev((stderr, "inflate:       codes ok\n"));
+             state->mode = LEN_;
+             if (flush == Z_TREES) goto inf_leave;
+@@ -1024,7 +1031,7 @@ int ZEXPORT inflate(z_streamp strm, int
+             state->mode = LEN;
+                 /* fallthrough */
+         case LEN:
+-            if (have >= 6 && left >= 258) {
++            if (have >= INFLATE_MIN_INPUT && left >= INFLATE_MIN_OUTPUT) {
+                 RESTORE();
+                 inflate_fast(strm, out);
+                 LOAD();
+@@ -1035,6 +1042,9 @@ int ZEXPORT inflate(z_streamp strm, int
+             state->back = 0;
+             for (;;) {
+                 here = state->lencode[BITS(state->lenbits)];
++#if defined(INFFAST_OPT)
++                INFLATE_SUB_EXTRA_BITS(here);
++#endif
+                 if ((unsigned)(here.bits) <= bits) break;
+                 PULLBYTE();
+             }
+@@ -1043,6 +1053,9 @@ int ZEXPORT inflate(z_streamp strm, int
+                 for (;;) {
+                     here = state->lencode[last.val +
+                             (BITS(last.bits + last.op) >> last.bits)];
++#if defined(INFFAST_OPT)
++                    INFLATE_SUB_EXTRA_BITS(here);
++#endif
+                     if ((unsigned)(last.bits + here.bits) <= bits) break;
+                     PULLBYTE();
+                 }
+@@ -1087,6 +1100,9 @@ int ZEXPORT inflate(z_streamp strm, int
+         case DIST:
+             for (;;) {
+                 here = state->distcode[BITS(state->distbits)];
++#if defined(INFFAST_OPT)
++                INFLATE_SUB_EXTRA_BITS(here);
++#endif
+                 if ((unsigned)(here.bits) <= bits) break;
+                 PULLBYTE();
+             }
+@@ -1095,6 +1111,9 @@ int ZEXPORT inflate(z_streamp strm, int
+                 for (;;) {
+                     here = state->distcode[last.val +
+                             (BITS(last.bits + last.op) >> last.bits)];
++#if defined(INFFAST_OPT)
++                    INFLATE_SUB_EXTRA_BITS(here);
++#endif
+                     if ((unsigned)(last.bits + here.bits) <= bits) break;
+                     PULLBYTE();
+                 }
+--- a/inftrees.c	1692348336.000000000
++++ b/inftrees.c	1696233334.752576318
+@@ -31,7 +31,8 @@ const char inflate_copyright[] =
+  */
+ int ZLIB_INTERNAL inflate_table(codetype type, unsigned short FAR *lens,
+                                 unsigned codes, code FAR * FAR *table,
+-                                unsigned FAR *bits, unsigned short FAR *work) {
++                                unsigned FAR *bits, unsigned short FAR *work,
++                                unsigned enough) {
+     unsigned len;               /* a code's length in bits */
+     unsigned sym;               /* index of code symbols */
+     unsigned min, max;          /* minimum and maximum code lengths */
+@@ -57,7 +58,7 @@ int ZLIB_INTERNAL inflate_table(codetype
+         35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258, 0, 0};
+     static const unsigned short lext[31] = { /* Length codes 257..285 extra */
+         16, 16, 16, 16, 16, 16, 16, 16, 17, 17, 17, 17, 18, 18, 18, 18,
+-        19, 19, 19, 19, 20, 20, 20, 20, 21, 21, 21, 21, 16, 198, 203};
++        19, 19, 19, 19, 20, 20, 20, 20, 21, 21, 21, 21, 16, 64, 64};
+     static const unsigned short dbase[32] = { /* Distance codes 0..29 base */
+         1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193,
+         257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
+@@ -99,10 +100,27 @@ int ZLIB_INTERNAL inflate_table(codetype
+      */
+ 
+     /* accumulate lengths for codes (assumes lens[] all in 0..MAXBITS) */
++#if defined(INFFAST_OPT)
++    {
++      unsigned short cnt[2][16];
++      
++      __builtin_memset(cnt, 0, sizeof(cnt));
++      for (sym = 0; sym + 2 <= codes; sym += 2)
++      {
++        cnt[0][lens[sym    ]]++;
++        cnt[1][lens[sym + 1]]++;
++      }
++      // AVX usage in the kernel is problematic. Thus, use 16 byte vectors.
++      ((packed_ushort8*)count)[0] = ((packed_ushort8*)cnt[0])[0] + ((packed_ushort8*)cnt[1])[0];
++      ((packed_ushort8*)count)[1] = ((packed_ushort8*)cnt[0])[1] + ((packed_ushort8*)cnt[1])[1];
++      if (sym < codes) count[lens[sym]]++;
++    }
++#else
+     for (len = 0; len <= MAXBITS; len++)
+         count[len] = 0;
+     for (sym = 0; sym < codes; sym++)
+         count[lens[sym]]++;
++#endif
+ 
+     /* bound code lengths, force root to be within code lengths */
+     root = *bits;
+@@ -138,9 +156,20 @@ int ZLIB_INTERNAL inflate_table(codetype
+         offs[len + 1] = offs[len] + count[len];
+ 
+     /* sort symbols by length, by symbol order within each length */
++#if defined(INFFAST_OPT)
++    for (sym = 0; sym + 2 <= codes; sym += 2)
++    {
++      if (lens[sym    ]) work[offs[lens[sym    ]]++] = (unsigned short)sym;
++      if (lens[sym + 1]) work[offs[lens[sym + 1]]++] = (unsigned short)sym + 1;
++    }
++    if ((sym < codes) && (lens[sym]))
++    {
++      work[offs[lens[sym]]] = (unsigned short)sym;
++    }
++#else
+     for (sym = 0; sym < codes; sym++)
+         if (lens[sym] != 0) work[offs[lens[sym]]++] = (unsigned short)sym;
+-
++#endif
+     /*
+        Create and fill in decoding tables.  In this loop, the table being
+        filled is at next and has curr index bits.  The code being used is huff
+@@ -201,8 +230,7 @@ int ZLIB_INTERNAL inflate_table(codetype
+     mask = used - 1;            /* mask for comparing low */
+ 
+     /* check available table space */
+-    if ((type == LENS && used > ENOUGH_LENS) ||
+-        (type == DISTS && used > ENOUGH_DISTS))
++    if (type != CODES && used > enough)
+         return 1;
+ 
+     /* process all codes and make table entries */
+@@ -216,12 +244,19 @@ int ZLIB_INTERNAL inflate_table(codetype
+         else if (work[sym] >= match) {
+             here.op = (unsigned char)(extra[work[sym] - match]);
+             here.val = base[work[sym] - match];
++#if defined(INFFAST_OPT)
++            INFLATE_ADD_EXTRA_BITS(here);
++#endif
+         }
+         else {
+             here.op = (unsigned char)(32 + 64);         /* end of block */
+             here.val = 0;
+         }
+ 
++#if defined(INFFAST_OPT)
++        min = 1U << curr;
++        next[huff >> drop] = here;
++#else
+         /* replicate for those indices with low len bits equal to huff */
+         incr = 1U << (len - drop);
+         fill = 1U << curr;
+@@ -230,7 +265,7 @@ int ZLIB_INTERNAL inflate_table(codetype
+             fill -= incr;
+             next[(huff >> drop) + fill] = here;
+         } while (fill != 0);
+-
++#endif
+         /* backwards increment the len-bit code huff */
+         incr = 1U << (len - 1);
+         while (huff & incr)
+@@ -246,7 +281,26 @@ int ZLIB_INTERNAL inflate_table(codetype
+         sym++;
+         if (--(count[len]) == 0) {
+             if (len == max) break;
++#if defined(INFFAST_OPT)
++            {
++              // Replicate entries?
++              if (len < lens[work[sym]])
++              {
++                uint bits = len - drop; len = lens[work[sym]];
++                uint need = len - drop;
++                
++                // Not full size yet?
++                while (bits < curr)
++                {
++                  // Duplicate low bits
++                  __builtin_memcpy(next + (1 << bits), next, sizeof(code) << bits);
++                  if (++bits == need) break; // Done
++                }
++              }
++            }
++#else
+             len = lens[work[sym]];
++#endif
+         }
+ 
+         /* create new sub-table if needed */
+@@ -270,8 +324,7 @@ int ZLIB_INTERNAL inflate_table(codetype
+ 
+             /* check for enough space */
+             used += 1U << curr;
+-            if ((type == LENS && used > ENOUGH_LENS) ||
+-                (type == DISTS && used > ENOUGH_DISTS))
++            if (type != CODES && used > enough)
+                 return 1;
+ 
+             /* point entry in root table to sub-table */
+--- a/inftrees.h	1681618651.000000000
++++ b/inftrees.h	1696233367.472766499
+@@ -1,3 +1,4 @@
++
+ /* inftrees.h -- header to use inftrees.c
+  * Copyright (C) 1995-2005, 2010 Mark Adler
+  * For conditions of distribution and use, see copyright notice in zlib.h
+@@ -22,8 +23,13 @@
+    of a literal, the base length or distance, or the offset from
+    the current table to the next table.  Each entry is four bytes. */
+ typedef struct {
++#if defined(INFFAST_OPT)
++    unsigned char bits;         /* bits in this part of the code */
++    unsigned char op;           /* operation, extra bits, table bits */
++#else
+     unsigned char op;           /* operation, extra bits, table bits */
+     unsigned char bits;         /* bits in this part of the code */
++#endif
+     unsigned short val;         /* offset in table or code value */
+ } code;
+ 
+@@ -59,4 +65,5 @@ typedef enum {
+ 
+ int ZLIB_INTERNAL inflate_table(codetype type, unsigned short FAR *lens,
+                                 unsigned codes, code FAR * FAR *table,
+-                                unsigned FAR *bits, unsigned short FAR *work);
++                                unsigned FAR *bits, unsigned short FAR *work,
++                                unsigned enough);
+--- a/zconf.h.in	1681767317.000000000
++++ b/zconf.h.in	1696233377.310715522
+@@ -424,28 +424,15 @@ typedef uLong FAR uLongf;
+    typedef Byte       *voidp;
+ #endif
+ 
+-#if !defined(Z_U4) && !defined(Z_SOLO) && defined(STDC)
+-#  include <limits.h>
+-#  if (UINT_MAX == 0xffffffffUL)
+-#    define Z_U4 unsigned
+-#  elif (ULONG_MAX == 0xffffffffUL)
+-#    define Z_U4 unsigned long
+-#  elif (USHRT_MAX == 0xffffffffUL)
+-#    define Z_U4 unsigned short
+-#  endif
+-#endif
+-
+-#ifdef Z_U4
+-   typedef Z_U4 z_crc_t;
+-#else
+-   typedef unsigned long z_crc_t;
+-#endif
++typedef unsigned long z_crc_t;
+ 
+-#ifdef HAVE_UNISTD_H    /* may be set to #if 1 by ./configure */
++#if defined(__APPLE__) /* avoid unistd.h on Win32 */
++#if 1    /* was set to #if 1 by ./configure */
+ #  define Z_HAVE_UNISTD_H
+ #endif
++#endif /* defined(__APPLE__) */
+ 
+-#ifdef HAVE_STDARG_H    /* may be set to #if 1 by ./configure */
++#if 1    /* was set to #if 1 by ./configure */
+ #  define Z_HAVE_STDARG_H
+ #endif
+ 
+@@ -493,7 +480,7 @@ typedef uLong FAR uLongf;
+ #    ifdef VMS
+ #      include <unixio.h>       /* for off_t */
+ #    endif
+-#    ifndef z_off_t
++#    if !defined(z_off_t) && !defined(__APPLE__)
+ #      define z_off_t off_t
+ #    endif
+ #  endif
+@@ -523,6 +510,8 @@ typedef uLong FAR uLongf;
+ 
+ #if !defined(_WIN32) && defined(Z_LARGE64)
+ #  define z_off64_t off64_t
++#elif defined(__APPLE__)
++#  define z_off64_t off_t
+ #else
+ #  if defined(_WIN32) && !defined(__GNUC__)
+ #    define z_off64_t __int64
+--- a/zlib.h	1692348336.000000000
++++ b/zlib.h	1696233380.705728590
+@@ -1654,6 +1654,10 @@ ZEXTERN int ZEXPORT gzclose_w(gzFile fil
+    writing respectively.  If gzclose() is used, then both compression and
+    decompression code will be included the application when linking to a static
+    zlib library.
++ 
++   Because Mac OS X doesn't use a static zlib library, these routine are of
++   no value for Mac OS X-only applications, and gzclose() is recommended
++   instead.
+ */
+ 
+ ZEXTERN const char * ZEXPORT gzerror(gzFile file, int *errnum);
+--- a/zutil.h	1681618651.000000000
++++ b/zutil.h	1696233436.958067735
+@@ -190,7 +190,7 @@ extern z_const char * const z_errmsg[10]
+ 
+ /* provide prototypes for these when building zlib without LFS */
+ #if !defined(_WIN32) && \
+-    (!defined(_LARGEFILE64_SOURCE) || _LFS64_LARGEFILE-0 == 0)
++    (!defined(_LARGEFILE64_SOURCE) || _LFS64_LARGEFILE-0 == 0) && !defined(__APPLE__)
+     ZEXTERN uLong ZEXPORT adler32_combine64(uLong, uLong, z_off_t);
+     ZEXTERN uLong ZEXPORT crc32_combine64(uLong, uLong, z_off_t);
+     ZEXTERN uLong ZEXPORT crc32_combine_gen64(z_off_t);
+@@ -272,4 +272,10 @@ extern z_const char * const z_errmsg[10]
+ #define ZSWAP32(q) ((((q) >> 24) & 0xff) + (((q) >> 8) & 0xff00) + \
+                     (((q) & 0xff00) << 8) + (((q) & 0xff) << 24))
+ 
++#define INFLATE_LEN_BITS 9
++#define INFLATE_DIST_BITS 6
++#define INFLATE_MIN_INPUT 6
++#define INFLATE_MIN_OUTPUT 258
++
++
+ #endif /* ZUTIL_H */

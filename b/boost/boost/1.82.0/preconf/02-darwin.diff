@@ -1,0 +1,66 @@
+--- a/libs/align/include/boost/align/aligned_alloc.hpp	1681442080.000000000
++++ b/libs/align/include/boost/align/aligned_alloc.hpp	1694428371.408637035
+@@ -14,10 +14,6 @@ Distributed under the Boost Software Lic
+ #include <unistd.h>
+ #endif
+ 
+-#if defined(__APPLE__) || defined(__APPLE_CC__) || defined(macintosh)
+-#include <AvailabilityMacros.h>
+-#endif
+-
+ #if defined(BOOST_ALIGN_USE_ALIGN)
+ #include <boost/align/detail/aligned_alloc.hpp>
+ #elif defined(BOOST_ALIGN_USE_NEW)
+@@ -28,10 +24,8 @@ Distributed under the Boost Software Lic
+ #include <boost/align/detail/aligned_alloc_msvc.hpp>
+ #elif defined(__MINGW32__)
+ #include <boost/align/detail/aligned_alloc_mingw.hpp>
+-#elif MAC_OS_X_VERSION_MIN_REQUIRED >= 1090
++#elif __APPLE__
+ #include <boost/align/detail/aligned_alloc_posix.hpp>
+-#elif MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+-#include <boost/align/detail/aligned_alloc_macos.hpp>
+ #elif defined(__ANDROID__)
+ #include <boost/align/detail/aligned_alloc_android.hpp>
+ #elif defined(__SunOS_5_11) || defined(__SunOS_5_12)
+--- a/libs/context/include/boost/context/continuation_ucontext.hpp	1681442087.000000000
++++ b/libs/context/include/boost/context/continuation_ucontext.hpp	1694428994.474898256
+@@ -13,7 +13,12 @@
+ #endif
+ 
+ extern "C" {
++#if !BOOST_OS_IOS
+ #include <ucontext.h>
++#else
++// Torrekie: ucontext on Embedded Darwin is broken, use alternatives
++#include <libucontext/ucontext.h>
++#endif
+ }
+ 
+ #include <boost/context/detail/config.hpp>
+--- a/libs/context/include/boost/context/fiber_ucontext.hpp	1681442087.000000000
++++ b/libs/context/include/boost/context/fiber_ucontext.hpp	1694429082.105151156
+@@ -13,7 +13,12 @@
+ #endif
+ 
+ extern "C" {
++#if !BOOST_OS_IOS
+ #include <ucontext.h>
++#else
++// Torrekie: ucontext on Embedded Darwin is broken, use alternatives
++#include <libucontext/ucontext.h>
++#endif
+ }
+ 
+ #include <boost/context/detail/config.hpp>
+--- a/libs/predef/include/boost/predef/other/endian.h	1681442121.000000000
++++ b/libs/predef/include/boost/predef/other/endian.h	1694429214.578767724
+@@ -57,7 +57,7 @@ information and acquired knowledge:
+ #   if BOOST_LIB_C_GNU || BOOST_PLAT_ANDROID || BOOST_OS_BSD_OPEN
+ #       include <endian.h>
+ #   else
+-#       if BOOST_OS_MACOS
++#       if BOOST_OS_MACOS || BOOST_OS_IOS
+ #           include <machine/endian.h>
+ #       else
+ #           if BOOST_OS_BSD
