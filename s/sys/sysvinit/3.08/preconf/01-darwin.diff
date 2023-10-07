@@ -1,0 +1,1658 @@
+--- a/man/Makefile	1692472550.000000000
++++ b/man/Makefile	1696587950.918110609
+@@ -7,6 +7,7 @@ PO4A := $(shell command -v po4a 2> /dev/
+ 
+ PO4A_OPTS = --previous --srcdir po/ --destdir ./ --no-backups --stamp \
+             --package-name sysvinit --package-version $(VERSION) \
++            --keep 40 \
+             --msgid-bugs-address "Jesse <jsmith@resonatingmedia.com>"
+ 
+ all:
+@@ -21,8 +22,7 @@ endif
+ install: all
+ 
+ clean distclean:
+-	for man in $(MANPAGES) ; do \
+-	   if [ -f "$$man.orig" ] ; then mv "$$man.orig" "$$man" ; fi \
+-	done
+-	for lang in $(LANGUAGES) ; do rm -rf "$$lang" "$$lang.po" ; done
+-
++ifdef PO4A
++	po4a $(PO4A_OPTS) --rm-translations po/po4a.cfg
++endif
++	rm -f *.po sysvinit-man.pot
+--- a/man/fstab-decode.8	1692472550.000000000
++++ b/man/fstab-decode.8	1696701480.501876249
+@@ -23,12 +23,12 @@
+ fstab-decode \- run a command with fstab-encoded arguments
+ 
+ .SH SYNOPSIS
+-\fBfstab-decode\fR \fICOMMAND\fR [\fIARGUMENT\fR]...
++\fBfstab-decode\fR \fICOMMAND\fR [\,\fIARGUMENT\fR \&.\|.\|.\&]
+ 
+ .SH DESCRIPTION
+ .B fstab-decode
+ decodes escapes (such as newline characters and other whitespace) 
+-in the specified \fIARGUMENT\fRs and uses them to run \fICOMMAND\fR.
++in the specified \fIARGUMENT\/\fRs and uses them to run \fICOMMAND\fR.
+ The argument escaping uses the same rules as path escaping in
+ \fI/etc/fstab\fR, \fI/etc/mtab\fR and \fI/proc/mtab\fR.
+ 
+--- a/man/pidof.8	1692472550.000000000
++++ b/man/pidof.8	1696702889.223493994
+@@ -46,7 +46,7 @@ a \fBstart-stop-daemon\fP(8) program tha
+ Single shot - this instructs the program to only return one \fIpid\fP.
+ .IP \fB\-c\fP
+ Only return process PIDs that are running with the same root directory.
+-This option is ignored for non-root users, as they will be unable to check
++This option is ignored on Darwin, as there has no way to check
+ the current root directory of processes they do not own.
+ .IP \fB\-n\fP
+ Avoid
+@@ -57,6 +57,7 @@ based file systems like
+ Instead of using this option the variable
+ .B PIDOF_NETFS
+ may be set and exported.
++This option is ignored on Darwin as not yet implemented.
+ .IP \fB\-q\fP
+ Do not display matched PIDs to standard out. Simply exit with
+ a status of true or false to indicate whether a matching PID was found.
+@@ -103,7 +104,6 @@ processes, at the risk of failing or han
+ 
+ .SH SEE ALSO
+ .BR shutdown (8),
+-.BR init (8),
+ .BR halt (8),
+ .BR reboot (8),
+ .BR killall5 (8)
+--- a/man/shutdown.8	1692472550.000000000
++++ b/man/shutdown.8	1696701480.512998556
+@@ -132,6 +132,10 @@ When \fBshutdown\fP is called with the \
+ .\"{{{  time
+ .IP \fItime\fP
+ When to shutdown.
++If a
++\fItime\fP
++is given then the
++\fBshutdown\fP command will not exit but instead count down until reboot.
+ .\"}}}
+ .\"{{{  warning-message
+ .IP "\fIwarning message\fP"
+@@ -147,7 +151,7 @@ in which \fIhh:mm\fP is the number of ho
+ The word \fBnow\fP is an alias for \fB+0\fP.
+ .PP
+ If \fBshutdown\fP is called with a delay, it will create the advisory file
+-.I /etc/nologin
++.I /var/run/nologin
+ which causes programs such as \fBlogin\fP(1) to not allow new user
+ logins. This file is created five minutes before the shutdown sequence
+ starts. \fBshutdown\fP removes this file if it is stopped before it
+--- a/src/Makefile	1692472550.000000000
++++ b/src/Makefile	1696695692.245741966
+@@ -24,13 +24,23 @@ MNTPOINT=
+ # For some known distributions we do not build all programs, otherwise we do.
+ BIN	=
+ SBIN	= init halt shutdown runlevel killall5 fstab-decode logsave
+-USRBIN	= last mesg readbootlog
++USRBIN	= mesg readbootlog
+ 
+ MAN1	= last.1 lastb.1 mesg.1 readbootlog.1
+ MAN5	= initscript.5 inittab.5 initctl.5
+ MAN8	= halt.8 init.8 killall5.8 pidof.8 poweroff.8 reboot.8 runlevel.8
+ MAN8	+= shutdown.8 telinit.8 fstab-decode.8 logsave.8
+ 
++ifneq ($(DISTRO),Darwin)
++USRBIN	+= last
++else
++CPPFLAGS+= -DACCTON_OFF
++SBIN	+= bootlogd
++MAN8	+= bootlogd.8
++MANDB	:=
++endif
++
++
+ ifeq ($(DISTRO),)
+ SBIN	+= sulogin bootlogd
+ USRBIN	+= utmpdump wall
+@@ -70,7 +80,7 @@ MANPAGES+=$(subst ../man/,,$(foreach man
+ 
+ ID		= $(shell id -u)
+ BIN_OWNER	= root
+-BIN_GROUP	= root
++BIN_GROUP	= wheel
+ BIN_COMBO	= $(BIN_OWNER):$(BIN_GROUP)
+ ifeq ($(ID),0)
+   INSTALL_EXEC	= install -o $(BIN_OWNER) -g $(BIN_GROUP) -m 755
+--- a/src/bootlogd.c	1692472550.000000000
++++ b/src/bootlogd.c	1696588215.787456975
+@@ -49,11 +49,15 @@
+ #include <sys/sysmacros.h>
+ #endif
+ 
+-#ifdef __FreeBSD__
++#if defined(__FreeBSD__) || defined(__APPLE__)
+ #include <termios.h>
+ #include <libutil.h>
+ #endif
+ 
++#if defined(__APPLE__)
++#include <util.h>
++#endif
++
+ #include <ctype.h>
+ #ifdef __linux__
+ #include <sys/mount.h>
+--- a/src/dowall.c	1692472550.000000000
++++ b/src/dowall.c	1696592499.678736718
+@@ -24,20 +24,26 @@
+  */
+ #include <sys/types.h>
+ #include <sys/stat.h>
++#if __linux__
+ #include <sys/sysmacros.h>
++#endif
+ #include <limits.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <time.h>
+ #include <unistd.h>
+ #include <stdio.h>
++#if __APPLE__
++#include <utmpx.h>
++#else
+ #include <utmp.h>
++#endif
+ #include <pwd.h>
+ #include <fcntl.h>
+ #include <signal.h>
+ #include <setjmp.h>
+ #include <paths.h>
+-
++#include "init.h"
+ #ifndef _PATH_DEV
+ # define _PATH_DEV	"/dev/"
+ #endif
+@@ -160,7 +166,7 @@ void wall(const char *text, int remote)
+ {
+ 	FILE			*tp;
+ 	struct sigaction	sa;
+-	struct utmp		*utmp;
++	struct utmpx		*utmp;
+ 	time_t			t;
+ 	char			term[UT_LINESIZE+ strlen(_PATH_DEV) + 1];
+ 	char			line[256];
+--- a/src/halt.c	1692472550.000000000
++++ b/src/halt.c	1696591789.630490920
+@@ -48,7 +48,11 @@
+ #include <sys/stat.h>
+ #include <sys/param.h>
+ #include <stdlib.h>
++#if __APPLE__
++#include <utmpx.h>
++#else
+ #include <utmp.h>
++#endif
+ #include <fcntl.h>
+ #include <string.h>
+ #include <unistd.h>
+@@ -60,6 +64,20 @@
+ #include "reboot.h"
+ #include "runlevellog.h"
+ 
++#ifdef __APPLE__
++#define UTMP_FILE "/var/run/utmpx"
++#define WTMP_FILE "/var/log/wtmp"
++#define UT_LINESIZE 8
++#define UT_NAMESIZE 8
++#define ut_time ut_tv.tv_sec
++#define ut_name ut_user
++#define endutent endutxent
++#define getutent getutxent
++#define getutid getutxid
++#define pututline pututxline
++#define setutent setutxent
++#endif
++
+ char *Version = "@(#)halt  2.86  31-Jul-2004 miquels@cistron.nl";
+ char *progname;
+ 
+@@ -100,7 +118,7 @@ void usage(void)
+  */
+ int get_runlevel(void)
+ {
+-	struct utmp *ut;
++	struct utmpx *ut;
+ 	char *r;
+         int runlevel, status;
+ 
+--- a/src/init.c	1692472550.000000000
++++ b/src/init.c	1696701404.256845051
+@@ -53,7 +53,7 @@ Version information is not placed in the
+ #include <string.h>
+ #include <signal.h>
+ #include <termios.h>
+-#ifdef __FreeBSD__
++#if defined(__FreeBSD__) || defined(__APPLE__)
+ #include <utmpx.h>
+ #else
+ #include <utmp.h>
+@@ -72,7 +72,7 @@ Version information is not placed in the
+ #ifdef WITH_SELINUX
+ #  include <selinux/selinux.h>
+ #endif
+-#ifdef __FreeBSD__
++#if defined(__FreeBSD__) || defined(__APPLE__)
+ extern char **environ;
+ #endif
+ 
+@@ -149,9 +149,13 @@ int wrote_utmp_rlevel = 1;	/* Set when w
+ int sleep_time = WAIT_BETWEEN_SIGNALS;    /* Sleep time between TERM and KILL */
+ char *argv0;			/* First arguments; show up in ps listing */
+ int maxproclen;			/* Maximal length of argv[0] with \0 */
++#if __APPLE__
++struct utmpx utproto;
++#else
+ struct utmp utproto;		/* Only used for sizeof(utproto.ut_id) */
++#endif
+ char *console_dev;		/* Console device. */
+-int pipe_fd = -1;		/* /run/initctl */
++int pipe_fd = -1;		/* /var/run/initctl */
+ int did_boot = 0;		/* Did we already do BOOT* stuff? */
+ int main(int, char **);
+ 
+@@ -537,12 +541,12 @@ int receive_state(int fd)
+  *	Set the process title.
+  */
+ #ifdef __GNUC__
+-#ifndef __FreeBSD__
++#if !defined(__FreeBSD__) && !defined(__APPLE__)
+ __attribute__ ((format (printf, 1, 2)))
+ #endif
+ #endif
+ /* This function already exists on FreeBSD. No need to declare it. */
+-#ifndef __FreeBSD__
++#if !defined(__FreeBSD__)
+ static int setproctitle(char *fmt, ...)
+ {
+ 	va_list ap;
+@@ -809,7 +813,7 @@ void console_stty(void)
+ 		return;
+ 	}
+ 
+-#ifdef __FreeBSD_kernel__
++#if defined(__FreeBSD_kernel__) || defined(__APPLE__)
+ 	/*
+ 	 * The kernel of FreeBSD expects userland to set TERM.  Usually, we want
+ 	 * "xterm".  Later, gettys might disagree on this (i.e. we're not using
+@@ -1568,12 +1572,17 @@ void read_inittab(void)
+ 	if (!action || !*action)
+ 			strcpy(err, "missing action field");
+ 	if (id && strlen(id) > sizeof(utproto.ut_id))
+-		sprintf(err, "id field too long (max %d characters)",
+-			(int)sizeof(utproto.ut_id));
++		snprintf(err, sizeof(err),
++		    "%s field too long (max %d characters)",
++		    "id", (int)sizeof(utproto.ut_id));
+ 	if (rlevel && strlen(rlevel) > 11)
+-		strcpy(err, "rlevel field too long (max 11 characters)");
++		snprintf(err, sizeof(err),
++		    "%s field too long (max %d characters)",
++		    "rlevel", 11);
+ 	if (process && strlen(process) > 127)
+-		strcpy(err, "process field too long (max 127 characters)");
++		snprintf(err, sizeof(err),
++		    "%s field too long (max %d characters)",
++		    "process", 127);
+ 	if (action && strlen(action) > 32)
+ 		strcpy(err, "action field too long");
+ 	if (err[0] != 0) {
+@@ -2449,13 +2458,13 @@ void check_init_fifo(void)
+   int			quit = 0;
+ 
+   /*
+-   *	First, try to create /run/initctl if not present.
++   *	First, try to create /var/run/initctl if not present.
+    */
+   if (stat(INIT_FIFO, &st2) < 0 && errno == ENOENT)
+ 	(void)mkfifo(INIT_FIFO, 0600);
+ 
+   /*
+-   *	If /run/initctl is open, stat the file to see if it
++   *	If /var/run/initctl is open, stat the file to see if it
+    *	is still the _same_ inode.
+    */
+   if (pipe_fd >= 0) {
+@@ -2469,7 +2478,7 @@ void check_init_fifo(void)
+   }
+ 
+   /*
+-   *	Now finally try to open /run/initctl if pipe_fd is -1
++   *	Now finally try to open /var/run/initctl if pipe_fd is -1
+    *    if it is -2, then we leave it closed
+    */
+   if (pipe_fd == -1) {
+@@ -2779,7 +2788,7 @@ void process_signals()
+   }
+   if (ISMEMBER(got_signals, SIGUSR1)) {
+ 	/*
+-	 *	SIGUSR1 means close and reopen /run/initctl
++	 *	SIGUSR1 means close and reopen /var/run/initctl
+ 	 */
+ 	INITDBG(L_VB, "got SIGUSR1");
+ 	if (pipe_fd)
+@@ -3027,7 +3036,7 @@ int telinit(char *progname, int argc, ch
+ 			strerror(errno));
+ 
+ 	/* Open the fifo and write a command. */
+-	/* Make sure we don't hang on opening /run/initctl */
++	/* Make sure we don't hang on opening /var/run/initctl */
+ 	SETSIG(sa, SIGALRM, signal_handler, 0);
+ 	alarm(3);
+ 	if ((fd = open(INIT_FIFO, O_WRONLY)) >= 0) {
+--- a/src/init.h	1692472550.000000000
++++ b/src/init.h	1696592603.308255316
+@@ -163,3 +163,17 @@ struct utmp
+ };
+ #endif
+ 
++#ifdef __APPLE__
++#define UTMP_FILE "/var/run/utmpx"
++#define WTMP_FILE "/var/log/wtmp"
++#define UT_LINESIZE 8
++#define UT_NAMESIZE 8
++#define ut_time ut_tv.tv_sec
++#define ut_name ut_user
++#define endutent endutxent
++#define getutent getutxent
++#define getutid getutxid
++#define pututline pututxline
++#define setutent setutxent
++#define utmpname utmpxname
++#endif
+--- a/src/initreq.h	1692472550.000000000
++++ b/src/initreq.h	1696701467.637230517
+@@ -26,7 +26,7 @@
+ #include <sys/param.h>
+ 
+ #ifndef INIT_FIFO
+-#define INIT_FIFO  "/run/initctl"
++#define INIT_FIFO  "/var/run/initctl"
+ #endif
+ 
+ #define INIT_MAGIC 0x03091969
+--- a/src/killall5.c	1692472550.000000000
++++ b/src/killall5.c	1696693481.902076100
+@@ -1,3 +1,7 @@
++#ifdef __APPLE__
++#include "killall5-darwin.c"
++#else
++
+ /*
+  * killall5.c	Kill all processes except processes that have the
+  *		same session id, so that the shell that called us
+@@ -44,7 +48,9 @@
+ #include <errno.h>
+ #include <getopt.h>
+ #include <limits.h>
++#if __linux__
+ #include <mntent.h>
++#endif
+ #include <stdarg.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -1210,3 +1216,4 @@ int main(int argc, char **argv)
+ 
+ 	return retval;
+ }
++#endif
+--- a/src/last.c	1692472550.000000000
++++ b/src/last.c	1696694795.656961265
+@@ -32,7 +32,11 @@
+ #include <time.h>
+ #include <stdio.h>
+ #include <ctype.h>
++#if __APPLE__
++#include <utmpx.h>
++#else
+ #include <utmp.h>
++#endif
+ #include <errno.h>
+ #include <stdlib.h>
+ #include <unistd.h>
+@@ -43,6 +47,7 @@
+ #include <netdb.h>
+ #include <arpa/inet.h>
+ #include "oldutmp.h"
++#include "init.h"
+ 
+ #ifndef SHUTDOWN_TIME
+ #  define SHUTDOWN_TIME 254
+@@ -60,7 +65,7 @@ char *Version = "@(#) last 2.85 31-Apr-2
+ 
+ /* Double linked list of struct utmp's */
+ struct utmplist {
+-  struct utmp ut;
++  struct utmpx ut;
+   struct utmplist *next;
+   struct utmplist *prev;
+ };
+@@ -99,9 +104,9 @@ char *domainname;	/* Our domainname. */
+ /*
+  *	Convert old utmp format to new.
+  */
+-void uconv(struct oldutmp *oldut, struct utmp *utn)
++void uconv(struct oldutmp *oldut, struct utmpx *utn)
+ {
+-	memset(utn, 0, sizeof(struct utmp));
++	memset(utn, 0, sizeof(struct utmpx));
+ 	utn->ut_type = oldut->ut_type;
+ 	utn->ut_pid  = oldut->ut_pid;
+ 	utn->ut_time = oldut->ut_oldtime;
+@@ -116,7 +121,7 @@ void uconv(struct oldutmp *oldut, struct
+  *	Read one utmp entry, return in new format.
+  *	Automatically reposition file pointer.
+  */
+-int uread(FILE *fp, struct utmp *u, int *quit)
++int uread(FILE *fp, struct utmpx *u, int *quit)
+ {
+ 	static int utsize;
+ 	static char buf[UCHUNKSIZE];
+@@ -135,7 +140,7 @@ int uread(FILE *fp, struct utmp *u, int
+ 			r = fread(&uto, sizeof(uto), 1, fp);
+ 			uconv(&uto, u);
+ 		} else
+-			r = fread(u, sizeof(struct utmp), 1, fp);
++			r = fread(u, sizeof(struct utmpx), 1, fp);
+ 		return r;
+ 	}
+ 
+@@ -143,7 +148,7 @@ int uread(FILE *fp, struct utmp *u, int
+ 		/*
+ 		 *	Initialize and position.
+ 		 */
+-		utsize = oldfmt ? sizeof(uto) : sizeof(struct utmp);
++		utsize = oldfmt ? sizeof(uto) : sizeof(struct utmpx);
+ 		fseeko(fp, 0, SEEK_END);
+ 		fpos = ftello(fp);
+ 		if (fpos == 0)
+@@ -170,7 +175,7 @@ int uread(FILE *fp, struct utmp *u, int
+ 		if (oldfmt)
+ 			uconv((struct oldutmp *)(buf + bpos), u);
+ 		else
+-			memcpy(u, buf + bpos, sizeof(struct utmp));
++			memcpy(u, buf + bpos, sizeof(struct utmpx));
+ 		return 1;
+ 	}
+ 
+@@ -209,7 +214,7 @@ int uread(FILE *fp, struct utmp *u, int
+ 	if (oldfmt)
+ 		uconv((struct oldutmp *)tmp, u);
+ 	else
+-		memcpy(u, tmp, sizeof(struct utmp));
++		memcpy(u, tmp, sizeof(struct utmpx));
+ 
+ 	return 1;
+ }
+@@ -220,21 +225,21 @@ int uread(FILE *fp, struct utmp *u, int
+  *	Read one utmp entry, return in new format.
+  *	Automatically reposition file pointer.
+  */
+-int uread(FILE *fp, struct utmp *u, int *quit)
++int uread(FILE *fp, struct utmpx *u, int *quit)
+ {
+ 	struct oldutmp uto;
+ 	off_t r;
+ 
+ 	if (u == NULL) {
+-		r = oldfmt ? sizeof(struct oldutmp) : sizeof(struct utmp);
++		r = oldfmt ? sizeof(struct oldutmp) : sizeof(struct utmpx);
+ 		fseek(fp, -1 * r, SEEK_END);
+ 		return 1;
+ 	}
+ 
+ 	if (!oldfmt) {
+-		r = fread(u, sizeof(struct utmp), 1, fp);
++		r = fread(u, sizeof(struct utmpx), 1, fp);
+ 		if (r == 1) {
+-			if (fseeko(fp, -2 * sizeof(struct utmp), SEEK_CUR) < 0)
++			if (fseeko(fp, -2 * sizeof(struct utmpx), SEEK_CUR) < 0)
+ 				if (quit) *quit = 1;
+ 		}
+ 		return r;
+@@ -361,7 +366,7 @@ int dns_lookup(char *result, int size, i
+ /*
+  *	Show one line of information on screen
+  */
+-int list(struct utmp *p, time_t t, int what)
++int list(struct utmpx *p, time_t t, int what)
+ {
+ 	time_t		secs, tmp;
+ 	char		logintime[32];
+@@ -620,8 +625,8 @@ int main(int argc, char **argv)
+ {
+   FILE *fp;		/* Filepointer of wtmp file */
+ 
+-  struct utmp ut;	/* Current utmp entry */
+-  struct utmp oldut;	/* Old utmp entry to check for duplicates */
++  struct utmpx ut;	/* Current utmp entry */
++  struct utmpx oldut;	/* Old utmp entry to check for duplicates */
+   struct utmplist *p;	/* Pointer into utmplist */
+   struct utmplist *next;/* Pointer into utmplist */
+ 
+@@ -795,8 +800,8 @@ int main(int argc, char **argv)
+ 	if (until && until < ut.ut_time)
+ 		continue;
+ 
+-	if (memcmp(&ut, &oldut, sizeof(struct utmp)) == 0) continue;
+-	memcpy(&oldut, &ut, sizeof(struct utmp));
++	if (memcmp(&ut, &oldut, sizeof(struct utmpx)) == 0) continue;
++	memcpy(&oldut, &ut, sizeof(struct utmpx));
+ 	lastdate = ut.ut_time;
+ 
+   	if (lastb) {
+@@ -936,7 +941,7 @@ int main(int argc, char **argv)
+ 					progname);
+ 				exit(1);
+ 			}
+-			memcpy(&p->ut, &ut, sizeof(struct utmp));
++			memcpy(&p->ut, &ut, sizeof(struct utmpx));
+ 			p->next  = utmplist;
+ 			p->prev  = NULL;
+ 			if (utmplist) utmplist->prev = p;
+--- a/src/paths.h	1692472550.000000000
++++ b/src/paths.h	1696587951.488485845
+@@ -29,7 +29,7 @@
+ #define INITTAB		"/etc/inittab"		/* Location of inittab */
+ #define INITTABD	"/etc/inittab.d"	/* Location of inittab.d directory */
+ #define INIT		"/sbin/init"		/* Location of init itself. */
+-#define NOLOGIN		"/etc/nologin"		/* Stop user logging in. */
++#define NOLOGIN		"/var/run/nologin"		/* Stop user logging in. */
+ #define FASTBOOT	"/fastboot"		/* Enable fast boot. */
+ #define FORCEFSCK	"/forcefsck"		/* Force fsck on boot */
+ #define SDPID		"/var/run/shutdown.pid"	/* PID of shutdown program */
+--- a/src/runlevel.c	1692472550.000000000
++++ b/src/runlevel.c	1696592614.250281185
+@@ -22,16 +22,21 @@
+  */
+ 
+ #include <stdio.h>
++#if __APPLE__
++#include <utmpx.h>
++#else
+ #include <utmp.h>
++#endif
+ #include <time.h>
+ #include <stdlib.h>
+ #include "runlevellog.h"
++#include "init.h"
+ 
+ int main(argc, argv)
+ int argc;
+ char **argv;
+ {
+-  struct utmp *ut;
++  struct utmpx *ut;
+   char prev;
+   int status, runlevel;
+ 
+--- a/src/shutdown.c	1692472550.000000000
++++ b/src/shutdown.c	1696591962.507868226
+@@ -54,7 +54,7 @@
+ #include <signal.h>
+ #include <fcntl.h>
+ #include <stdarg.h>
+-#ifdef __FreeBSD__
++#if defined(__FreeBSD__) || defined(__APPLE__)
+ #include <utmpx.h>
+ #else
+ #include <utmp.h>
+@@ -65,7 +65,7 @@
+ #include "initreq.h"
+ #include "init.h"
+ 
+-#ifdef __FreeBSD__
++#if defined(__FreeBSD__) || defined(__APPLE__)
+ extern char **environ;
+ #endif
+ 
+@@ -253,7 +253,7 @@ void issue_warn(int mins)
+ }
+ 
+ /*
+- *	Create the /etc/nologin file.
++ *	Create the /var/run/nologin file.
+  */
+ void donologin(int min)
+ {
+@@ -514,7 +514,7 @@ int main(int argc, char **argv)
+ 	struct sigaction	sa;
+ 	struct tm		*lt;
+ 	struct stat		st;
+-	struct utmp		*ut;
++	struct utmpx		*ut;
+ 	time_t			t, target_time;
+ 	char			*halttype;
+ 	char			*downusers[32];
+--- a/src/sulogin.c	1692472550.000000000
++++ b/src/sulogin.c	1696587952.054507964
+@@ -145,7 +145,7 @@ void tcinit(struct console *con)
+ 		cfsetispeed(tio, ispeed);
+ 		cfsetospeed(tio, ospeed);
+ 
+-#ifndef __GNU__
++#if !defined(__GNU__) && !defined(__FreeBSD_kernel__)
+ 		tio->c_line         = 0;
+ #endif
+ 		tio->c_cc[VTIME]    = 0;
+--- a/src/utmp.c	1692472550.000000000
++++ b/src/utmp.c	1696591552.979391997
+@@ -32,7 +32,7 @@
+ #include <time.h>
+ #include <fcntl.h>
+ #include <string.h>
+-#ifdef __FreeBSD__
++#if defined(__FreeBSD__) || defined(__APPLE__)
+ #include <utmpx.h>
+ #else
+ #include <utmp.h>
+@@ -65,7 +65,7 @@ int type,			/* TYPE of entry */
+ char *line)			/* Which line is this */
+ {
+ 	int fd;
+-	struct utmp utmp;
++	struct utmpx utmp;
+ 	struct utsname uname_buf;
+ 	struct timeval tv;
+ 	
+@@ -156,9 +156,9 @@ int type,			/* TYPE of entry */
+ char *line,			/* LINE if used. */
+ char *oldline)			/* Line of old utmp entry. */
+ {
+-	struct utmp utmp;
+-	struct utmp tmp;
+-	struct utmp *utmptr;
++	struct utmpx utmp;
++	struct utmpx tmp;
++	struct utmpx *utmptr;
+ 	struct timeval tv;
+ 
+ 	/*
+--- a/src/killall5-darwin.c	1696704222.315966000
++++ b/src/killall5-darwin.c	1696694139.529447783
+@@ -0,0 +1,976 @@
++#include <dirent.h>
++#include <errno.h>
++#include <getopt.h>
++#include <limits.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <signal.h>
++#include <string.h>
++#include <syslog.h>
++#include <sys/mman.h>
++#include <sys/param.h>
++#include <sys/stat.h>
++#include <sys/sysctl.h>
++#include <sys/types.h>
++#include <sys/wait.h>
++#include <unistd.h>
++#include <sys/proc.h>
++#include <libproc.h>
++#include <mach/mach.h>
++#include <mach/mach_init.h>
++#if DEBUG
++#define kill fakekill
++
++static char**
++getproclline(pid_t pid, char **command_name, int *argvlen, int *argv0len, int *envlen, int eflg);
++
++int fakekill(pid_t pid, int sig)
++{
++	int a,b,c;
++	char *cmd = "", **env;
++	if (pid > 0)
++		env = getproclline(pid, &cmd, &a, &b, &c, 0);
++	printf("%d %s %d\n", pid, cmd, sig);
++	return 0;
++}
++#endif
++
++#define STATNAMELEN	15
++
++/* Info about a process. */
++typedef struct proc {
++	char *pathname;
++	char *argv0;
++	char *argv0base;
++	char *argv1;
++	char *argv1base;
++	char *statname;
++	pid_t pid;
++	pid_t sid;
++	char kernel;
++//	char nfs;
++	struct proc *next;
++} PROC;
++
++/* pid queue */
++
++typedef struct pidq {
++	PROC		*proc;
++	struct pidq	*next;
++} PIDQ;
++
++typedef struct {
++	PIDQ		*head;
++	PIDQ		*tail;
++	PIDQ		*next;
++} PIDQ_HEAD;
++
++typedef struct _s_omit {
++	struct _s_omit *next;
++	struct _s_omit *prev;
++	pid_t pid;
++} OMIT;
++
++/* List of processes. */
++PROC *plist = NULL;
++
++/* List of processes to omit. */
++OMIT *omit = NULL;
++
++/* Did we stop all processes ? */
++int sent_sigstop = 0;
++int scripts_too = 0;
++
++int list_dz_processes = FALSE;
++
++char *progname; /* the name of the running program */
++void nsyslog(int pri, char *fmt, ...);
++
++#if !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 199901L)
++# ifndef  inline
++#  define inline	__inline__
++# endif
++# ifndef  restrict
++#  define restrict	__restrict__
++# endif
++#endif
++#define alignof(type)	((sizeof(type)+(sizeof(void*)-1)) & ~(sizeof(void*)-1))
++
++static char getstate(struct extern_proc kp_proc)
++{
++	int flag;
++	/*
++	task_port_t task;
++	char thread_state;
++	thread_port_array_t thread_list;
++	unsigned int thread_count;
++	int info_count;
++	*/
++
++	char retval = '?';
++
++	flag = kp_proc.p_flag;
++
++	switch (kp_proc.p_stat) {
++	case SSTOP:
++		retval = 'D';
++		break;
++	case SZOMB:
++		retval = 'Z';
++		break;
++/*	default:
++		if (_task_for_pid(kp_proc.p_pid, &task) != KERN_SUCCESS) {
++			retval = '?';
++			break;
++		}
++		if (task_threads(task, &thread_list, &thread_count) == KERN_SUCCESS) {
++			for (unsigned int j = 0; j < thread_count; j++) {
++				struct thread_basic_info tbi;
++				info_count = THREAD_BASIC_INFO_COUNT;
++				thread_info(thread_list[j], THREAD_BASIC_INFO, (thread_info_t)&tbi, &info_count);
++				switch (tbi.run_state) {
++					case TH_STATE_RUNNING: 		thread_state = 'R'; break;
++					case TH_STATE_UNINTERRUPTIBLE: 	thread_state = 'U'; break;
++					case TH_STATE_WAITING:		thread_state = tbi.sleep_time <= 20 ? 'S': 'I'; break;
++					case TH_STATE_STOPPED:		thread_state = 'T'; break;
++					case TH_STATE_HALTED:		thread_state = 'H'; break;
++					default:			thread_state = '?';
++				}
++				if (retval > thread_state)
++					retval = thread_state;
++				mach_port_deallocate(mach_task_self(), thread_list[j]);
++			}
++			vm_deallocate(mach_task_self(), (vm_address_t)thread_list, sizeof(*thread_list) * thread_count);
++		}
++		mach_port_deallocate(mach_task_self(), task);
++*/	}
++
++	return retval;
++}
++
++/*
++ *	Malloc space, barf if out of memory.
++ */
++static void *xmalloc(size_t bytes)
++{
++	void *p;
++
++	if ((p = malloc(bytes)) == NULL) {
++		if (sent_sigstop) kill(-1, SIGCONT);
++		nsyslog(LOG_ERR, "out of memory");
++		exit(1);
++	}
++	return p;
++}
++
++static inline void xmemalign(void **memptr, size_t alignment, size_t size)
++{
++	if ((posix_memalign(memptr, alignment, size)) < 0) {
++		if (sent_sigstop) kill(-1, SIGCONT);
++		nsyslog(LOG_ERR, "out of memory");
++		exit(1);
++	}
++}
++
++PIDQ_HEAD *init_pid_q(PIDQ_HEAD *q)
++{
++	q->head =  q->next = q->tail = NULL;
++	return q;
++}
++
++int empty_q(PIDQ_HEAD *q)
++{
++	return (q->head == NULL);
++}
++
++int add_pid_to_q(PIDQ_HEAD *q, PROC *p)
++{
++	PIDQ *tmp;
++
++	tmp = (PIDQ *)xmalloc(sizeof(PIDQ));
++
++	tmp->proc = p;
++	tmp->next = NULL;
++
++	if (empty_q(q)) {
++		q->head = tmp;
++		q->tail  = tmp;
++	} else {
++		q->tail->next = tmp;
++		q->tail = tmp;
++	}
++	return 0;
++}
++
++PROC *get_next_from_pid_q(PIDQ_HEAD *q)
++{
++	PROC		*p;
++	PIDQ		*tmp = q->head;
++
++	if (!empty_q(q)) {
++		p = q->head->proc;
++		q->head = tmp->next;
++		free(tmp);
++		return p;
++	}
++
++	return NULL;
++}
++
++/* Try to get the process ID of a given process. */
++PIDQ_HEAD *pidof(char *prog)
++{
++	PROC		*p;
++	PIDQ_HEAD	*q;
++	char		*s;
++	int		dostat = 0;
++	int		foundone = 0;
++	int		ok = 0;
++	const int	root = (getuid() == 0);
++	char		real_path[PATH_MAX+1];
++
++	if (! prog)
++		return NULL;
++
++	/* Try to stat the executable. */
++	memset(real_path, 0, sizeof(real_path));
++	if ( (prog[0] == '/') && ( realpath(prog, real_path) ) ) {
++		dostat++;
++	}
++
++	/* Get basename of program. */
++	if ((s = strrchr(prog, '/')) == NULL)
++		s = prog;
++	else
++		s++;
++
++	if (! *s)
++		return NULL;
++
++	q = (PIDQ_HEAD *)xmalloc(sizeof(PIDQ_HEAD));
++	q = init_pid_q(q);
++
++	/* First try to find a match based on dev/ino pair. */
++	if (dostat) {
++		for (p = plist; p; p = p->next) {
++			if (p->pathname && strcmp(real_path, p->pathname) == 0) {
++				add_pid_to_q(q, p);
++				foundone++;
++			}
++			else if ( (p->argv0) && (! strcmp(p->argv0, prog) ) )
++			{
++				add_pid_to_q(q, p);
++				foundone++;
++			}
++		}
++	}
++
++	/* If we didn't find a match based on dev/ino, try the name. */
++	if (!foundone) for (p = plist; p; p = p->next) {
++		if (prog[0] == '/') {
++			if (!p->pathname) {
++				if (root)
++					continue;
++				goto fallback;
++			}
++			if (strcmp(prog, p->pathname)) {
++				int len = strlen(prog);
++				if (strncmp(prog, p->pathname, len))
++				{
++					if (scripts_too)
++						goto fallback;
++					continue;
++				}
++				if (strcmp(" (deleted)", p->pathname + len))
++				{
++					if (scripts_too)
++						goto fallback;
++					continue;
++				}
++			}
++			add_pid_to_q(q, p);
++			continue;
++		}
++
++	fallback:
++		ok = 0;
++
++		/*		matching	nonmatching
++		 * proc name	proc name	proc name
++		 * ---		-----------	------------
++		 *   b		b, p/b, q/b
++		 * p/b		b, p/b		q/b
++		 *
++		 * Algorithm: Match if:
++		 *    cmd = arg
++		 * or cmd = base(arg)
++		 * or base(cmd) = arg
++		 *
++		 * Specifically, do not match just because base(cmd) = base(arg)
++		 * as was done in earlier versions of this program, since this
++		 * allows /aaa/foo to match /bbb/foo .
++		 */
++
++		ok |=
++			(p->argv0 && strcmp(p->argv0, prog) == 0)
++			|| (p->argv0 && s != prog && strcmp(p->argv0, s) == 0)
++			|| (p->argv0base && strcmp(p->argv0base, prog) == 0);
++
++		/* For scripts, compare argv[1] as well. */
++		if (
++			scripts_too && p->statname && p->argv1base
++			&& !strncmp(p->statname, p->argv1base, STATNAMELEN)
++		) {
++			ok |=
++				(p->argv1 && strcmp(p->argv1, prog) == 0)
++				|| (p->argv1 && s != prog && strcmp(p->argv1, s) == 0)
++				|| (p->argv1base && strcmp(p->argv1base, prog) == 0);
++		}
++
++		/*
++		 *	if we have a space in argv0, process probably
++		 *	used setproctitle so try statname.
++		 */
++		if (strlen(s) <= STATNAMELEN &&
++			(p->argv0 == NULL ||
++			 p->argv0[0] == 0 ||
++			 strchr(p->argv0, ' '))) {
++			ok |= (strcmp(p->statname, s) == 0);
++		}
++
++		/*
++		 *	if we have a `-' as the first character, process
++		 *	probably used as a login shell
++		 */
++		if (strlen(s) <= STATNAMELEN &&
++			p->argv1 == NULL &&
++			(p->argv0 != NULL &&
++			 p->argv0[0] == '-')) {
++			ok |= (strcmp(p->statname, s) == 0);
++		}
++
++		if (ok) add_pid_to_q(q, p);
++	}
++
++	return q;
++}
++
++/* Give usage message and exit. */
++void usage(void)
++{
++	nsyslog(LOG_ERR, "usage: killall5 -signum [-o omitpid] [-o omitpid] ...");
++	closelog();
++	exit(1);
++}
++
++void pidof_usage(void)
++{
++	printf("pidof usage: [options] <program-name>\n\n");
++	printf(" -c           Return PIDs with the same root directory\n");
++	printf(" -d <sep>     Use the provided character as output separator\n");
++	printf(" -h           Display this help text\n");
++	printf(" -n           Avoid using stat system function on network shares\n");
++	printf(" -o <pid>     Omit results with a given PID\n");
++	printf(" -q           Quiet mode. Do not display output\n");
++	printf(" -s           Only return one PID\n");
++	printf(" -x           Return PIDs of shells running scripts with a matching name\n");
++	printf(" -z           List zombie and I/O waiting processes. May cause pidof to hang.\n");
++	printf("\n");
++}
++
++/* write to syslog file if not open terminal */
++void nsyslog(int pri, char *fmt, ...)
++{
++	va_list args;
++
++	va_start(args, fmt);
++
++	if (ttyname(0) == NULL) {
++		vsyslog(pri, fmt, args);
++	} else {
++		fprintf(stderr, "%s: ", progname);
++		vfprintf(stderr, fmt, args);
++		fprintf(stderr, "\n");
++	}
++
++	va_end(args);
++}
++
++// Torrekie: Shamelessly stolen from adv_cmds/ps
++static char **
++getproclline(pid_t pid, char **command_name, int *argvlen, int *argv0len, int *envlen, int eflg)
++{
++  int mib[3], argmax, nargs, c = 0;
++  size_t size;
++  char *procargs, *sp, *np, *cp;
++  int show_args = 1;
++
++  int env_list_size, env_list_len;
++
++  /* Get the maximum process arguments size. */
++  mib[0] = CTL_KERN;
++  mib[1] = KERN_ARGMAX;
++
++  size = sizeof(argmax);
++  if (sysctl(mib, 2, &argmax, &size, NULL, 0) == -1) {
++    goto ERROR_A;
++  }
++
++  /* Allocate space for the arguments. */
++  procargs = (char *)malloc(argmax);
++  if (procargs == NULL) {
++    goto ERROR_A;
++  }
++
++  mib[0] = CTL_KERN;
++  mib[1] = KERN_PROCARGS2;
++  mib[2] = pid;
++
++  size = (size_t)argmax;
++  if (sysctl(mib, 3, procargs, &size, NULL, 0) == -1) {
++    goto ERROR_B;
++  }
++
++  memcpy(&nargs, procargs, sizeof(nargs));
++  cp = procargs + sizeof(nargs);
++
++  /* Skip the saved exec_path. */
++  for (; cp < &procargs[size]; cp++) {
++    if (*cp == '\0') {
++      /* End of exec_path reached. */
++      break;
++    }
++  }
++  if (cp == &procargs[size]) {
++    goto ERROR_B;
++  }
++
++  /* Skip trailing '\0' characters. */
++  for (; cp < &procargs[size]; cp++) {
++    if (*cp != '\0') {
++      /* Beginning of first argument reached. */
++      break;
++    }
++  }
++  if (cp == &procargs[size]) {
++    goto ERROR_B;
++  }
++  /* Save where the argv[0] string starts. */
++  sp = cp;
++
++  /*
++   * Iterate through the '\0'-terminated strings and convert '\0' to ' '
++   * until a string is found that has a '=' character in it (or there are
++   * no more strings in procargs).  There is no way to deterministically
++   * know where the command arguments end and the environment strings
++   * start, which is why the '=' character is searched for as a heuristic.
++   */
++  for (np = NULL; c < nargs && cp < &procargs[size]; cp++) {
++    if (*cp == '\0') {
++      c++;
++      if (np != NULL) {
++          /* Convert previous '\0'. */
++          *np = ' ';
++      } else {
++          *argv0len = cp - sp;
++      }
++      /* Note location of current '\0'. */
++      np = cp;
++
++      if (!show_args) {
++          /*
++           * Don't convert '\0' characters to ' '.
++           * However, we needed to know that the
++           * command name was terminated, which we
++           * now know.
++           */
++          break;
++      }
++    }
++  }
++
++  /*
++   * If eflg is non-zero, continue converting '\0' characters to ' '
++   * characters until no more strings that look like environment settings
++   * follow.
++   */
++
++  env_list_len = 0;
++  env_list_size = 1;
++  char **env_list = malloc(env_list_size * sizeof(char *));
++  if (!env_list)
++     goto ERROR_B;
++  if ( show_args && (eflg != 0) ) {
++    for (; cp < &procargs[size]; cp++) {
++      if (*cp == '\0') {
++        if (np != NULL) {
++          if (&np[1] == cp) {
++            /*
++             * Two '\0' characters in a row.
++             * This should normally only
++             * happen after all the strings
++             * have been seen, but in any
++             * case, stop parsing.
++             */
++            break;
++          }
++
++          if (env_list_len >= env_list_size) {
++            env_list_size = env_list_size * 2;
++            char **tmp_alloc = (char **)realloc(env_list, env_list_size * sizeof(char *));
++            if (!tmp_alloc)
++              goto ERROR_B;
++            env_list = tmp_alloc;
++          }
++          env_list[env_list_len] = strdup(&np[1]);
++          env_list_len++;
++        }
++        /* Note location of current '\0'. */
++        np = cp;
++      }
++    }
++  }
++
++  /*
++   * sp points to the beginning of the arguments/environment string, and
++   * np should point to the '\0' terminator for the string.
++   */
++  if (np == NULL || np == sp) {
++    /* Empty or unterminated string. */
++    goto ERROR_B;
++  }
++
++  /* Make a copy of the string. */
++  *argvlen = asprintf(command_name, "%s", sp);
++
++  /* Clean up. */
++  free(procargs);
++        *envlen = env_list_len;
++  return env_list;
++
++  ERROR_B:
++  free(procargs);
++  int j;
++  for (j = 0; env_list[j] != NULL; j++) {
++    free(env_list[j]);
++  }
++  free(env_list);
++  ERROR_A:
++  return NULL;
++}
++
++/*
++ *	Read processes.
++ */
++int readproc()
++{
++	PROC		*p, *n;
++	char		path[PATH_MAX+1];
++	char		*buf;
++	char		*s, **env;
++	int		pid, argvlen, argv0len, envlen;
++	char		process_status;
++
++	/* Free the already existing process list. */
++	n = plist;
++	for (p = plist; n; p = n) {
++		n = p->next;
++		if (p->argv0) free(p->argv0);
++		if (p->argv1) free(p->argv1);
++		if (p->statname) free(p->statname);
++		if (p->pathname) free(p->pathname);
++		free(p);
++	}
++	plist = NULL;
++
++	int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
++
++	size_t all_proc_size;
++	/* size of returned struct has to be obtained first */
++	if (sysctl(mib, 4, NULL, &all_proc_size, NULL, 0) == -1) {
++		nsyslog(LOG_ERR, "cannot retrieve kern.proc_all\n");
++		return -1;
++	}
++
++	struct kinfo_proc *processes = malloc(all_proc_size);
++	if (processes == NULL) {
++		nsyslog(LOG_ERR, "malloc failed\n");
++		return -1;
++	}
++	/* Now we get the full process list */
++	if (sysctl(mib, 4, processes, &all_proc_size, NULL, 0) == -1) {
++		nsyslog(LOG_ERR, "cannot retrieve kern.proc_all\n");
++		return -1;
++	}
++
++	char *token = NULL;
++	int count = 0;
++	/* Walk through the kinfo_proc. */
++	for (int j = 0; j < all_proc_size / sizeof(struct kinfo_proc); j++) {
++
++		/* Get PID */
++		pid = processes[j].kp_proc.p_pid;
++
++		if (pid == -1)
++			continue;
++
++		/* Get a PROC struct . */
++		p = (PROC *)xmalloc(sizeof(PROC));
++		memset(p, 0, sizeof(PROC));
++
++		/* Read statname (not exactly same but alternative). */
++		s = processes[j].kp_proc.p_comm;
++		p->statname = (char *)xmalloc(strlen(s) + 1);
++		strcpy(p->statname, s);
++
++		/* Get process status */
++		process_status = getstate(processes[j].kp_proc);
++
++		/* Kernel task and launchd should mark as kernel */
++		if (pid == 0 || pid == 1)
++			p->kernel = 1;
++
++		/* Now read argv[0] */
++		if ( (! list_dz_processes) &&
++			(process_status == 'Z') ) {
++			/* Ignore zombie processes */
++			if (p->argv0) free(p->argv0);
++			if (p->argv1) free(p->argv1);
++			if (p->statname) free(p->statname);
++			free(p);
++			continue;
++		}
++
++		/* While Linux using statname as argv0 here, we cannot do that,
++		 * since on Darwin there could have some differences between
++		 * kp_proc.p_comm and kern.procargs2[0]
++		 */
++		// strcpy(p->argv0, p->statname);
++		if (pid != 0)
++			env = getproclline(pid, &buf, &argvlen, &argv0len, &envlen, 0);
++
++		if (buf != NULL) {
++			/* Store the name into malloced memory. */
++			p->argv0 = (char *)xmalloc(argv0len + 1);
++
++			strlcpy(p->argv0, buf, argv0len + 1);
++
++			/* Get a pointer to the basename. */
++			p->argv0base = strrchr(p->argv0, '/');
++			if (p->argv0base != NULL)
++				p->argv0base++;
++			else
++				p->argv0base = p->argv0;
++
++			/* For later argv[1] */
++			token = strtok(buf, " ");
++		}
++
++		/* And read argv[1] */
++		while (token != NULL) {
++			if (count == 1) {
++				/* Store the name into malloced memory. */
++				p->argv1 = (char *)xmalloc(strlen(token) + 1);
++				strcpy(p->argv1, token);
++
++				/* Get a pointer to the basename. */
++				p->argv1base = strrchr(p->argv1, '/');
++				if (p->argv1base != NULL)
++					p->argv1base++;
++				else
++					p->argv1base = p->argv1;
++				break;
++			}
++			token = strtok(NULL, " ");
++			count++;
++		}
++		free(env);
++
++		/* Try to stat the executable (Not actual stat on Darwin tho). */
++		if (proc_pidpath(pid, path, sizeof(path)) > 0) {
++			p->pathname = (char *)xmalloc(PATH_MAX);
++			memset(p->pathname, 0, PATH_MAX);
++			if (readlink(path, p->pathname, PATH_MAX) == -1) {
++				p->pathname = NULL;
++			}
++		}
++
++		/* Read SID. */
++		p->sid = getsid(pid);
++		if (!p->sid) {
++			/* Process disappeared.. */
++			if (p->argv0) free(p->argv0);
++			if (p->argv1) free(p->argv1);
++			if (p->statname) free(p->statname);
++			if (p->pathname) free(p->pathname);
++			free(p);
++			continue;
++		}
++
++		/* Link it into the list. */
++		p->next = plist;
++		plist = p;
++		p->pid = pid;
++	}
++
++	/* Done */
++	return 0;
++}
++
++#define PIDOF_SINGLE	0x01
++#define PIDOF_OMIT	0x02
++#define PIDOF_NETFS	0x04
++#define PIDOF_QUIET	0x08
++
++/*
++ *	Pidof functionality.
++ */
++int main_pidof(int argc, char **argv)
++{
++	PIDQ_HEAD	*q;
++	PROC		*p;
++	char		*token, *here;
++	int		f;
++	int		first = 1;
++	int		opt, flags = 0;
++	char		sep = ' ';
++
++	omit = (OMIT*)0;
++	opterr = 0;
++
++	while ((opt = getopt(argc,argv,"qhco:d:sxzn")) != -1) switch (opt) {
++		case '?':
++			nsyslog(LOG_ERR,"invalid options on command line!\n");
++			closelog();
++			exit(1);
++		case 'c':
++			/* No idea to check chroot of PID on Darwin */
++			// if (geteuid() == 0) chroot_check = 1;
++			break;
++		case 'h':
++			pidof_usage();
++			exit(0);
++		case 'd':
++			sep = optarg[0];
++			break;
++		case 'o':
++			here = optarg;
++			while ((token = strsep(&here, ",;:"))) {
++				OMIT *restrict optr;
++				pid_t opid;
++
++				if (strcmp("%PPID", token) == 0)
++					opid = getppid();
++				else
++					opid = (pid_t)atoi(token);
++
++				if (opid < 1) {
++					nsyslog(LOG_ERR,
++						"illegal omit pid value "
++						"(%s)!\n", token);
++					continue;
++				}
++				xmemalign((void*)&optr, sizeof(void*), alignof(OMIT));
++				optr->next = omit;
++				optr->prev = (OMIT*)0;
++				optr->pid  = opid;
++				omit = optr;
++			}
++			flags |= PIDOF_OMIT;
++			break;
++		case 'q':
++			flags |= PIDOF_QUIET;
++			break;
++		case 's':
++			flags |= PIDOF_SINGLE;
++			break;
++		case 'x':
++			scripts_too++;
++			break;
++		case 'z':
++			list_dz_processes = TRUE;
++			break;
++		case 'n':
++			/* Not doing NFS currently */
++			// flags |= PIDOF_NETFS;
++			break;
++		default:
++			/* Nothing */
++			break;
++	}
++	argc -= optind;
++	argv += optind;
++
++	/* Print out process-ID's one by one. */
++	readproc();
++
++	for(f = 0; f < argc; f++) {
++		if ((q = pidof(argv[f])) != NULL) {
++			pid_t spid = 0;
++			while ((p = get_next_from_pid_q(q))) {
++				if ((flags & PIDOF_OMIT) && omit) {
++					OMIT * optr;
++					for (optr = omit; optr; optr = optr->next) {
++						if (optr->pid == p->pid)
++							break;
++					}
++
++					/*
++					 *	On a match, continue with
++					 *	the for loop above.
++					 */
++					if (optr)
++						continue;
++				}
++				if (flags & PIDOF_SINGLE) {
++					if (spid)
++						continue;
++					else
++						spid = 1;
++				}
++				if ( ~flags & PIDOF_QUIET ) {
++					if (! first)
++						printf("%c", sep);
++					printf("%d", p->pid);
++				}
++				first = 0;
++			}
++		}
++	}
++	if (!first)
++	{
++		if ( ~flags & PIDOF_QUIET )
++			printf("\n");
++	}
++
++	closelog();
++	return(first ? 1 : 0);
++}
++
++/* Main for either killall or pidof. */
++int main(int argc, char **argv)
++{
++	PROC		*p;
++	int		pid, sid = -1;
++	int		sig = SIGKILL;
++	int		c;
++
++	/* return non-zero if no process was killed */
++	int		retval = 2;
++
++	/* Get program name. */
++	if ((progname = strrchr(argv[0], '/')) == NULL)
++		progname = argv[0];
++	else
++		progname++;
++
++	/* Now connect to syslog. */
++	openlog(progname, LOG_CONS|LOG_PID, LOG_DAEMON);
++
++	/* Were we called as 'pidof' ? */
++	if (strcmp(progname, "pidof") == 0)
++		return main_pidof(argc, argv);
++
++	/* Right, so we are "killall". */
++	omit = (OMIT*)0;
++
++	if (argc > 1) {
++		for (c = 1; c < argc; c++) {
++			if (argv[c][0] == '-') (argv[c])++;
++			if (argv[c][0] == 'o') {
++				char * token, * here;
++
++				if (++c >= argc)
++					usage();
++
++				here = argv[c];
++				while ((token = strsep(&here, ",;:"))) {
++					OMIT *restrict optr;
++					pid_t opid = (pid_t)atoi(token);
++
++					if (opid < 1) {
++						nsyslog(LOG_ERR,
++							"illegal omit pid value "
++							"(%s)!\n", token);
++						continue;
++					}
++					xmemalign((void*)&optr, sizeof(void*), alignof(OMIT));
++					optr->next = omit;
++					optr->prev = (OMIT*)0;
++					optr->pid  = opid;
++					omit = optr;
++				}
++			}
++			else if ((sig = atoi(argv[1])) <= 0 || sig > 31)
++				usage();
++		}
++	}
++
++	/* procfs system in here, by design, they call a function to mount /proc */
++	// mount_proc();
++
++	/*
++	 *	Ignoring SIGKILL and SIGSTOP do not make sense, but
++	 *	someday kill(-1, sig) might kill ourself if we don't
++	 *	do this. This certainly is a valid concern for SIGTERM-
++	 *	Linux 2.1 might send the calling process the signal too.
++	 */
++	signal(SIGTERM, SIG_IGN);
++	signal(SIGSTOP, SIG_IGN);
++	signal(SIGKILL, SIG_IGN);
++
++	/* lock us into memory */
++	mlockall(MCL_CURRENT | MCL_FUTURE);
++
++	/* Get our session ID and PID to make sure we do not kill ourselves or our session. */
++	sid = (int)getsid(0);
++	pid = (int)getpid();
++
++	/* Now stop all processes, unless there are some we should omit. */
++	if (! omit)
++	{
++		kill(-1, SIGSTOP);
++		sent_sigstop = 1;
++	}
++
++	/* Read sysctl kinfo_proc */
++	if (readproc() < 0) {
++		if (sent_sigstop)
++			kill(-1, SIGCONT);
++		return(1);
++	}
++
++	/* Now kill all processes except launchd (pid 1) and our session. */
++	for (p = plist; p; p = p->next) {
++		if (p->pid == 1 || p->pid == pid || p->sid == sid || p->kernel)
++			continue;
++
++		if (omit) {
++			OMIT * optr;
++			for (optr = omit; optr; optr = optr->next) {
++				if (optr->pid == p->pid)
++					break;
++			}
++
++			/* On a match, continue with the for loop above. */
++			if (optr)
++				continue;
++		}	/* end of skipping PIDs to omit */
++
++		kill(p->pid, sig);
++		retval = 0;
++	}
++
++	/* And let them continue. */
++	if (sent_sigstop)
++		kill(-1, SIGCONT);
++
++	/* Done. */
++	closelog();
++
++	/* Force the kernel to run the scheduler (Do we really need this on Darwin?) */
++	usleep(1);
++
++	return retval;
++}
