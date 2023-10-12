@@ -1,0 +1,373 @@
+--- a/debian/changelog	1693221923.000000000
++++ b/debian/changelog	1697094782.563995397
+@@ -139,7 +139,7 @@ debhelper (13.10) unstable; urgency=medi
+   * dh_installchangelogs: Trim old Debian changelog entries
+     automatically.  Distributions can disable this by using
+     `DEB_BUILD_OPTIONS=notrimdch`.
+-  * dh_installchangelogs.t: Force locale to be `C.UTF-8` to
++  * dh_installchangelogs.t: Force locale to be `C` to
+     avoid generating invalid changelog entries under
+     non-default locales.
+ 
+@@ -1977,7 +1977,7 @@ debhelper (11.1.5~alpha1) experimental;
+   * dh_installinfo: Ditto.
+   * dh_installman: Ditto.
+   * meson.pm: Apply patch from Jakub Wilk to fix typo in the name
+-    of the "C.UTF-8" locale.
++    of the "C" locale.
+   * autoscripts/postinst-systemd-restart: Apply patch from
+     Christoph Biedl to fix indentation.  (Closes: #890373)
+   * dh_testroot: With the advent of DEB_RULES_REQUIRES_ROOT, it
+@@ -2053,7 +2053,7 @@ debhelper (11.1.3) unstable; urgency=med
+   * Dh_Lib.pm: When printing commands (e.g. for doit), also show
+     changes to the environment (when done as a part of the
+     command).
+-  * ninja.pm: Set LC_ALL=C.UTF-8 when calling ninja to avoid
++  * ninja.pm: Set LC_ALL=C when calling ninja to avoid
+     meson choking on UTF-8 characters when it embeds itself into
+     e.g. the build or install.  (Closes: #873831)
+   * dh: Remove the assumption that sequences will supply only
+@@ -2097,7 +2097,7 @@ debhelper (11.1) unstable; urgency=mediu
+   * dh_missing: Make --list-missing the default in compat 12.
+     Thanks to Daniel Leidert and Christian Göttsche for the
+     suggestions.  (Closes: #650129, #858834)
+-  * meson.pm: Set LC_ALL to C.UTF-8 when invoking meson and
++  * meson.pm: Set LC_ALL to C when invoking meson and
+     debcrossgen (helper tool for cross-building).  Thanks to
+     Jeremy Bicha for the suggestion.  (Closes: #873831)
+   * dh_makeshlibs: Avoid forking a shell per line in the
+--- a/debian/rules	1693221923.000000000
++++ b/debian/rules	1697093359.346170115
+@@ -21,3 +21,5 @@ override_dh_update_autotools_config over
+ execute_before_dh_install:
+ 	PERLLIBDIR=$$($(PERL) -MConfig -e 'print $$Config{vendorlib}')/ ; \
+ 	    $(PERL) -I"debian/tmp/$${PERLLIBDIR}" debian/gen-provides > debian/debhelper.substvars
++
++override_dh_compress:
+--- a/dh_fixperms	1693221923.000000000
++++ b/dh_fixperms	1697094904.348820663
+@@ -108,7 +108,7 @@ on_pkgs_in_parallel {
+ 
+ 		# General permissions fixing.
+ 		complex_doit("find $tmp ${find_exclude_options} -print0",
+-					 "2>/dev/null | xargs -0r chown --no-dereference 0:0") if should_use_root();
++					 "2>/dev/null | xargs -0r chown 0:0") if should_use_root();
+ 		find_and_reset_perm($tmp, 'go=rX,u+rw,a-s', '! -type l');
+ 	
+ 		# Fix up permissions in usr/share/doc, setting everything to not
+--- a/dh_installchangelogs	1693221923.000000000
++++ b/dh_installchangelogs	1697094784.167795039
+@@ -167,7 +167,7 @@ sub install_debian_changelog {
+ 		return;
+ 	}
+ 
+-	local $ENV{LC_ALL} = "C.UTF-8";
++	local $ENV{LC_ALL} = "C";
+ 
+ 	my $changelog_trimmed = generated_file($package, "dh_installchangelogs.dch.trimmed");
+ 	my $changelog_binnmu = generated_file($package, "dh_installchangelogs.dch.binnmu");
+--- a/dh_installman	1693221923.000000000
++++ b/dh_installman	1697093270.929916525
+@@ -285,9 +285,9 @@ on_items_in_parallel(\@all_packages, sub
+ 
+ # Now utf-8 conversion.
+ my $has_man_recode = 0;
+-$has_man_recode = 1 if has_man_db_tool('man-recode');
++$has_man_recode = 1 if has_man_db_tool('gman-recode');
+ 
+-if ($has_man_recode || has_man_db_tool('man')) {
++if ($has_man_recode || has_man_db_tool('gman')) {
+ 	my (@manpages_to_reencode, @issues);
+ 	for my $package (@{$dh{DOPACKAGES}}) {
+ 		next if is_udeb($package);
+@@ -399,14 +399,14 @@ sub has_man_db_tool {
+ sub reencode_manpages {
+ 	my (@manpages) = @_;
+ 	if ($has_man_recode) {
+-		xargs(\@manpages, 'man-recode', '--to-code', 'UTF-8', '--suffix', '.dh-new');
++		xargs(\@manpages, 'gman-recode', '--to-code', 'UTF-8', '--suffix', '.dh-new');
+ 	}
+ 	for my $manpage (@manpages) {
+ 		my $manpage_tmp = "${manpage}.dh-new";
+ 		$manpage_tmp =~ s/\.(?:gz|Z)\.dh-new$/.dh-new/;
+ 		if (not $has_man_recode) {
+ 			my $manpage_cmd = ($manpage =~ m{^/}) ? $manpage : "./${manpage}";
+-			doit({ stdout => $manpage_tmp }, 'man', '-l', '--recode', 'UTF-8', $manpage_cmd);
++			doit({ stdout => $manpage_tmp }, 'gman', '-l', '--recode', 'UTF-8', $manpage_cmd);
+ 		}
+ 		# recode uncompresses compressed pages
+ 		my $orig = $manpage;
+--- a/dh_perl	1693221923.000000000
++++ b/dh_perl	1697094951.112915396
+@@ -171,8 +171,7 @@ foreach my $package (@{$dh{DOPACKAGES}})
+ 	# only one directory is installed into.
+ 	foreach my $dir ("$tmp/$vendorlib", "$tmp/$vendorarch") {
+ 		if (-d $dir) {
+-			doit("rmdir", "--ignore-fail-on-non-empty", "--parents",
+-				"$dir");
++			doit_noerror("rmdir", "$dir");
+ 		}
+ 	}
+ }
+--- a/lib/Debian/Debhelper/Buildsystem/ant.pm	1693221923.000000000
++++ b/lib/Debian/Debhelper/Buildsystem/ant.pm	1697094154.450438407
+@@ -34,7 +34,7 @@ sub build {
+ 	}
+ 
+ 	# Set the username to improve the reproducibility
+-	push(@args, "-Duser.name", "debian");
++	push(@args, "-Duser.name", "comdartiwerk");
+ 
+ 	$this->doit_in_sourcedir("ant", @args, @_);
+ }
+--- a/lib/Debian/Debhelper/Buildsystem/autoconf.pm	1693221923.000000000
++++ b/lib/Debian/Debhelper/Buildsystem/autoconf.pm	1697094109.635242493
+@@ -27,14 +27,35 @@ sub check_auto_buildable {
+ 	return $this->SUPER::check_auto_buildable(@_);
+ }
+ 
++# Torrekie: aarch64-unknown-darwin is obviously something wrong
++sub triplet_fix {
++	my ($dpkgval) = @_;
++	my $kern = "";
++	if ($dpkgval =~ /DEB_BUILD_GNU_TYPE/) {
++		$kern = qx(uname -r);
++		chomp $kern;
++	}
++	
++	my $triplet;
++	my $dpkgcpu = $dpkgval;
++	$dpkgcpu =~ s/_GNU_TYPE/_GNU_CPU/g;
++	$triplet=dpkg_architecture_value($dpkgval);
++	if ($triplet =~ m/darwin/) {
++			# Torrekie: Always and only add kern version in build triple
++			$triplet=dpkg_architecture_value($dpkgcpu) . "-apple-darwin$kern";
++	}
++	return $triplet;
++}
++
+ sub configure {
+ 	my $this=shift;
+ 
+ 	# Standard set of options for configure.
+ 	my @opts;
+-	push @opts, "--build=" . dpkg_architecture_value("DEB_BUILD_GNU_TYPE");
++	push @opts, "--build=" . triplet_fix("DEB_BUILD_GNU_TYPE");
+ 	push @opts, "--prefix=/usr";
+ 	push @opts, "--includedir=\${prefix}/include";
++	push @opts, "--libexecdir=\${prefix}/libexec";
+ 	push @opts, "--mandir=\${prefix}/share/man";
+ 	push @opts, "--infodir=\${prefix}/share/info";
+ 	push @opts, "--sysconfdir=/etc";
+@@ -47,20 +68,21 @@ sub configure {
+ 	} else {
+ 		push @opts, "--disable-silent-rules";
+ 	}
+-	my $multiarch=dpkg_architecture_value("DEB_HOST_MULTIARCH");
+-	if (! compat(8)) {
+-		if (defined $multiarch) {
+-			push @opts, "--libdir=\${prefix}/lib/$multiarch";
+-			push(@opts, "--libexecdir=\${prefix}/lib/$multiarch") if compat(11);
+-		}
+-		else {
+-			push(@opts, "--libexecdir=\${prefix}/lib") if compat(11);
+-		}
+-	}
+-	else {
+-		push @opts, "--libexecdir=\${prefix}/lib/" . sourcepackage();
+-	}
+-	push @opts, "--runstatedir=/run" if not compat(10);
++#	my $multiarch=dpkg_architecture_value("DEB_HOST_MULTIARCH");
++	# Torrekie: We don't need this
++#	if (! compat(8)) {
++#		if (defined $multiarch && !($multiarch =~ m/darwin/)) {
++#			push @opts, "--libdir=\${prefix}/lib/$multiarch";
++#			push(@opts, "--libexecdir=\${prefix}/lib/$multiarch") if compat(11);
++#		}
++#		else {
++#			push(@opts, "--libexecdir=\${prefix}/lib") if compat(11);
++#		}
++#	}
++#	else {
++#		push @opts, "--libexecdir=\${prefix}/lib/" . sourcepackage();
++#	}
++	push @opts, "--runstatedir=/var/run" if not compat(10);
+ 	push @opts, "--disable-maintainer-mode";
+ 	push @opts, "--disable-dependency-tracking";
+ 	# Provide --host only if different from --build, as recommended in
+@@ -68,7 +90,7 @@ sub configure {
+ 	# autoconf 2.52+ switches to cross-compiling mode.
+ 	if (dpkg_architecture_value("DEB_BUILD_GNU_TYPE")
+ 	    ne dpkg_architecture_value("DEB_HOST_GNU_TYPE")) {
+-		push @opts, "--host=" . dpkg_architecture_value("DEB_HOST_GNU_TYPE");
++		push @opts, "--host=" . triplet_fix("DEB_HOST_GNU_TYPE");
+ 	}
+ 
+ 	$this->mkdir_builddir();
+--- a/lib/Debian/Debhelper/Buildsystem/cmake.pm	1693221923.000000000
++++ b/lib/Debian/Debhelper/Buildsystem/cmake.pm	1697094784.044280183
+@@ -13,7 +13,7 @@ use parent qw(Debian::Debhelper::Buildsy
+ 
+ my @STANDARD_CMAKE_FLAGS = qw(
+   -DCMAKE_INSTALL_PREFIX=/usr
+-  -DCMAKE_BUILD_TYPE=None
++  -DCMAKE_BUILD_TYPE=Release
+   -DCMAKE_INSTALL_SYSCONFDIR=/etc
+   -DCMAKE_INSTALL_LOCALSTATEDIR=/var
+   -DCMAKE_EXPORT_NO_PACKAGE_REGISTRY=ON
+@@ -26,6 +26,7 @@ my %DEB_HOST2CMAKE_SYSTEM = (
+ 	'linux'    => 'Linux',
+ 	'kfreebsd' => 'kFreeBSD',
+ 	'hurd'     => 'GNU',
++	'darwin'   => 'Darwin',
+ );
+ 
+ my %GNU_CPU2SYSTEM_PROCESSOR = (
+@@ -91,7 +92,7 @@ sub configure {
+ 	my @flags = @STANDARD_CMAKE_FLAGS;
+ 	my $backend = $this->get_targetbuildsystem->NAME;
+ 
+-	push(@flags, '-DCMAKE_INSTALL_RUNSTATEDIR=/run') if not compat(10);
++	push(@flags, '-DCMAKE_INSTALL_RUNSTATEDIR=/var/run') if not compat(10);
+ 	# Speed up installation phase a bit.
+ 	push(@flags, "-DCMAKE_SKIP_INSTALL_ALL_DEPENDENCY=ON") if not compat(12);
+ 	# Reproducibility #962474 / #1004939
+@@ -133,7 +134,8 @@ sub configure {
+ 		push(@flags, "-DPKGCONFIG_EXECUTABLE=/usr/bin/" . dpkg_architecture_value("DEB_HOST_GNU_TYPE") . "-pkg-config");
+ 		push(@flags, "-DQMAKE_EXECUTABLE=/usr/bin/" . dpkg_architecture_value("DEB_HOST_GNU_TYPE") . "-qmake");
+ 	}
+-	push(@flags, "-DCMAKE_INSTALL_LIBDIR=lib/" . dpkg_architecture_value("DEB_HOST_MULTIARCH"));
++	# Torrekie: No, seriously, dont do that
++	# push(@flags, "-DCMAKE_INSTALL_LIBDIR=lib/" . dpkg_architecture_value("DEB_HOST_MULTIARCH"));
+ 
+ 	# CMake doesn't respect CPPFLAGS, see #653916.
+ 	if ($ENV{CPPFLAGS} && ! compat(8)) {
+@@ -203,7 +205,7 @@ sub install {
+ 		my $destdir = shift;
+ 		my %options = (
+ 			update_env => {
+-				'LC_ALL'  => 'C.UTF-8',
++				'LC_ALL'  => 'C',
+ 				'DESTDIR' => $destdir,
+ 				%{ _get_cmake_env() },
+ 			}
+--- a/lib/Debian/Debhelper/Buildsystem/makefile.pm	1693221923.000000000
++++ b/lib/Debian/Debhelper/Buildsystem/makefile.pm	1697094378.149398541
+@@ -13,8 +13,8 @@ use Debian::Debhelper::Dh_Lib qw(dpkg_ar
+ use parent qw(Debian::Debhelper::Buildsystem);
+ 
+ my %DEB_DEFAULT_TOOLS = (
+-	'CC'		=> 'gcc',
+-	'CXX'		=> 'g++',
++	'CC'		=> 'cc',
++	'CXX'		=> 'c++',
+ 	'PKG_CONFIG'	=> 'pkg-config',
+ );
+ 
+@@ -165,7 +165,7 @@ sub build {
+ 		}
+ 	}
+ 	if (ref($this) eq 'Debian::Debhelper::Buildsystem::makefile' and not compat(10)) {
+-		unshift @_, "INSTALL=install --strip-program=true";
++		unshift @_, "INSTALL=install";
+ 	}
+ 	$this->do_make(@_);
+ }
+@@ -179,7 +179,7 @@ sub install {
+ 	my $this=shift;
+ 	my $destdir=shift;
+ 	if (ref($this) eq 'Debian::Debhelper::Buildsystem::makefile' and not compat(10)) {
+-		unshift @_, "INSTALL=install --strip-program=true";
++		unshift @_, "INSTALL=install";
+ 	}
+ 	if ( -f $this->get_buildpath('libtool')) {
+ 		$this->disable_parallel();
+--- a/lib/Debian/Debhelper/Buildsystem/meson.pm	1693221923.000000000
++++ b/lib/Debian/Debhelper/Buildsystem/meson.pm	1697094784.106933871
+@@ -50,7 +50,7 @@ sub new {
+ 
+ sub _get_meson_env {
+ 	my $update_env = {
+-		LC_ALL => 'C.UTF-8',
++		LC_ALL => 'C',
+ 	};
+ 	$update_env->{DEB_PYTHON_INSTALL_LAYOUT} = 'deb' unless $ENV{DEB_PYTHON_INSTALL_LAYOUT};
+ 	return $update_env;
+@@ -75,13 +75,12 @@ sub configure {
+ 	push @opts, "--sysconfdir=/etc";
+ 	push @opts, "--localstatedir=/var";
+ 	my $multiarch=dpkg_architecture_value("DEB_HOST_MULTIARCH");
+-	push @opts, "--libdir=lib/$multiarch";
+-	push(@opts, "--libexecdir=lib/$multiarch") if compat(11);
+-	# There was a behaviour change in Meson 1.2.0: previously
+-	# byte-compilation wasn't supported, but since 1.2.0 it is on by
+-	# default. We can only use this option to turn it off in versions
+-	# where the option exists.
+-	push(@opts, "-Dpython.bytecompile=-1") if $version >= '1.2.0';
++	if ($multiarch =~ m/darwin/) {
++		push @opts, "--libdir=lib";
++	} else {
++		push @opts, "--libdir=lib/$multiarch";
++		push(@opts, "--libexecdir=lib/$multiarch") if compat(11);
++	}
+ 
+ 	if (is_cross_compiling()) {
+ 		# http://mesonbuild.com/Cross-compilation.html
+@@ -95,7 +94,7 @@ sub configure {
+ 			my $filename = generated_file('_source', 'meson-cross-file.conf');
+ 			my %options = (
+ 				stdout => '/dev/null',
+-				update_env => { LC_ALL => 'C.UTF-8'},
++				update_env => { LC_ALL => 'C'},
+ 			);
+ 			doit(\%options, $debcrossgen, "-o${filename}");
+ 			$cross_file = $filename;
+--- a/lib/Debian/Debhelper/Buildsystem/ninja.pm	1693221923.000000000
++++ b/lib/Debian/Debhelper/Buildsystem/ninja.pm	1697094783.982333111
+@@ -38,7 +38,7 @@ sub build {
+ 	my $this=shift;
+ 	my %options = (
+ 		update_env => {
+-			'LC_ALL' => 'C.UTF-8',
++			'LC_ALL' => 'C',
+ 		}
+ 	);
+ 	if (!$dh{QUIET}) {
+@@ -54,7 +54,7 @@ sub test {
+ 	my $this=shift;
+ 	my %options = (
+ 		update_env => {
+-			'LC_ALL' => 'C.UTF-8',
++			'LC_ALL' => 'C',
+ 		}
+ 	);
+ 	if ($this->get_parallel() > 0) {
+@@ -68,7 +68,7 @@ sub install {
+ 	my $destdir=shift;
+ 	my %options = (
+ 		update_env => {
+-			'LC_ALL'  => 'C.UTF-8',
++			'LC_ALL'  => 'C',
+ 			'DESTDIR' => $destdir,
+ 		}
+ 	);
+@@ -80,7 +80,7 @@ sub clean {
+ 	if (!$this->rmdir_builddir()) {
+ 		my %options = (
+ 			update_env => {
+-				'LC_ALL'  => 'C.UTF-8',
++				'LC_ALL'  => 'C',
+ 			}
+ 		);
+ 		$this->doit_in_builddir(\%options, $this->{buildcmd}, "clean", @_);
+--- a/t/dh_installchangelogs/dh_installchangelogs.t	1693221923.000000000
++++ b/t/dh_installchangelogs/dh_installchangelogs.t	1697094783.361999027
+@@ -18,7 +18,7 @@ our @TEST_DH_EXTRA_TEMPLATE_FILES = (qw(
+ ));
+ 
+ # Force Time::Piece to generate dch-compliant timestamps (i.e. in English).
+-setlocale(LC_ALL, "C.UTF-8");
++setlocale(LC_ALL, "C");
+ 
+ use constant CUTOFF_DATE_STR => "2019-07-06"; # oldstable = Debian 10 Buster
+ use constant CUTOFF_DATE => Time::Piece->strptime(CUTOFF_DATE_STR, "%Y-%m-%d");
