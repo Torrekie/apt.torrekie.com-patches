@@ -1,0 +1,614 @@
+--- a/common/Common.c	1695412850.000000000
++++ b/common/Common.c	1697285493.969140095
+@@ -8,11 +8,12 @@
+ 
+ 
+ #include <CoreFoundation/CoreFoundation.h>
++#if !TARGET_OS_EMBEDDED
+ #include <DirectoryService/DirectoryService.h>
+ #include <OpenDirectory/OpenDirectory.h>
+ #include <OpenDirectory/OpenDirectoryPriv.h>
+ #include <ServerInformation/ServerInformation.h>
+-
++#endif
+ #include "Common.h"
+ #include "Logging.h"
+ 
+@@ -85,7 +86,7 @@ cleanup:
+ 
+ 	return retval;
+ }
+-
++#if !TARGET_OS_EMBEDDED
+ int
+ od_record_create(pam_handle_t *pamh, ODRecordRef *record, CFStringRef cfUser)
+ {
+@@ -511,7 +512,7 @@ cleanup:
+ 
+ 	return retval;
+ }
+-
++#endif
+ int
+ extract_homemount(char *in, char **out_url, char **out_path)
+ {
+@@ -572,7 +573,7 @@ ok:
+ fin:
+ 	return retval;
+ }
+-
++#if !TARGET_OS_EMBEDDED
+ int
+ od_extract_home(pam_handle_t *pamh, const char *username, char **server_URL, char **path, char **homedir)
+ {
+@@ -698,7 +699,7 @@ cleanup:
+ 
+ 	return retval;
+ }
+-
++#endif
+ void
+ pam_cf_cleanup(__unused pam_handle_t *pamh, void *data, __unused int pam_end_status)
+ {
+--- a/common/Common.h	1695412850.000000000
++++ b/common/Common.h	1697272930.620326769
+@@ -1,10 +1,14 @@
++#include <TargetConditionals.h>
++#if !TARGET_OS_EMBEDDED
+ #include <OpenDirectory/OpenDirectory.h>
++#endif
+ #include <security/pam_appl.h>
+ #include <security/pam_modules.h>
+ 
+ #ifndef _COMMON_H_
+ #define _COMMON_H_
+ 
++#if !TARGET_OS_EMBEDDED
+ int od_record_create(pam_handle_t*, ODRecordRef*, CFStringRef);
+ int od_record_create_cstring(pam_handle_t*, ODRecordRef*, const char*);
+ int od_record_attribute_create_cfstring(ODRecordRef record, CFStringRef attrib,  CFStringRef *out);
+@@ -18,7 +22,7 @@ int od_record_check_shell(ODRecordRef);
+ 
+ int od_extract_home(pam_handle_t*, const char *, char **, char **, char **);
+ int od_principal_for_user(pam_handle_t*, const char *, char **);
+-
++#endif
+ void pam_cf_cleanup(__unused pam_handle_t *, void *, __unused int );
+ 
+ int cfstring_to_cstring(const CFStringRef val, char **buffer);
+--- a/modules/pam_group/pam_group.8	1695412850.000000000
++++ b/modules/pam_group/pam_group.8	1697365516.937113056
+@@ -83,8 +83,7 @@ rather than the target account
+ .Sh SEE ALSO
+ .Xr pam_get_item 3 ,
+ .Xr pam.conf 5 ,
+-.Xr pam 8 ,
+-.Xr DirectoryService 8
++.Xr pam 8
+ .Sh AUTHORS
+ The
+ .Nm
+--- a/modules/pam_group/pam_group.c	1695412850.000000000
++++ b/modules/pam_group/pam_group.c	1697272760.825323726
+@@ -44,11 +44,14 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <unistd.h>
+-#ifdef __APPLE__
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif /* __APPLE__ */
++#if !TARGET_OS_EMBEDDED
+ #include <membership.h>
++#endif /* !TARGET_OS_EMBEDDED */
+ #include <stdlib.h>
+ #include "Logging.h"
+-#endif /* __APPLE__ */
+ 
+ #define PAM_SM_AUTH
+ 
+@@ -65,14 +68,14 @@ pam_sm_acct_mgmt(pam_handle_t *pamh, int
+ {
+ 	const char *group, *user;
+ 	const void *ruser;
+-#ifndef __APPLE__
++#if !defined(__APPLE__) || TARGET_OS_EMBEDDED
+ 	char *const *list;
+ #endif /* !__APPLE__ */
+ 	struct passwd *pwd;
+ 	struct passwd pwdbuf;
+ 	char pwbuffer[2 * PATH_MAX];
+ 	struct group *grp;
+-#ifdef __APPLE__
++#if defined(__APPLE__) && !TARGET_OS_EMBEDDED
+ 	char *str1, *str, *p;
+ 	int found_group = 0;
+ 	uuid_t u_uuid, g_uuid;
+@@ -103,7 +106,7 @@ pam_sm_acct_mgmt(pam_handle_t *pamh, int
+ 		group = "wheel";
+ 		os_log_debug(PAM_LOG, "With no group specfified, I am defaulting to wheel.");
+ 	}
+-#ifdef __APPLE__
++#if defined(__APPLE__) && !TARGET_OS_EMBEDDED
+ 	str1 = str = strdup(group);
+ 	while ((p = strsep(&str, ",")) != NULL) {
+ 		if ((grp = getgrnam(p)) == NULL || grp->gr_mem == NULL)
+@@ -151,7 +154,7 @@ pam_sm_acct_mgmt(pam_handle_t *pamh, int
+ 
+  not_found:
+ 	os_log_debug(PAM_LOG, "The group check failed.");
+-#ifdef __APPLE__
++#if defined(__APPLE__) && !TARGET_OS_EMBEDDED
+ 	free(str1);
+ #endif /* __APPLE__ */
+ 	if (openpam_get_option(pamh, "deny"))
+@@ -159,7 +162,7 @@ pam_sm_acct_mgmt(pam_handle_t *pamh, int
+ 	return (PAM_AUTH_ERR);
+  found:
+ 	os_log_debug(PAM_LOG, "The group check succeeded.");
+-#ifdef __APPLE__
++#if defined(__APPLE__) && !TARGET_OS_EMBEDDED
+ 	free(str1);
+ #endif /* __APPLE__ */
+ 	if (openpam_get_option(pamh, "deny"))
+--- a/modules/pam_krb5/pam_krb5.c	1695412850.000000000
++++ b/modules/pam_krb5/pam_krb5.c	1697274193.542540109
+@@ -65,7 +65,9 @@
+ #include <Heimdal/com_err.h>
+ 
+ #include <CoreFoundation/CoreFoundation.h>
++#if !TARGET_OS_EMBEDDED
+ #include <OpenDirectory/OpenDirectory.h>
++#endif
+ 
+ #define	PAM_SM_AUTH
+ #define	PAM_SM_ACCOUNT
+@@ -80,11 +82,27 @@ PAM_DEFINE_LOG(krb5)
+ #define PAM_LOG PAM_LOG_krb5()
+ 
+ /* _krb5_kcm_get_initial_ticket is SPI, so define it here for now */
++#if TARGET_OS_EMBEDDED
++krb5_error_code
++_krb5_xcc_get_initial_ticket(krb5_context context,
++			     krb5_ccache id,
++			     krb5_principal client,
++			     krb5_principal server,
++			     const char *password);
++
++static inline
++#endif
+ krb5_error_code _krb5_kcm_get_initial_ticket(krb5_context context,
+ 					     krb5_ccache id,
+ 					     krb5_principal client,
+ 					     krb5_principal server,
+-					     const char *password);
++					     const char *password)
++#if TARGET_OS_EMBEDDED
++{
++	return _krb5_xcc_get_initial_ticket(context, id, client, server, password);
++}
++#endif
++;
+ 
+ 
+ #define	COMPAT_HEIMDAL
+@@ -179,8 +197,10 @@ pam_sm_authenticate(pam_handle_t *pamh,
+ 	/* Get principal name */
+ 	if (openpam_get_option(pamh, PAM_OPT_AUTH_AS_SELF))
+ 		asprintf(&principal, "%s/%s", (const char *)sourceuser, user);
++#if !TARGET_OS_EMBEDDED
+ 	else if (NULL == openpam_get_option(pamh, PAM_OPT_DEFAULT_PRINCIPAL))
+ 		od_principal_for_user(pamh, user, &principal);
++#endif
+ 	else
+ 		principal = strdup(user);
+ 	if (principal == NULL) {
+@@ -399,15 +419,15 @@ cleanup2:
+ 	krb5_free_principal(pam_context, princ);
+     PAM_LOG_DEBUG("Done cleanup2");
+ cleanup3:
+-    if (principal)
+-        free(principal);
+-
+-	if (princ_name)
++	if (principal) {
++		free(principal);
++	}
++	if (princ_name) {
+ 		free(princ_name);
+-
+-	if (opts)
++	}
++	if (opts) {
+ 		krb5_get_init_creds_opt_free(pam_context, opts);
+-
++	}
+ 	krb5_free_context(pam_context);
+ 
+     PAM_LOG_DEBUG("Done cleanup3");
+--- a/modules/pam_launchd/pam_launchd.c	1695412850.000000000
++++ b/modules/pam_launchd/pam_launchd.c	1697282659.407516434
+@@ -30,7 +30,6 @@
+ #include <string.h>
+ #include <unistd.h>
+ #include <vproc.h>
+-#include <vproc_priv.h>
+ #include <servers/bootstrap.h>
+ #include <bootstrap_priv.h>
+ #include <pwd.h>
+@@ -53,8 +52,106 @@ PAM_DEFINE_LOG(launchd)
+  * default type will be created.
+  */
+ 
++#if !TARGET_OS_EMBEDDED
++#include <vproc_priv.h>
+ extern vproc_err_t _vproc_post_fork_ping(void);
++#else
++#include <pthread.h>
++#include <spawn.h>
++#include <sys/syslog.h>
++#define VPROCMGR_SESSION_BACKGROUND "Background"
++/* Torrekie: I give up, fuck you Apple */
++#if 0
++struct _os_alloc_once_s {
++    long once;
++    void *ptr;
++};
++extern void _break(int);
++extern struct _os_alloc_once_s _os_alloc_once_table[];
++extern void *_os_alloc_once();
++extern mach_port_t bootstrap_port;
++extern int xpc_dictionary_set_mach_send( xpc_object_t xdict, const char *key, mach_port_t );
++extern char *xpc_strerror(kern_return_t error);
++extern void _os_assumes_log(int64_t);
++extern mach_port_t _xpc_dictionary_extract_mach_send(xpc_object_t, const char *);
++static kern_return_t _xpc_interface_routine(int a1, int a2, xpc_object_t xdict, xpc_object_t *obj, int a5, int a6)
++{
++	struct _os_alloc_once_s *ptr;
++	if (!_os_alloc_once_table[1].once)
++		ptr = _os_alloc_once_table[1].ptr;
++	else
++		ptr = _os_alloc_once();
++
++}
++static kern_return_t _xpc_domain_routine(int routine, xpc_object_t xdict, xpc_object_t *obj)
++{
++	return _xpc_interface_routine(3, routine, xdict, obj, 0, 0);
++}
++static int _xpc_set_exception_port(posix_spawnattr_t *attr, mach_port_t new_port)
++{
++	int result = 0;
++	struct _os_alloc_once_s *ptr;
++	if (!_os_alloc_once_table[1].once)
++		ptr = (struct _os_alloc_once_s *)_os_alloc_once_table[1].ptr;
++	else
++		ptr = _os_alloc_once();
++
++	exception_mask_t mask;
++	if (ptr[2].ptr)
++		mask = 7168;
++	else
++		mask = 14336;
++
++	if (attr) {
++		result = posix_spawnattr_setexceptionports_np(attr, mask, new_port, EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_MASK, 1);
++		if (result)
++			_break(1);
++	} else {
++		/*
++		if ( ((_18 ^ (2 * _18)) & 0x4000000000000000LL) != 0 )
++			_break(0xc471);
++		*/
++		return task_set_exception_ports(mach_task_self(), mask, new_port, EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_MASK, 1);
++	}
++	return result;
++}
+ 
++static vproc_err_t _vprocmgr_switch_to_session(const char *target_session, unsigned int flags __attribute__((unused)))
++{
++	vproc_err_t ret;
++	xpc_object_t dict = xpc_dictionary_create(NULL, NULL, 0);
++	xpc_dictionary_set_uint64(dict, "type", 7);
++	xpc_dictionary_set_mach_send(dict, "domain-port", bootstrap_port);
++	xpc_dictionary_set_uint64(dict, "handle", 0);
++	xpc_dictionary_set_string(dict, "session", target_session);
++	xpc_object_t obj;
++	kern_return_t routine = _xpc_domain_routine(824, dict, &obj);
++	if (routine) {
++		syslog(LOG_ERR, "Could not adopt Background session: %d: %s", routine, xpc_strerror(routine));
++		ret = XPC_BOOL_FALSE;
++	} else {
++		mach_port_t mach_send = _xpc_dictionary_extract_mach_send(obj, "exc-port");
++		if ( mach_send + 1 >= 2 ) { // Weird
++			mach_port_t exception_port = _xpc_set_exception_port(NULL, mach_send);
++			if (exception_port) {
++				_os_assumes_log(exception_port);
++			}
++			kern_return_t rel = mach_port_deallocate(mach_task_self(), mach_send);
++			if (rel)
++				_os_assumes_log(rel);
++		}
++		xpc_release(obj);
++		ret = NULL;
++	}
++	xpc_release(dict);
++	return ret;
++}
++void *_vproc_post_fork_ping()
++{
++	return _vprocmgr_switch_to_session(VPROCMGR_SESSION_BACKGROUND, 0);
++}
++#endif
++#endif
+ static mach_port_t
+ get_root_bootstrap_port(void)
+ {
+@@ -144,7 +241,8 @@ pam_sm_open_session(pam_handle_t *pamh,
+ 	mach_port_mod_refs(mach_task_self(), bootstrap_port, MACH_PORT_RIGHT_SEND, -1);
+ 	task_set_bootstrap_port(mach_task_self(), puc);
+ 	bootstrap_port = puc;
+-	
++
++#if !TARGET_OS_EMBEDDED
+ 	/* Now move ourselves into the appropriate session. */
+ 	if (strncmp(session_type, VPROCMGR_SESSION_BACKGROUND, sizeof(VPROCMGR_SESSION_BACKGROUND)) != 0) {
+ 		vproc_err_t verr = NULL;
+@@ -153,11 +251,12 @@ pam_sm_open_session(pam_handle_t *pamh,
+ 			return PAM_SESSION_ERR;
+ 		}
+ 	}
++
+ 	if (NULL != _vproc_post_fork_ping()) {
+ 		os_log_error(PAM_LOG, "Calling _vproc_post_fork_ping failed.");
+ 		return PAM_SESSION_ERR;
+ 	}
+-	
++#endif
+ 	return PAM_SUCCESS;
+ }
+ 
+--- a/modules/pam_localauthentication/pam_localauthentication.c	1695412850.000000000
++++ b/modules/pam_localauthentication/pam_localauthentication.c	1697284428.580676020
+@@ -29,7 +29,7 @@
+  ******************************************************************/
+ 
+ #include <CoreFoundation/CoreFoundation.h>
+-#include <coreauthd_spi.h>
++//#include <coreauthd_spi.h>
+ #include <pwd.h>
+ #include <LocalAuthentication/LAPrivateDefines.h>
+ #include <stdbool.h>
+@@ -95,7 +95,8 @@ pam_sm_authenticate(pam_handle_t * pamh,
+         retval = PAM_AUTHTOK_ERR;
+         goto cleanup;
+     }
+-
++/* Torrekie: Unless we find a technique to load these private functions by symbol name from LocalAuthenticaton, we can only comment them out for now */
++#if 0
+     /* create a new LA context from the externalized context */
+     context = LACreateNewContextWithACMContext(*externalized_context, &error);
+     if (!context) {
+@@ -103,7 +104,7 @@ pam_sm_authenticate(pam_handle_t * pamh,
+         retval = PAM_AUTHTOK_ERR;
+         goto cleanup;
+     }
+-
++#endif
+     /* prepare the options dictionary, aka rewrite @{ @(LAOptionNotInteractive) : @YES } without Foundation */
+     tmp = kLAOptionNotInteractive;
+     key = CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &tmp);
+@@ -113,7 +114,7 @@ pam_sm_authenticate(pam_handle_t * pamh,
+ 
+     options = CFDictionaryCreateMutable(kCFAllocatorDefault, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+     CFDictionarySetValue(options, key, value);
+-
++#if 0
+     /* evaluate policy */
+     int policy = isContinuityUnlock ? kLAPolicyContinuityUnlock : kLAPolicyDeviceOwnerAuthenticationWithBiometrics;
+     if (!LAEvaluatePolicy(context, policy, options, &error)) {
+@@ -128,7 +129,7 @@ pam_sm_authenticate(pam_handle_t * pamh,
+         retval = PAM_AUTH_ERR;
+         goto cleanup;
+     }
+-    
++#endif
+     /* we passed the authentication successfully */
+     retval = PAM_SUCCESS;
+     
+--- a/modules/pam_mount/pam_mount.8	1695412850.000000000
++++ b/modules/pam_mount/pam_mount.8	1697365542.738428206
+@@ -43,10 +43,9 @@ respectively.
+ .Ss The Home Folder Mounting Authentication Module
+ The Home Folder Mounting authentication module reads the mount authenticator from the PAM authentication context and caches it in the PAM environment.  The Home Folder Mounting Session Management Module must be used in conjunction with this module to remove the authenticator from the PAM environment. 
+ .Ss The Home Folder Mounting Session Management Module
+-The Home Folder Mounting session management module copies the mount authenticator from the PAM environment, removes it from the PAM environment, and uses its copy to mount the user's home folder if the user's OpenDirectory record indicates that an AFP, SMB, NFS or FileVault home folder is to be used.
++The Home Folder Mounting session management module copies the mount authenticator from the PAM environment, removes it from the PAM environment, and uses its copy to mount the user's home folder.
+ .Pp
+ When the session is closed, the Home Folder Mounting session management module unmounts the user's home folder if it was mounted by this module when the session was opened.
+ .Sh SEE ALSO
+ .Xr pam.conf 5 ,
+-.Xr pam 8 ,
+-.Xr DirectoryService 8
++.Xr pam 8
+--- a/modules/pam_mount/pam_mount.c	1695412850.000000000
++++ b/modules/pam_mount/pam_mount.c	1697284728.414496350
+@@ -37,8 +37,10 @@
+ #include <utmpx.h>
+ 
+ #include <CoreFoundation/CoreFoundation.h>
++#if !TARGET_OS_EMBEDDED
+ #include <OpenDirectory/OpenDirectory.h>
+ #include <NetFS/URLMount.h>
++#endif
+ 
+ #include "Common.h"
+ #include "Logging.h"
+@@ -114,12 +116,13 @@ pam_sm_open_session(pam_handle_t *pamh,
+ 		goto fin;
+ 	}
+ 
++#if !TARGET_OS_EMBEDDED
+ 	/* get the server_URL, path and homedir from OD */
+ 	if (PAM_SUCCESS != (retval = od_extract_home(pamh, username, &server_URL, &path, &homedir))) {
+ 		os_log_error(PAM_LOG, "Error retrieve data from OpenDirectory: %s", pam_strerror(pamh, retval));
+ 		goto fin;
+ 	}
+-
++#endif
+ 	os_log_debug(PAM_LOG, "           UID: %d", pwd->pw_uid);
+ 	os_log_debug(PAM_LOG, "    server_URL: %s", server_URL);
+ 	os_log_debug(PAM_LOG, "          path: %s", path);
+@@ -143,6 +146,7 @@ pam_sm_open_session(pam_handle_t *pamh,
+ 	if (NULL != server_URL && retval == PAM_SUCCESS) {
+ 		// for an afp or smb home folder
+ 		if (NULL != path) {
++#if !TARGET_OS_EMBEDDED
+ 			if (0 != NetFSMountHomeDirectoryWithAuthentication(server_URL,
+ 									   homedir,
+ 									   path,
+@@ -156,8 +160,9 @@ pam_sm_open_session(pam_handle_t *pamh,
+ 				os_log_debug(PAM_LOG, "Unable to mount the home folder.");
+ 				retval = PAM_SESSION_ERR;
+ 				goto fin;
+-			}
+-			else {
++			} else
++#endif
++			{
+ 				if (0 != was_remounted) {
+ 					os_log_debug(PAM_LOG, "Remounted home folder.");
+ 				}
+@@ -255,6 +260,7 @@ pam_sm_close_session(pam_handle_t *pamh,
+ 		goto fin;
+ 	}
+ 
++#if !TARGET_OS_EMBEDDED
+ 	/* get the homedir and path or devicepath if needed */
+ 	if (NULL == homedir || NULL == path) {
+ 		if (PAM_SUCCESS != (retval = od_extract_home(pamh, username, &server_URL, &path, &homedir))) {
+@@ -262,6 +268,7 @@ pam_sm_close_session(pam_handle_t *pamh,
+ 			goto fin;
+ 		}
+ 	}
++#endif
+ 
+ 	/* attempt to unmount the home folder */
+ 	if (NULL != homedir && NULL != path) {
+@@ -271,11 +278,13 @@ pam_sm_close_session(pam_handle_t *pamh,
+ 			retval = PAM_SYSTEM_ERR;
+ 			goto fin;
+ 		}
++#if !TARGET_OS_EMBEDDED
+ 		if (0 != NetFSUnmountHomeDirectory(homedir, path, pwd->pw_uid, 0)) {
+ 			os_log_debug(PAM_LOG, "Unable to unmount the home folder: %s.", strerror(errno));
+ 			retval = PAM_IGNORE;
+-		}
+-		else {
++		} else
++#endif
++		{
+ 			os_log_debug(PAM_LOG, "Unmounted home folder.");
+ 		}
+ 	}
+--- a/modules/pam_ntlm/pam_ntlm.c	1695412850.000000000
++++ b/modules/pam_ntlm/pam_ntlm.c	1697285382.145506775
+@@ -13,10 +13,35 @@
+ #include <unistd.h>
+ #include <pwd.h>
+ 
++#include <TargetConditionals.h>
++#if !TARGET_OS_EMBEDDED
+ #include <OpenDirectory/OpenDirectory.h>
++#endif
++#include <GSS/gssapi.h>
++//#include <GSS/gssapi_spi.h>
++typedef struct gss_auth_identity {
++    uint32_t type;
++#define GSS_AUTH_IDENTITY_TYPE_1	1
++    uint32_t flags;
++    char *username;
++    char *realm;
++    char *password;
++    gss_buffer_t *credentialsRef;
++} gss_auth_identity_desc;
++
++OM_uint32
++__ApplePrivate_gss_acquire_cred_ex_f (
++	__nullable gss_status_id_t status,
++	__nullable gss_name_t desired_name,
++	OM_uint32 flags,
++	OM_uint32 time_req,
++	__nonnull gss_const_OID desired_mech,
++	gss_cred_usage_t cred_usage,
++	__nonnull gss_auth_identity_t identity,
++	void * __nullable userctx,
++	void (*__nonnull usercomplete)(void *__nullable, OM_uint32, gss_status_id_t __nullable, gss_cred_id_t __nullable, gss_OID_set __nullable, OM_uint32));
+ 
+-#include <GSS/gssapi_ntlm.h>
+-#include <GSS/gssapi_spi.h>
++#define gss_acquire_cred_ex_f __ApplePrivate_gss_acquire_cred_ex_f
+ 
+ #define	PAM_SM_AUTH
+ #define	PAM_SM_ACCOUNT
+@@ -92,7 +117,9 @@ pam_sm_setcred(pam_handle_t *pamh, int f
+ 	int retval;
+ 	uid_t euid = geteuid();
+ 	gid_t egid = getegid();
++#if !TARGET_OS_EMBEDDED
+ 	ODRecordRef record = NULL;
++#endif
+ 	CFArrayRef array = NULL;
+ 	CFIndex i, count;
+ 
+@@ -119,7 +146,7 @@ pam_sm_setcred(pam_handle_t *pamh, int f
+ 		retval = PAM_IGNORE;
+ 		goto cleanup;
+ 	}
+-
++#if !TARGET_OS_EMBEDDED
+ 	retval = od_record_create_cstring(pamh, &record, user);
+ 	if (retval || record == NULL) {
+ 		retval = PAM_IGNORE;
+@@ -132,7 +159,7 @@ pam_sm_setcred(pam_handle_t *pamh, int f
+ 		retval = PAM_IGNORE;
+ 		goto cleanup;
+ 	}
+-
++#endif
+ 	identity.username = (char *)user;
+ 	identity.password = (char *)password;
+ 
+@@ -197,8 +224,10 @@ pam_sm_setcred(pam_handle_t *pamh, int f
+ 	PAM_LOG_DEBUG("pam_sm_setcred: ntlm done, used domain: %s", identity.realm);
+ 
+ cleanup:
++#if !TARGET_OS_EMBEDDED
+ 	if (record)
+ 		CFRelease(record);
++#endif
+ 	if (array)
+ 		CFRelease(array);
+ 	if (identity.realm)
+--- a/modules/pam_sacl/pam_sacl.c	1695412850.000000000
++++ b/modules/pam_sacl/pam_sacl.c	1697285994.403687682
+@@ -136,7 +136,8 @@ PAM_EXTERN int pam_sm_acct_mgmt(pam_hand
+ 		free(sacl_group);
+ 		return PAM_PERM_DENIED;
+ 	}
+-
++/* mbr_check_service_membership requires DirectoryServices */
++#if !TARGET_OS_EMBEDDED
+ 	err = mbr_check_service_membership(user_uuid, service, &ismember);
+ 	if (err) {
+ 	        if (err == ENOENT) {
+@@ -153,7 +154,9 @@ PAM_EXTERN int pam_sm_acct_mgmt(pam_hand
+ 
+ 	        return PAM_PERM_DENIED;
+ 	}
+-	
++#else
++	ismember = 1;
++#endif
+         if (ismember) {
+ 		DEBUG_MESSAGE("%s: allowing '%s'", MODULE_NAME, username);
+ 		return PAM_SUCCESS;
