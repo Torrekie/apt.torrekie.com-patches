@@ -1,0 +1,26 @@
+--- a/sshpty.c	1697454511.928774895
++++ b/sshpty.c	1697475603.733283749
+@@ -48,10 +48,7 @@
+ #endif
+ 
+ #ifdef __APPLE__
+-# include <AvailabilityMacros.h>
+-# if (MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_5)
+-#  define __APPLE_PRIVPTY__
+-# endif
++# define __APPLE_PRIVPTY__
+ #endif
+ 
+ /*
+--- a/configure.ac	1698054157.576339917
++++ b/configure.ac	1698056350.856079084
+@@ -787,9 +787,6 @@ int main(void) { if (NSVersionOfRunTimeL
+ 		[AC_MSG_RESULT([no])]
+ 	)
+ 	m4_pattern_allow([AU_IPv])
+-	AC_CHECK_DECL([AU_IPv4], [],
+-	    AC_DEFINE([AU_IPv4], [0], [System only supports IPv4 audit records])
+-	    [#include <bsm/audit.h>]
+ 	AC_DEFINE([LASTLOG_WRITE_PUTUTXLINE], [1],
+ 	    [Define if pututxline updates lastlog too])
+ 	)

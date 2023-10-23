@@ -1,0 +1,15 @@
+# MacPorts: strnvis(3) isn't actually "broken".  OpenBSD decided to be special and
+# flip the order of arguments to strnvis and considers everyone else to be broken.
+#
+# Undefined Apple macros:
+# '__APPLE_ENDPOINTSECURITY__': Not available on iOS
+# '__APPLE_MANAGED_CONFIGURATION__': Not available before Darwin 23
+# '__APPLE_AUDIT_SESSION_ALWAYS__': Broken on iOS for some reason 
+CPPFLAGS="-DBROKEN_STRNVIS=1 -D__APPLE_AUDIT_BSM_LOGOUT_FIX__ -D__APPLE_LAUNCHD__ -D__APPLE_MEMBERSHIP__ -D__APPLE_KEYCHAIN__ -D__APPLE_TMPDIR__ -D__APPLE_DISPLAY_VAR__ -D__APPLE_NW_CONNECTION__ -D__APPLE_CLEAR_LV__"
+# '-fobjc-arc' added for keychain.m
+LDFLAGS="-Wl,-search_paths_first -Wl,-dead_strip_dylibs -fobjc-arc"
+# Always use the internal mkdtemp; see https://bugs.debian.org/1001186
+ac_cv_func_mkdtemp=no
+# 'strtonum' only available after Darwin 20
+# TODO: this has to be processed with librecompat later
+ac_cv_func_strtonum=no

@@ -1,0 +1,2497 @@
+--- a/audit-bsm.c	1696394050.000000000
++++ b/audit-bsm.c	1697450475.816662858
+@@ -62,6 +62,15 @@
+ #include <bsm/audit_record.h>
+ #include <locale.h>
+ 
++#ifdef __APPLE__
++#include <bsm/audit_session.h>
++#include "auth-options.h"
++#include "misc.h"
++#include "servconf.h"
++extern ServerOptions options;
++extern struct sshauthopt *auth_opts;
++#endif
++
+ #if defined(HAVE_GETAUDIT_ADDR)
+ #define	AuditInfoStruct		auditinfo_addr
+ #define AuditInfoTermID		au_tid_addr_t
+@@ -306,11 +315,26 @@ bsm_audit_session_setup(void)
+ 		return;
+ 	}
+ 
++#ifdef __APPLE__
++	bzero(&info, sizeof (info));
++	info.ai_flags = AU_SESSION_FLAG_IS_REMOTE;
++	if (the_authctxt->valid)  {
++	    info.ai_flags |=  AU_SESSION_FLAG_HAS_AUTHENTICATED;
++	}
++	if (auth_opts->permit_pty_flag && options.permit_tty) {
++		info.ai_flags |=  AU_SESSION_FLAG_HAS_TTY;
++	}
++#endif
++
+ 	if (the_authctxt->valid)
+ 		info.ai_auid = the_authctxt->pw->pw_uid;
+ 	else
+ 		info.ai_auid = -1;
++#ifdef __APPLE__
++	info.ai_asid = AU_ASSIGN_ASID;
++#else
+ 	info.ai_asid = getpid();
++#endif
+ 	mask.am_success = 0;
+ 	mask.am_failure = 0;
+ 
+@@ -323,8 +347,13 @@ bsm_audit_session_setup(void)
+ 
+ 	rc = SetAuditFunc(&info, sizeof(info));
+ 	if (rc < 0)
++#ifdef __APPLE__
++		fatal("BSM audit: %s: %s failed: %s", __func__,
++		    SetAuditFuncText, strerror(errno));
++#else
+ 		error("BSM audit: %s: %s failed: %s", __func__,
+ 		    SetAuditFuncText, strerror(errno));
++#endif
+ }
+ 
+ static void
+@@ -353,8 +382,14 @@ audit_connection_from(const char *host,
+ 	AuditInfoTermID *tid = &ssh_bsm_tid;
+ 	char buf[1024];
+ 
++#ifndef __APPLE_AUDIT_SESSION_ALWAYS__
++	/*
++	 * Audit session setup depends on ssh_bsm_tid being set,
++	 * otherwise setaudit_addr() will fail.
++	 */
+ 	if (cannot_audit(0))
+ 		return;
++#endif
+ 	debug3("BSM audit: connection from %.100s port %d", host, port);
+ 
+ 	/* populate our terminal id structure */
+@@ -398,19 +433,41 @@ audit_event(struct ssh *ssh, ssh_audit_e
+ 	static int logged_in = 0;
+ 	const char *user = the_authctxt ? the_authctxt->user : "(unknown user)";
+ 
++#ifdef __APPLE_AUDIT_SESSION_ALWAYS__
++	/*
++	 * Always set up the audit session, even when the audit
++	 * trail is disabled.
++	 */
++	if (event == SSH_AUTH_SUCCESS) {
++		bsm_audit_session_setup();
++	}
++#endif
++
+ 	if (cannot_audit(0))
+ 		return;
+ 
+ 	switch(event) {
+ 	case SSH_AUTH_SUCCESS:
+ 		logged_in = 1;
++#ifndef __APPLE_AUDIT_SESSION_ALWAYS__
+ 		bsm_audit_session_setup();
++#endif
+ 		snprintf(textbuf, sizeof(textbuf),
+ 		    gettext("successful login %s"), user);
+ 		bsm_audit_record(0, textbuf, AUE_openssh);
+ 		break;
+ 
+ 	case SSH_CONNECTION_CLOSE:
++#ifdef __APPLE_AUDIT_BSM_LOGOUT_FIX__
++	/*
++	 * Treat CLOSE and ABANDON the same, as the most common case of
++	 * regular connection close emits an ABANDON, not a CLOSE,
++	 * and OpenBSM audit doesn't make the distinction anyway.
++	 * The use of CLOSE and ABANDON should probably be revisited
++	 * upstream.
++	 */
++	case SSH_CONNECTION_ABANDON:
++#endif
+ 		/*
+ 		 * We can also get a close event if the user attempted auth
+ 		 * but never succeeded.
+--- a/auth.c	1697454511.863171507
++++ b/auth.c	1697450483.186110991
+@@ -24,6 +24,9 @@
+  */
+ 
+ #include "includes.h"
++#ifdef __APPLE_ENDPOINTSECURITY__
++#include "submit-ess-event.h"
++#endif
+ 
+ #include <sys/types.h>
+ #include <sys/stat.h>
+@@ -328,6 +331,11 @@ auth_log(struct ssh *ssh, int authentica
+ 		    auth_get_canonical_hostname(ssh, options.use_dns), "ssh",
+ 		    loginmsg);
+ #endif
++#ifdef __APPLE_ENDPOINTSECURITY__
++	if (authenticated == 0 && !(authctxt->postponed || partial)) {
++		submit_ess_event(ssh->remote_ipaddr, authctxt->user, audit_classify_auth(method));
++	}
++#endif
+ }
+ 
+ void
+@@ -500,6 +508,9 @@ getpwnamallow(struct ssh *ssh, const cha
+ #ifdef SSH_AUDIT_EVENTS
+ 		audit_event(ssh, SSH_INVALID_USER);
+ #endif /* SSH_AUDIT_EVENTS */
++#ifdef __APPLE_ENDPOINTSECURITY__
++		submit_ess_event(ssh->remote_ipaddr, user, SSH_INVALID_USER);
++#endif
+ 		return (NULL);
+ 	}
+ 	if (!allowed_user(ssh, pw))
+--- a/auth2-hostbased.c	1696394050.000000000
++++ b/auth2-hostbased.c	1697450497.624443971
+@@ -211,7 +211,9 @@ hostbased_key_allowed(struct ssh *ssh, s
+ 	debug2_f("access allowed by auth_rhosts2");
+ 
+ 	if (sshkey_is_cert(key) &&
++#ifdef __APPLE__
+ 	    sshkey_cert_check_authority_now(key, 1, 0, 0, lookup, &reason)) {
++#endif
+ 		error("%s", reason);
+ 		auth_debug_add("%s", reason);
+ 		return 0;
+--- a/auth2-pubkey.c	1696394050.000000000
++++ b/auth2-pubkey.c	1697450502.845978476
+@@ -440,6 +440,8 @@ match_principals_command(struct passwd *
+ 
+ 	if ((pid = subprocess("AuthorizedPrincipalsCommand", command,
+ 	    ac, av, &f,
++#ifdef __APPLE__
++#endif
+ 	    SSH_SUBPROCESS_STDOUT_CAPTURE|SSH_SUBPROCESS_STDERR_DISCARD,
+ 	    runas_pw, temporarily_use_uid, restore_uid)) == 0)
+ 		goto out;
+@@ -528,6 +530,8 @@ user_cert_trusted_ca(struct passwd *pw,
+ 	if (use_authorized_principals && principals_opts == NULL)
+ 		fatal_f("internal error: missing principals_opts");
+ 	if (sshkey_cert_check_authority_now(key, 0, 1, 0,
++#ifdef __APPLE__
++#endif
+ 	    use_authorized_principals ? NULL : pw->pw_name, &reason) != 0)
+ 		goto fail_reason;
+ 
+--- a/auth2-pubkeyfile.c	1696394050.000000000
++++ b/auth2-pubkeyfile.c	1697450508.676735527
+@@ -365,6 +365,8 @@ auth_check_authkey_line(struct passwd *p
+ 		goto fail_reason;
+ 	}
+ 	if (sshkey_cert_check_authority_now(key, 0, 0, 0,
++#ifdef __APPLE__
++#endif
+ 	    keyopts->cert_principals == NULL ? pw->pw_name : NULL,
+ 	    &reason) != 0)
+ 		goto fail_reason;
+--- a/auth2.c	1697454511.866568733
++++ b/auth2.c	1697450512.673107734
+@@ -24,6 +24,9 @@
+  */
+ 
+ #include "includes.h"
++#ifdef __APPLE_ENDPOINTSECURITY__
++#include "submit-ess-event.h"
++#endif
+ 
+ #include <sys/types.h>
+ #include <sys/stat.h>
+@@ -306,6 +309,9 @@ input_userauth_request(int type, u_int32
+ #ifdef SSH_AUDIT_EVENTS
+ 			PRIVSEP(audit_event(ssh, SSH_INVALID_USER));
+ #endif
++#ifdef __APPLE_ENDPOINTSECURITY__
++			PRIVSEP(submit_ess_event(ssh->remote_ipaddr, user, SSH_INVALID_USER));
++#endif
+ 		}
+ #ifdef USE_PAM
+ 		if (options.use_pam)
+@@ -391,6 +397,9 @@ userauth_finish(struct ssh *ssh, int aut
+ #ifdef SSH_AUDIT_EVENTS
+ 		PRIVSEP(audit_event(ssh, SSH_LOGIN_ROOT_DENIED));
+ #endif
++#ifdef __APPLE_ENDPOINTSECURITY__
++		PRIVSEP(submit_ess_event(ssh->remote_ipaddr, authctxt->user, SSH_LOGIN_ROOT_DENIED));
++#endif
+ 	}
+ 
+ 	if (authenticated && options.num_auth_methods != 0) {
+@@ -452,6 +461,9 @@ userauth_finish(struct ssh *ssh, int aut
+ #ifdef SSH_AUDIT_EVENTS
+ 			PRIVSEP(audit_event(ssh, SSH_LOGIN_EXCEED_MAXTRIES));
+ #endif
++#ifdef __APPLE_ENDPOINTSECURITY__
++			PRIVSEP(submit_ess_event(ssh->remote_ipaddr, authctxt->user, SSH_LOGIN_EXCEED_MAXTRIES));
++#endif
+ 			auth_maxtries_exceeded(ssh);
+ 		}
+ 		methods = authmethods_get(authctxt);
+--- a/clientloop.c	1697454511.869497141
++++ b/clientloop.c	1697450516.362474115
+@@ -302,6 +302,10 @@ client_x11_get_proto(struct ssh *ssh, co
+ 	struct stat st;
+ 	u_int now, x11_timeout_real;
+ 
++#ifdef __APPLE_DISPLAY_VAR__
++	int is_path_to_socket = 0;
++#endif
++
+ 	*_proto = proto;
+ 	*_data = data;
+ 	proto[0] = data[0] = xauthfile[0] = xauthdir[0] = '\0';
+@@ -318,6 +322,34 @@ client_x11_get_proto(struct ssh *ssh, co
+ 	}
+ 
+ 	if (xauth_path != NULL) {
++#ifdef __APPLE_DISPLAY_VAR__
++		{
++			/*
++			 * If using launchd socket, remove the screen number from the end
++			 * of $DISPLAY. is_path_to_socket is used later in this function
++			 * to determine if an error should be displayed.
++			 */
++			char path[PATH_MAX];
++			struct stat sbuf;
++
++			strlcpy(path, display, sizeof(path));
++			if (0 == stat(path, &sbuf)) {
++				is_path_to_socket = 1;
++			} else {
++				char *dot = strrchr(path, '.');
++				if (dot) {
++					*dot = '\0';
++					/* screen = atoi(dot + 1); */
++					if (0 == stat(path, &sbuf)) {
++						is_path_to_socket = 1;
++						debug("x11_get_proto: $DISPLAY is launchd, removing screennum");
++						setenv("DISPLAY", path, 1);
++					}
++				}
++			}
++		}
++#endif
++
+ 		/*
+ 		 * Handle FamilyLocal case where $DISPLAY does
+ 		 * not match an authorization entry.  For this we
+@@ -440,6 +472,9 @@ client_x11_get_proto(struct ssh *ssh, co
+ 		u_int8_t rnd[16];
+ 		u_int i;
+ 
++#ifdef __APPLE_DISPLAY_VAR__
++		if (!is_path_to_socket)
++#endif
+ 		logit("Warning: No xauth data; "
+ 		    "using fake authentication data for X11 forwarding.");
+ 		strlcpy(proto, SSH_X11_PROTO, sizeof proto);
+--- a/groupaccess.c	1696394050.000000000
++++ b/groupaccess.c	1697450519.741427048
+@@ -39,6 +39,10 @@
+ #include "match.h"
+ #include "log.h"
+ 
++#ifdef __APPLE_MEMBERSHIP__
++int32_t getgrouplist_2(const char *, gid_t, gid_t **);
++#endif
++
+ static int ngroups;
+ static char **groups_byname;
+ 
+@@ -56,6 +60,18 @@ ga_init(const char *user, gid_t base)
+ 	if (ngroups > 0)
+ 		ga_free();
+ 
++#ifdef __APPLE_MEMBERSHIP__
++	(void)retry;
++	if ((ngroups = getgrouplist_2(user, base, &groups_bygid)) == -1) {
++		logit("getgrouplist_2 failed");
++		/*
++		 * getgrouplist_2 only fails on memory error; in which case
++		 * groups_bygid will be left NULL so no need to free.
++		 */
++		return 0;
++	}
++	groups_byname = xcalloc(ngroups, sizeof(*groups_byname));
++#else
+ 	ngroups = NGROUPS_MAX;
+ #if defined(HAVE_SYSCONF) && defined(_SC_NGROUPS_MAX)
+ 	ngroups = MAX(NGROUPS_MAX, sysconf(_SC_NGROUPS_MAX));
+@@ -70,6 +86,7 @@ ga_init(const char *user, gid_t base)
+ 	}
+ 	groups_byname = xcalloc(ngroups, sizeof(*groups_byname));
+ 
++#endif /* __APPLE_MEMBERSHIP__ */
+ 	for (i = 0, j = 0; i < ngroups; i++)
+ 		if ((gr = getgrgid(groups_bygid[i])) != NULL)
+ 			groups_byname[j++] = xstrdup(gr->gr_name);
+--- a/monitor.c	1697454511.890718471
++++ b/monitor.c	1697450532.339264930
+@@ -26,6 +26,9 @@
+  */
+ 
+ #include "includes.h"
++#ifdef __APPLE_ENDPOINTSECURITY__
++#include "submit-ess-event.h"
++#endif
+ 
+ #include <sys/types.h>
+ #include <sys/socket.h>
+@@ -152,6 +155,10 @@ int mm_answer_audit_event(struct ssh *,
+ int mm_answer_audit_command(struct ssh *, int, struct sshbuf *);
+ #endif
+ 
++#ifdef __APPLE_ENDPOINTSECURITY__
++int mm_answer_ess_event(struct ssh *, int, struct sshbuf *);
++#endif
++
+ static Authctxt *authctxt;
+ 
+ /* local state for key verify */
+@@ -207,6 +214,9 @@ struct mon_table mon_dispatch_proto20[]
+ #ifdef SSH_AUDIT_EVENTS
+     {MONITOR_REQ_AUDIT_EVENT, MON_PERMIT, mm_answer_audit_event},
+ #endif
++#ifdef __APPLE_ENDPOINTSECURITY__
++    {MONITOR_REQ_ENDPOINTSECURITY_EVENT, MON_PERMIT, mm_answer_ess_event},
++#endif
+ #ifdef BSD_AUTH
+     {MONITOR_REQ_BSDAUTHQUERY, MON_ISAUTH, mm_answer_bsdauthquery},
+     {MONITOR_REQ_BSDAUTHRESPOND, MON_AUTH, mm_answer_bsdauthrespond},
+@@ -241,6 +251,9 @@ struct mon_table mon_dispatch_postauth20
+     {MONITOR_REQ_AUDIT_EVENT, MON_PERMIT, mm_answer_audit_event},
+     {MONITOR_REQ_AUDIT_COMMAND, MON_PERMIT, mm_answer_audit_command},
+ #endif
++#ifdef __APPLE_ENDPOINTSECURITY__
++    {MONITOR_REQ_ENDPOINTSECURITY_EVENT, MON_PERMIT, mm_answer_ess_event},
++#endif
+     {0, 0, NULL}
+ };
+ 
+@@ -1751,6 +1764,43 @@ mm_answer_audit_command(struct ssh *ssh,
+ }
+ #endif /* SSH_AUDIT_EVENTS */
+ 
++#ifdef __APPLE_ENDPOINTSECURITY__
++/* Report that an EndpointSecurity system event occurred */
++int
++mm_answer_ess_event(struct ssh *ssh, int socket, struct sshbuf *m)
++{
++	u_int n;
++	char *address = NULL;
++	char *user = NULL;
++	ssh_audit_event_t event;
++	int r;
++
++	debug3("%s entering", __func__);
++
++	// Extract the packed IP address string and the event type set in "mm_submit_ess_event()"
++	// "socket" is kept unused similar to mm_answer_audit_event()
++	if ((r = sshbuf_get_cstring(m, &address, NULL)) != 0 || (r = sshbuf_get_cstring(m, &user, NULL)) != 0 || (r = sshbuf_get_u32(m, &n)) != 0) {
++		fatal("buffer error: %s", ssh_err(r));
++	}
++
++	event = (ssh_audit_event_t)n;
++	switch (event) {
++	case SSH_LOGIN_EXCEED_MAXTRIES:
++	case SSH_LOGIN_ROOT_DENIED:
++	case SSH_CONNECTION_CLOSE:
++	case SSH_INVALID_USER:
++		submit_ess_event(address, user, event);
++		break;
++	default:
++		fatal("Audit event type %d not permitted", event);
++	}
++
++	free(address);
++	free(user);
++	return (0);
++}
++#endif
++
+ void
+ monitor_clear_keystate(struct ssh *ssh, struct monitor *pmonitor)
+ {
+--- a/monitor.h	1697454511.891367284
++++ b/monitor.h	1697450535.460450443
+@@ -62,6 +62,7 @@ enum monitor_reqtype {
+ 	MONITOR_REQ_PAM_RESPOND = 108, MONITOR_ANS_PAM_RESPOND = 109,
+ 	MONITOR_REQ_PAM_FREE_CTX = 110, MONITOR_ANS_PAM_FREE_CTX = 111,
+ 	MONITOR_REQ_AUDIT_EVENT = 112, MONITOR_REQ_AUDIT_COMMAND = 113,
++	MONITOR_REQ_ENDPOINTSECURITY_EVENT = 212,
+ 
+ 	MONITOR_REQ_GSSSIGN = 150, MONITOR_ANS_GSSSIGN = 151,
+ 	MONITOR_REQ_GSSUPCREDS = 152, MONITOR_ANS_GSSUPCREDS = 153,
+--- a/monitor_wrap.c	1697454511.892402668
++++ b/monitor_wrap.c	1697450543.395755807
+@@ -938,6 +938,25 @@ mm_audit_run_command(const char *command
+ }
+ #endif /* SSH_AUDIT_EVENTS */
+ 
++#ifdef __APPLE_ENDPOINTSECURITY__
++void
++mm_submit_ess_event(const char *source_address, const char *username, ssh_audit_event_t event)
++{
++	struct sshbuf *m;
++	int r;
++
++	debug3("%s entering", __func__);
++
++	if ((m = sshbuf_new()) == NULL)
++		fatal("sshbuf_new failed");
++	if ((r = sshbuf_put_cstring(m, source_address)) != 0 || (r = sshbuf_put_cstring(m, username)) != 0 || (r = sshbuf_put_u32(m, event)) != 0)
++		fatal("buffer error: %s", ssh_err(r));
++
++	mm_request_send(pmonitor->m_recvfd, MONITOR_REQ_ENDPOINTSECURITY_EVENT, m);
++	sshbuf_free(m);
++}
++#endif
++
+ #ifdef GSSAPI
+ OM_uint32
+ mm_ssh_gssapi_server_ctx(Gssctxt **ctx, gss_OID goid)
+--- a/monitor_wrap.h	1697454511.892936943
++++ b/monitor_wrap.h	1697450546.152917314
+@@ -87,6 +87,11 @@ void mm_audit_event(struct ssh *, ssh_au
+ void mm_audit_run_command(const char *);
+ #endif
+ 
++#ifdef __APPLE_ENDPOINTSECURITY__
++#include "audit.h"
++void mm_submit_ess_event(const char *, const char *, ssh_audit_event_t);
++#endif
++
+ struct Session;
+ void mm_terminate(void);
+ int mm_pty_allocate(int *, int *, char *, size_t);
+--- a/pathnames.h	1696394050.000000000
++++ b/pathnames.h	1697450549.540844964
+@@ -129,6 +129,16 @@
+ #define _PATH_SSH_KEY_SIGN		"/usr/libexec/ssh-keysign"
+ #endif
+ 
++#if defined(ENABLE_PKCS11) && defined(__APPLE_KEYCHAIN__)
++/*
++ * Location of ssh-apple-pkcs11 binary to support PKCS#11 without granting
++ * PKCS#11 providers access to privileged entitlements.
++ */
++#ifndef _PATH_SSH_APPLE_PKCS11
++#define _PATH_SSH_APPLE_PKCS11		"/usr/libexec/ssh-apple-pkcs11"
++#endif
++#endif
++
+ /* Location of ssh-pkcs11-helper to support keys in tokens */
+ #ifndef _PATH_SSH_PKCS11_HELPER
+ #define _PATH_SSH_PKCS11_HELPER		"/usr/libexec/ssh-pkcs11-helper"
+--- a/readconf.c	1697454511.900235087
++++ b/readconf.c	1697450616.742394787
+@@ -172,6 +172,9 @@ typedef enum {
+ 	oHashKnownHosts,
+ 	oTunnel, oTunnelDevice,
+ 	oLocalCommand, oPermitLocalCommand, oRemoteCommand,
++#ifdef __APPLE_KEYCHAIN__
++	oUseKeychain,
++#endif
+ 	oVisualHostKey,
+ 	oKexAlgorithms, oIPQoS, oRequestTTY, oSessionType, oStdinNull,
+ 	oForkAfterAuthentication, oIgnoreUnknown, oProxyUseFdpass,
+@@ -184,6 +187,9 @@ typedef enum {
+ 	oEnableEscapeCommandline, oObscureKeystrokeTiming,
+ 	oProtocolKeepAlives, oSetupTimeOut,
+ 	oIgnore, oIgnoredUnknownOption, oDeprecated, oUnsupported
++#ifdef __APPLE_NW_CONNECTION__
++	, oMultipathService
++#endif
+ } OpCodes;
+ 
+ /* Textual representations of the tokens. */
+@@ -317,6 +323,9 @@ static struct {
+ 	{ "permitlocalcommand", oPermitLocalCommand },
+ 	{ "remotecommand", oRemoteCommand },
+ 	{ "visualhostkey", oVisualHostKey },
++#ifdef __APPLE_KEYCHAIN__
++	{ "usekeychain", oUseKeychain},
++#endif
+ 	{ "kexalgorithms", oKexAlgorithms },
+ 	{ "ipqos", oIPQoS },
+ 	{ "requesttty", oRequestTTY },
+@@ -344,6 +353,9 @@ static struct {
+ 	{ "knownhostscommand", oKnownHostsCommand },
+ 	{ "requiredrsasize", oRequiredRSASize },
+ 	{ "enableescapecommandline", oEnableEscapeCommandline },
++#ifdef __APPLE_NW_CONNECTION__
++	{ "applemultipath", oMultipathService },
++#endif
+ 	{ "obscurekeystroketiming", oObscureKeystrokeTiming },
+ 	{ "protocolkeepalives", oProtocolKeepAlives },
+ 	{ "setuptimeout", oSetupTimeOut },
+@@ -1997,6 +2009,12 @@ parse_pubkey_algos:
+ 		intptr = &options->visual_host_key;
+ 		goto parse_flag;
+ 
++#ifdef __APPLE_KEYCHAIN__
++	case oUseKeychain:
++		intptr = &options->use_keychain;
++		goto parse_flag;
++#endif
++
+ 	case oInclude:
+ 		if (cmdline) {
+ 			error("Include directive not supported as a "
+@@ -2392,6 +2410,12 @@ parse_pubkey_algos:
+ 		argv_consume(&ac);
+ 		break;
+ 
++#ifdef __APPLE_NW_CONNECTION__
++	case oMultipathService:
++		intptr = &options->multipath_service;
++		goto parse_flag;
++#endif
++
+ 	default:
+ 		error("%s line %d: Unimplemented opcode %d",
+ 		    filename, linenum, opcode);
+@@ -2547,6 +2571,9 @@ initialize_options(Options * options)
+ 	options->strict_host_key_checking = -1;
+ 	options->compression = -1;
+ 	options->tcp_keep_alive = -1;
++#ifdef __APPLE_NW_CONNECTION__
++	options->multipath_service = -1;
++#endif
+ 	options->port = -1;
+ 	options->address_family = -1;
+ 	options->connection_attempts = -1;
+@@ -2614,6 +2641,9 @@ initialize_options(Options * options)
+ 	options->add_keys_to_agent_lifespan = -1;
+ 	options->identity_agent = NULL;
+ 	options->visual_host_key = -1;
++#ifdef __APPLE_KEYCHAIN__
++	options->use_keychain = -1;
++#endif
+ 	options->ip_qos_interactive = -1;
+ 	options->ip_qos_bulk = -1;
+ 	options->request_tty = -1;
+@@ -2726,6 +2756,10 @@ fill_default_options(Options * options)
+ 		options->compression = 0;
+ 	if (options->tcp_keep_alive == -1)
+ 		options->tcp_keep_alive = 1;
++#ifdef __APPLE_NW_CONNECTION__
++	if (options->multipath_service == -1)
++		options->multipath_service = 0;
++#endif
+ 	if (options->port == -1)
+ 		options->port = 0;	/* Filled in ssh_connect. */
+ 	if (options->address_family == -1)
+@@ -2921,6 +2955,11 @@ fill_default_options(Options * options)
+ 	/* options->host_key_alias should not be set by default */
+ 	/* options->preferred_authentications will be set in ssh */
+ 
++#ifdef __APPLE_KEYCHAIN__
++	if (options->use_keychain == -1)
++		options->use_keychain = 0;
++#endif
++
+ 	/* success */
+ 	ret = 0;
+  fail:
+@@ -3556,6 +3595,9 @@ dump_client_config(Options *o, const cha
+ 	dump_cfg_fmtint(oVisualHostKey, o->visual_host_key);
+ 	dump_cfg_fmtint(oUpdateHostkeys, o->update_hostkeys);
+ 	dump_cfg_fmtint(oEnableEscapeCommandline, o->enable_escape_commandline);
++#ifdef __APPLE_NW_CONNECTION__
++	dump_cfg_fmtint(oMultipathService, o->multipath_service);
++#endif
+ 
+ 	/* Integer options */
+ 	dump_cfg_int(oCanonicalizeMaxDots, o->canonicalize_max_dots);
+--- a/readconf.h	1697454511.900834777
++++ b/readconf.h	1697450646.933071064
+@@ -56,6 +56,9 @@ typedef struct {
+ 	int     strict_host_key_checking;	/* Strict host key checking. */
+ 	int     compression;	/* Compress packets in both directions. */
+ 	int     tcp_keep_alive;	/* Set SO_KEEPALIVE. */
++#ifdef __APPLE_NW_CONNECTION__
++	int	multipath_service; /* NW-Connection Multipath Service Type */
++#endif
+ 	int	ip_qos_interactive;	/* IP ToS/DSCP/class for interactive */
+ 	int	ip_qos_bulk;		/* IP ToS/DSCP/class for bulk traffic */
+ 	SyslogFacility log_facility;	/* Facility for system logging. */
+@@ -153,6 +156,10 @@ typedef struct {
+ 	char	*remote_command;
+ 	int	visual_host_key;
+ 
++#ifdef __APPLE_KEYCHAIN__
++	int	use_keychain;
++#endif
++
+ 	int	request_tty;
+ 	int	session_type;
+ 	int	stdin_null;
+--- a/sandbox-darwin.c	1696394050.000000000
++++ b/sandbox-darwin.c	1697450659.824331114
+@@ -63,7 +63,7 @@ ssh_sandbox_child(struct ssh_sandbox *bo
+ 	struct rlimit rl_zero;
+ 
+ 	debug3("%s: starting Darwin sandbox", __func__);
+-	if (sandbox_init(kSBXProfilePureComputation, SANDBOX_NAMED,
++	if (sandbox_init("com.openssh.sshd", SANDBOX_NAMED,
+ 	    &errmsg) == -1)
+ 		fatal("%s: sandbox_init: %s", __func__, errmsg);
+ 
+--- a/servconf.c	1697454511.905671791
++++ b/servconf.c	1697450666.606939868
+@@ -549,6 +549,8 @@ typedef enum {
+ 	sRequiredRSASize, sChannelTimeout, sUnusedConnectionTimeout,
+ 	sDebianBanner,
+ 	sDeprecated, sIgnore, sUnsupported
++#ifdef __APPLE__
++#endif
+ } ServerOpCodes;
+ 
+ #define SSHCFG_GLOBAL		0x01	/* allowed in main section of config */
+@@ -2636,6 +2638,8 @@ process_server_config_line_depth(ServerO
+ 		argv_consume(&ac);
+ 		break;
+ 
++#ifdef __APPLE__
++#endif
+ 	default:
+ 		fatal("%s line %d: Missing handler for opcode %s (%d)",
+ 		    filename, linenum, keyword, opcode);
+@@ -3172,6 +3176,8 @@ dump_config(ServerOptions *o)
+ 	dump_cfg_fmtint(sStreamLocalBindUnlink, o->fwd_opts.streamlocal_bind_unlink);
+ 	dump_cfg_fmtint(sFingerprintHash, o->fingerprint_hash);
+ 	dump_cfg_fmtint(sExposeAuthInfo, o->expose_userauth_info);
++#ifdef __APPLE__
++#endif
+ 
+ 	/* string arguments */
+ 	dump_cfg_string(sPidFile, o->pid_file);
+--- a/session.c	1697454511.907639312
++++ b/session.c	1697450688.085652523
+@@ -1184,6 +1184,21 @@ do_setup_env(struct ssh *ssh, Session *s
+ 		child_set_env(&env, &envsize, "SSH_ORIGINAL_COMMAND",
+ 		    original_command);
+ 
++#ifdef __APPLE_TMPDIR__
++	char tmpdir[MAXPATHLEN] = {0};
++	size_t len = 0;
++
++	len = confstr(_CS_DARWIN_USER_TEMP_DIR, tmpdir, sizeof(tmpdir));
++	if (len > 0) {
++		child_set_env(&env, &envsize, "TMPDIR", tmpdir);
++		debug2("%s: set TMPDIR", __func__);
++	} else {
++		// errno is set by confstr
++		errno = 0;
++		debug2("%s: unable to set TMPDIR", __func__);
++	}
++#endif /* __APPLE_TMPDIR__ */
++
+ 	if (debug_flag) {
+ 		/* dump the environment */
+ 		fprintf(stderr, "Environment:\n");
+--- a/ssh-add.1	1696394050.000000000
++++ b/ssh-add.1	1697450701.000416602
+@@ -251,6 +251,15 @@ The maximum is 3.
+ Unlock the agent.
+ .It Fl x
+ Lock the agent with a password.
++.\" #ifdef __APPLE_KEYCHAIN__
++.It Fl -apple-use-keychain
++When adding identities, each passphrase will also be stored in the user's keychain.  When removing identities
++with
++.Fl d ,
++each passphrase will be removed from it.
++.It Fl -apple-load-keychain
++Add identities to the agent using any passphrase stored in the user's keychain.
++.\" #endif
+ .El
+ .Sh ENVIRONMENT
+ .Bl -tag -width Ds
+@@ -303,6 +312,58 @@ socket used to communicate with the agen
+ Specifies a path to a library that will be used when loading any
+ FIDO authenticator-hosted keys, overriding the default of using
+ the built-in USB HID support.
++.\" #ifdef __APPLE_KEYCHAIN__
++.It Ev APPLE_SSH_ADD_BEHAVIOR
++Enables or disables the older processing of the
++.Fl A
++and
++.Fl K
++options used in earlier macOS releases.
++These options have been renamed
++.Fl -apple-load-keychain
++and
++.Fl -apple-use-keychain
++respectively. However,
++.Fl A
++and
++.Fl K
++still behave as in earlier releases except in the following
++circumstances.
++If a security provider was specified with
++.Fl S
++or
++.Ev SSH_SK_PROVIDER ,
++or if
++.Ev APPLE_SSH_ADD_BEHAVIOR
++is set to the value
++.Dq openssh ,
++then
++.Nm
++uses standard OpenSSH behavior: the
++.Fl A
++flag is not recognized and the
++.Fl K
++flag behaves as documented in the
++.Sx DESCRIPTION
++section above.
++.Pp
++Otherwise,
++.Nm
++.Fl A
++and
++.Fl K
++will behave as in earlier macOS releases. A warning will be output to
++standard error unless
++.Ev APPLE_SSH_ADD_BEHAVIOR
++is set to the value
++.Dq macos .
++.Em Note :
++Future releases of macOS will not support neither
++.Fl A
++nor
++.Fl K
++without setting this environment variable.
++.\" #endif
+ .El
+ .Sh FILES
+ .Bl -tag -width Ds -compact
+--- a/ssh-add.c	1696394050.000000000
++++ b/ssh-add.c	1697450697.304284641
+@@ -70,6 +70,12 @@
+ #include "sk-api.h"
+ #include "hostfile.h"
+ 
++#ifdef __APPLE_KEYCHAIN__
++#include <getopt.h>
++#include "keychain.h"
++static int use_keychain = 0;
++#endif
++
+ /* argv0 */
+ extern char *__progname;
+ 
+@@ -170,6 +176,11 @@ delete_file(int agent_fd, const char *fi
+ 	if (strcmp(filename, "-") == 0)
+ 		return delete_stdin(agent_fd, qflag);
+ 
++#ifdef __APPLE_KEYCHAIN__
++	if (use_keychain)
++		remove_from_keychain(filename);
++#endif
++
+ 	if ((r = sshkey_load_public(filename, &public,  &comment)) != 0) {
+ 		printf("Bad key file %s: %s\n", filename, ssh_err(r));
+ 		return -1;
+@@ -286,7 +297,22 @@ add_file(int agent_fd, const char *filen
+ 			    filename, ssh_err(r));
+ 			goto fail_load;
+ 		}
++#ifdef __APPLE_KEYCHAIN__
++		if (use_keychain && private != NULL)
++			store_in_keychain(filename, pass);
++#endif
++	}
++
++#ifdef __APPLE_KEYCHAIN__
++	// try the keychain
++	if (private == NULL && use_keychain) {
++		clear_pass();
++		pass = keychain_read_passphrase(filename);
++		if (pass != NULL)
++			sshkey_parse_private_fileblob(keyblob, pass, &private, &comment);
+ 	}
++#endif
++
+ 	if (private == NULL) {
+ 		/* clear passphrase since it did not work */
+ 		clear_pass();
+@@ -298,7 +324,15 @@ add_file(int agent_fd, const char *filen
+ 				goto fail_load;
+ 			if ((r = sshkey_parse_private_fileblob(keyblob, pass,
+ 			    &private, &comment)) == 0)
++#ifdef __APPLE_KEYCHAIN__
++			{
++				if (use_keychain && private != NULL)
++					store_in_keychain(filename, pass);
++				break;
++			}
++#else
+ 				break;
++#endif
+ 			else if (r != SSH_ERR_KEY_WRONG_PASSPHRASE) {
+ 				fprintf(stderr,
+ 				    "Error loading key \"%s\": %s\n",
+@@ -770,7 +804,7 @@ static void
+ usage(void)
+ {
+ 	fprintf(stderr,
+-"usage: ssh-add [-cDdKkLlqvXx] [-E fingerprint_hash] [-H hostkey_file]\n"
++"usage: ssh-add [-AcDdKkLlqvXx] [-E fingerprint_hash] [-H hostkey_file]\n"
+ "               [-h destination_constraint] [-S provider] [-t life]\n"
+ #ifdef WITH_XMSS
+ "               [-M maxsign] [-m minleft]\n"
+@@ -822,7 +856,18 @@ main(int argc, char **argv)
+ 
+ 	skprovider = getenv("SSH_SK_PROVIDER");
+ 
++#ifdef __APPLE_KEYCHAIN__
++	int load_keychain = 0;
++	struct option longopts[] = {
++	    { "apple-use-keychain", no_argument, &use_keychain, 1 },
++	    { "apple-load-keychain", no_argument, &load_keychain, 1 },
++	    { NULL },
++	};
++	while ((ch = getopt_long(argc, argv, "vkKlLcdDTxXE:e:h:H:M:m:qs:S:t:A",
++	    &longopts, NULL)) != -1) {
++#else
+ 	while ((ch = getopt(argc, argv, "vkKlLcdDTxXE:e:h:H:M:m:qs:S:t:")) != -1) {
++#endif
+ 		switch (ch) {
+ 		case 'v':
+ 			if (log_level == SYSLOG_LEVEL_INFO)
+@@ -846,6 +891,9 @@ main(int argc, char **argv)
+ 			break;
+ 		case 'K':
+ 			do_download = 1;
++#ifdef __APPLE_KEYCHAIN__
++			use_keychain = -1;
++#endif
+ 			break;
+ 		case 'l':
+ 		case 'L':
+@@ -908,6 +956,13 @@ main(int argc, char **argv)
+ 		case 'T':
+ 			Tflag = 1;
+ 			break;
++#ifdef __APPLE_KEYCHAIN__
++		case 0: /* long option handled */
++			break;
++		case 'A':
++			load_keychain = -1;
++			break;
++#endif
+ 		default:
+ 			usage();
+ 			ret = 1;
+@@ -916,6 +971,42 @@ main(int argc, char **argv)
+ 	}
+ 	log_init(__progname, log_level, log_facility, 1);
+ 
++#ifdef __APPLE_KEYCHAIN__
++	if (load_keychain < 0 || use_keychain < 0) {
++		const char *option = getenv("APPLE_SSH_ADD_BEHAVIOR");
++		/* Use macOS behavior if no provider was given and
++		 * environment variable was not set to "openssh".
++		 * Warn if the environment variable was not set to
++		 * "macos", either.
++		 */
++		if (skprovider == NULL && (option == NULL ||
++		    strcasecmp(option, "openssh") != 0)) {
++			do_download = 0;
++			if (option == NULL || strcasecmp(option, "macos") != 0)
++				warn_keychain_option();
++		} else {
++		/* Otherwise, use the OpenSSH behavior. */
++			use_keychain = 0;
++			if (load_keychain) {
++				fprintf(stderr, "%s: illegal option -- A\n",
++				    __progname);
++				usage();
++				ret = 1;
++				goto done;
++			}
++		}
++	}
++	if (load_keychain) {
++		use_keychain = 1;
++		if (load_identities_from_keychain(^(const char *filename){
++			return add_file(agent_fd, filename, 0, qflag, NULL,
++				NULL, 0);
++		}))
++			ret = 1;
++		goto done;
++	}
++#endif
++
+ 	if ((xflag != 0) + (lflag != 0) + (Dflag != 0) > 1)
+ 		fatal("Invalid combination of actions");
+ 	else if (xflag) {
+--- a/ssh-agent.c	1696394050.000000000
++++ b/ssh-agent.c	1697450707.436149296
+@@ -70,6 +70,9 @@
+ #include <time.h>
+ #include <string.h>
+ #include <unistd.h>
++#ifdef __APPLE_LAUNCHD__
++#include <launch.h>
++#endif
+ #ifdef HAVE_UTIL_H
+ # include <util.h>
+ #endif
+@@ -2017,6 +2020,9 @@ int
+ main(int ac, char **av)
+ {
+ 	int c_flag = 0, d_flag = 0, D_flag = 0, k_flag = 0, s_flag = 0;
++#ifdef __APPLE_LAUNCHD__
++	int l_flag = 0;
++#endif
+ 	int sock, ch, result, saved_errno;
+ 	char *shell, *format, *pidstr, *agentsocket = NULL;
+ #ifdef HAVE_SETRLIMIT
+@@ -2050,7 +2056,11 @@ main(int ac, char **av)
+ 	__progname = ssh_get_progname(av[0]);
+ 	seed_rng();
+ 
++#ifdef __APPLE_LAUNCHD__
++	while ((ch = getopt(ac, av, "cDdksE:a:O:P:t:l")) != -1) {
++#else
+ 	while ((ch = getopt(ac, av, "cDdksE:a:O:P:t:")) != -1) {
++#endif
+ 		switch (ch) {
+ 		case 'E':
+ 			fingerprint_hash = ssh_digest_alg_by_name(optarg);
+@@ -2078,6 +2088,11 @@ main(int ac, char **av)
+ 				fatal("-P option already specified");
+ 			allowed_providers = xstrdup(optarg);
+ 			break;
++#ifdef __APPLE_LAUNCHD__
++		case 'l':
++			l_flag++;
++			break;
++#endif
+ 		case 's':
+ 			if (c_flag)
+ 				usage();
+@@ -2180,6 +2195,29 @@ main(int ac, char **av)
+ 	 * Create socket early so it will exist before command gets run from
+ 	 * the parent.
+ 	 */
++ #ifdef __APPLE_LAUNCHD__
++ 	if (l_flag) {
++ 		int *fds = NULL;
++ 		size_t count = 0;
++ 		result = launch_activate_socket("Listeners", &fds, &count);
++
++ 		if (result != 0 || fds == NULL || count < 1) {
++ 			errno = result;
++ 			perror("launch_activate_socket()");
++ 			exit(1);
++ 		}
++
++ 		size_t i;
++ 		for (i = 0; i < count; i++) {
++ 			new_socket(AUTH_SOCKET, fds[i]);
++ 		}
++
++ 		if (fds)
++ 			free(fds);
++
++ 		goto skip2;
++ 	} else {
++ #endif
+ 	prev_mask = umask(0177);
+ 	sock = unix_listener(socket_name, SSH_LISTEN_BACKLOG, 0);
+ 	if (sock < 0) {
+@@ -2187,6 +2225,9 @@ main(int ac, char **av)
+ 		*socket_name = '\0'; /* Don't unlink any existing file */
+ 		cleanup_exit(1);
+ 	}
++#ifdef __APPLE_LAUNCHD__
++	}
++#endif
+ 	umask(prev_mask);
+ 
+ 	/*
+@@ -2259,6 +2300,9 @@ skip:
+ 	pkcs11_init(0);
+ #endif
+ 	new_socket(AUTH_SOCKET, sock);
++#ifdef __APPLE_LAUNCHD__
++skip2:
++#endif
+ 	if (ac > 0)
+ 		parent_alive_interval = 10;
+ 	idtab_init();
+--- a/ssh-pkcs11.c	1696394050.000000000
++++ b/ssh-pkcs11.c	1697450715.425894623
+@@ -32,6 +32,11 @@
+ #include <string.h>
+ #include <dlfcn.h>
+ 
++#include <fcntl.h>
++#include <mach-o/dyld_priv.h>
++#include <System/sys/codesign.h>
++#include <unistd.h>
++
+ #include "openbsd-compat/sys-queue.h"
+ #include "openbsd-compat/openssl-compat.h"
+ 
+@@ -1540,7 +1545,12 @@ pkcs11_register_provider(char *provider_
+ 		goto fail;
+ 	}
+ 	/* open shared pkcs11-library */
++#ifdef __APPLE_CLEAR_LV__
++	extern void *dlopen_lv(char *, int);
++	if ((handle = dlopen_lv(provider_id, RTLD_NOW)) == NULL) {
++#else
+ 	if ((handle = dlopen(provider_id, RTLD_NOW)) == NULL) {
++#endif
+ 		error("dlopen %s failed: %s", provider_id, dlerror());
+ 		goto fail;
+ 	}
+--- a/ssh-sk.c	1696394050.000000000
++++ b/ssh-sk.c	1697450804.548517387
+@@ -137,7 +137,12 @@ sshsk_open(const char *path)
+ 		error("provider %s is not an OpenSSH FIDO library", path);
+ 		goto fail;
+ 	}
++#ifdef __APPLE_CLEAR_LV__
++	extern void *dlopen_lv(char *, int);
++	if ((ret->dlhandle = dlopen_lv(path, RTLD_NOW)) == NULL)
++#else
+ 	if ((ret->dlhandle = dlopen(path, RTLD_NOW)) == NULL)
++#endif
+ 		fatal("Provider \"%s\" dlopen failed: %s", path, dlerror());
+ 	if ((ret->sk_api_version = dlsym(ret->dlhandle,
+ 	    "sk_api_version")) == NULL) {
+--- a/ssh.1	1697454511.912968602
++++ b/ssh.1	1697450818.642855727
+@@ -291,6 +291,10 @@ Specify the PKCS#11 shared library
+ .Nm
+ should use to communicate with a PKCS#11 token providing keys for user
+ authentication.
++.\" #ifdef __APPLE_KEYCHAIN__
++Use of this option will disable
++.Cm UseKeychain .
++.\" #endif
+ .Pp
+ .It Fl i Ar identity_file
+ Selects a file from which the identity (private key) for
+@@ -593,6 +597,9 @@ For full details of the options listed b
+ .It Tunnel
+ .It TunnelDevice
+ .It UpdateHostKeys
++.\" #ifdef __APPLE_KEYCHAIN__
++.It UseKeychain
++.\" #endif
+ .It User
+ .It UserKnownHostsFile
+ .It VerifyHostKeyDNS
+--- a/ssh.c	1697454511.914702589
++++ b/ssh.c	1697450821.379080963
+@@ -39,7 +39,6 @@
+  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+-
+ #include "includes.h"
+ 
+ #include <sys/types.h>
+@@ -624,6 +623,32 @@ ssh_conn_info_free(struct ssh_conn_info
+ 	free(cinfo);
+ }
+ 
++#if defined(ENABLE_PKCS11) && defined(__APPLE_KEYCHAIN__)
++#ifndef __APPLE_CLEAR_LV__
++#error entitled_to_clear_lv() depends on __APPLE_CLEAR_LV__
++#endif
++#include <Security/Security.h>
++#include <Security/SecTask.h>
++#include <stdbool.h>
++static bool
++entitled_to_clear_lv(void)
++{
++	SecTaskRef secTask = SecTaskCreateFromSelf(NULL);
++	if (secTask == NULL) {
++		fatal("SecTaskCreateFromSelf failed");
++	}
++	CFTypeRef value = SecTaskCopyValueForEntitlement(secTask, CFSTR("com.apple.private.security.clear-library-validation"), NULL);
++	if (value == NULL) {
++		CFRelease(secTask);
++		return false;
++	}
++	bool isBooleanAndTrue = (CFGetTypeID(value) == CFBooleanGetTypeID()) && CFBooleanGetValue(value);
++	CFRelease(value);
++	CFRelease(secTask);
++	return isBooleanAndTrue;
++}
++#endif
++
+ /*
+  * Main program for the ssh client.
+  */
+@@ -645,6 +670,15 @@ main(int ac, char **av)
+ 	u_int j;
+ 	struct ssh_conn_info *cinfo = NULL;
+ 
++#if defined(ENABLE_PKCS11) && defined(__APPLE_KEYCHAIN__)
++	/* Save argv for potential re-exec later. */
++	char **reexec_av = xcalloc(ac + 1, sizeof(*reexec_av));
++	for (i = 0; i < ac; i++) {
++		reexec_av[i] = xstrdup(av[i]);
++	}
++	reexec_av[i] = NULL;
++#endif
++
+ 	/* Ensure that fds 0, 1 and 2 are open or directed to /dev/null */
+ 	sanitise_stdfd();
+ 
+@@ -1347,6 +1381,37 @@ main(int ac, char **av)
+ 		fatal("Cannot fork into background without a command "
+ 		    "to execute.");
+ 
++#if defined(ENABLE_PKCS11) && defined(__APPLE_KEYCHAIN__)
++	/*
++	 * UseKeychain requires an entitlement to access passphrases
++	 * stored in Keychain.
++	 * PKCS11Provider needs to dlopen() arbitrary dylibs.
++	 * To avoid PKCS#11 provider dylibs gaining access to passphrases,
++	 * we re-exec into a separate binary when PKCS#11 functionality
++	 * is needed.  The separate binary does not have any privileged
++	 * entitlements except for being entitled to clear LV.
++	 */
++	if (options.pkcs11_provider != NULL) {
++		if (!entitled_to_clear_lv()) {
++			// ssh will re-exec ssh-apple-pkcs11
++			debug("PKCS11Provider set, reexec to ssh-apple-pkcs11 "
++			      "so we can clear LV");
++			execv(_PATH_SSH_APPLE_PKCS11, reexec_av);
++			abort();
++		} else {
++			// ssh-apple-pkcs11
++			if (options.use_keychain == 1) {
++				debug("UseKeychain=yes is incompatible with "
++				      "PKCS11Provider; disabling");
++				options.use_keychain = 0;
++			}
++			/* ssh-keychain.dylib uses getprogname() to decide
++			 * if it was called by an eligible caller. */
++			setprogname("/usr/bin/ssh");
++		}
++	}
++#endif
++
+ 	/* reinit */
+ 	log_init(argv0, options.log_level, options.log_facility, !use_syslog);
+ 	for (j = 0; j < options.num_log_verbose; j++) {
+@@ -1563,7 +1628,20 @@ main(int ac, char **av)
+ 	 * If hostname canonicalisation was not enabled, then we may not
+ 	 * have yet resolved the hostname. Do so now.
+ 	 */
++#ifdef __APPLE_NW_CONNECTION__
++	/*
++	 * Skip hostname resolution since it will be handled by
++	 * tcp_connection inside ssh_connect_direct().
++	 * We do not skip in the presence of multiple attempts,
++	 * a timeout requested, or a privileged port.
++	 * In those cases the tcp_connection is not used.
++	 */
++	if (addrs == NULL && options.proxy_command == NULL
++	    && (options.connection_attempts != 1 ||
++		options.connection_timeout > 0)) {
++#else
+ 	if (addrs == NULL && options.proxy_command == NULL) {
++#endif /* __APPLE_NW_CONNECTION__ */
+ 		debug2("resolving \"%s\" port %d", host, options.port);
+ 		if ((addrs = resolve_host(host, options.port, 1,
+ 		    cname, sizeof(cname))) == NULL)
+@@ -1578,6 +1656,9 @@ main(int ac, char **av)
+ 	/* Open a connection to the remote host. */
+ 	if (ssh_connect(ssh, host, options.host_arg, addrs, &hostaddr,
+ 	    options.port, options.connection_attempts,
++#ifdef __APPLE_NW_CONNECTION__
++	    options.address_family, options.multipath_service,
++#endif
+ 	    &timeout_ms, options.tcp_keep_alive) != 0)
+ 		exit(255);
+ 
+--- a/ssh_config.5	1697454511.917478668
++++ b/ssh_config.5	1697450826.020395463
+@@ -1526,6 +1526,12 @@ The argument to this keyword is a path t
+ .Xr ssh 1
+ should use to communicate with a PKCS#11 token providing keys for user
+ authentication.
++.\" #ifdef __APPLE_KEYCHAIN__
++Setting
++.Cm PKCS11Provider
++will disable
++.Cm UseKeychain .
++.\" #endif
+ .It Cm Port
+ Specifies the port number to connect on the remote host.
+ The default is 22.
+@@ -2103,6 +2109,20 @@ Presently, only
+ from OpenSSH 6.8 and greater support the
+ .Qq hostkeys@openssh.com
+ protocol extension used to inform the client of all the server's hostkeys.
++.\" #ifdef __APPLE_KEYCHAIN__
++.It Cm UseKeychain
++On macOS, specifies whether the system should search for passphrases in the user's keychain when attempting to use
++a particular key. When the passphrase is provided by the user, this option also specifies whether the passphrase
++should be stored into the keychain once it has been verified to be correct.
++The argument must be
++.Dq yes
++or
++.Dq no .
++The default is
++.Dq no .
++Incompatible with
++.Cm PKCS11Provider .
++.\" #endif
+ .It Cm User
+ Specifies the user to log in as.
+ This can be useful when a different user name is used on different machines.
+--- a/sshconnect.c	1697454511.918602466
++++ b/sshconnect.c	1697450841.377738696
+@@ -27,6 +27,10 @@
+ #include <netinet/in.h>
+ #include <arpa/inet.h>
+ 
++#ifdef __APPLE_NW_CONNECTION__
++#  include <nw/private.h>
++#endif /* __APPLE_NW_CONNECTION__ */
++
+ #include <ctype.h>
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -443,16 +447,157 @@ fail:
+  * and %p substituted for host and port, respectively) to use to contact
+  * the daemon.
+  */
++#ifdef __APPLE_NW_CONNECTION__
++static int
++ssh_connect_direct(struct ssh *ssh, const char *host, struct addrinfo *aitop,
++    struct sockaddr_storage *hostaddr, u_short port, int family,
++    int connection_attempts, int *timeout_ms, int want_keepalive, int want_multipath)
++#else
+ static int
+ ssh_connect_direct(struct ssh *ssh, const char *host, struct addrinfo *aitop,
+     struct sockaddr_storage *hostaddr, u_short port, int connection_attempts,
+     int *timeout_ms, int want_keepalive)
++#endif
+ {
+ 	int on = 1, saved_timeout_ms = *timeout_ms;
+ 	int oerrno, sock = -1, attempt;
+ 	char ntop[NI_MAXHOST], strport[NI_MAXSERV];
+ 	struct addrinfo *ai;
+ 
++#ifdef __APPLE_NW_CONNECTION__
++	if (aitop == NULL) {
++		/*
++		 * Hostname resolution was skipped, we use nw_connection
++		 * to leverage Happy Eyeballs and to trigger VPN on demand
++		 */
++		if (port == 0) {
++			port = SSH_DEFAULT_PORT;
++		}
++		char port_string[8];
++		snprintf(port_string, sizeof(port_string), "%d", port);
++
++		debug("Connecting to %.200s port %d.", host, port);
++
++		dispatch_queue_t queue = dispatch_queue_create("OpenSSH.nw_connection", NULL);
++		nw_endpoint_t endpoint = nw_endpoint_create_host(host, port_string);
++		nw_parameters_t parameters = nw_parameters_create_legacy_tcp_socket(NW_PARAMETERS_DEFAULT_CONFIGURATION);
++		if (want_keepalive) {
++			nw_parameters_set_keepalive_enabled(parameters, true);
++		}
++		if (want_multipath) {
++			nw_parameters_set_multipath_service(parameters, nw_multipath_service_handover);
++		}
++		if (family != AF_UNSPEC) {
++			nw_parameters_set_required_address_family(parameters, family);
++		}
++		nw_parameters_set_prefer_no_proxy(parameters, true);
++		nw_connection_t connection = nw_connection_create(endpoint, parameters);
++		nw_connection_set_queue(connection, queue);
++		nw_release(endpoint);
++		nw_release(parameters);
++		dispatch_release(queue);
++		dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
++		__block int ret = -1;
++		__block bool semaphore_signalled = false;
++		__block bool connection_connected = false;
++		__block bool connection_cancelled = false;
++		nw_connection_set_state_changed_handler(connection, ^(nw_connection_state_t state, nw_error_t _Nullable event_error) {
++			switch (state) {
++				case nw_connection_state_ready: {
++					/*
++					 * We will receive a ready event when the socket is successfully connected
++					 */
++					if (connection_connected || connection_cancelled) {
++						return;
++					}
++					connection_connected = true;
++					debug("Connection established.");
++
++					const int connected_socket = nw_connection_get_connected_socket(connection);
++					const int sock2 = dup(connected_socket); // Dup the fd out
++					if (sock2 >= 0) {
++						/* Save address of the remote host. */
++						nw_endpoint_t connected_endpoint = nw_connection_copy_connected_remote_endpoint(connection);
++						if (connected_endpoint != NULL) {
++							if (nw_endpoint_get_type(connected_endpoint) == nw_endpoint_type_address) {
++								const struct sockaddr *connected_address = nw_endpoint_get_address(connected_endpoint);
++								if (connected_address != NULL &&
++								    connected_address->sa_len <= sizeof(*hostaddr)) {
++									memcpy(hostaddr, connected_address, connected_address->sa_len);
++								}
++							}
++							nw_release(connected_endpoint);
++						}
++
++						/* Set the connection. */
++						ssh_packet_set_connection(ssh, sock2, sock2);
++
++						ret = 0;
++					} else {
++						error("ssh: connect to host %s port %u: failed to copy socket",
++						      host, port);
++						if (!connection_cancelled) {
++							connection_cancelled = true;
++							nw_connection_cancel(connection);
++						}
++					}
++					if (!semaphore_signalled) {
++						semaphore_signalled = true;
++						dispatch_semaphore_signal(semaphore);
++					}
++					break;
++				}
++				case nw_connection_state_waiting:
++				case nw_connection_state_failed: {
++					/*
++					 * We will receive a failed or waiting event on failure
++					 * to connect and when the socket is closed in ssh_packet_close()
++					 * so we can rely on that to cancel the nw_connection.
++					 * The waiting event indicates no network connectivity.
++					 */
++					if (!semaphore_signalled) { /* only log error once */
++						const int connection_error = event_error ? nw_error_get_error_code(event_error) : 0;
++						if (connection_error == kDNSServiceErr_NoSuchRecord) {
++							error("ssh: Could not resolve hostname %.100s:"
++							      " nodename nor servname provided, or not known", host);
++						} else if (connection_error <= kDNSServiceErr_Unknown &&
++							   connection_error >= -65792) {
++							error("ssh: Could not resolve hostname %.100s: %d",
++							      host, connection_error);
++						} else {
++							error("ssh: connect to host %s port %u: %s",
++							      host, port, strerror(connection_error));
++						}
++
++						semaphore_signalled = true;
++						dispatch_semaphore_signal(semaphore);
++					}
++					if (!connection_cancelled) {
++						connection_cancelled = true;
++						nw_connection_cancel(connection);
++					}
++					break;
++				}
++				case nw_connection_state_cancelled: {
++					nw_release(connection);
++					break;
++				}
++
++				default: {
++					// Ignore other states
++					break;
++				}
++			}
++		});
++		nw_connection_start(connection);
++
++		(void)dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
++		dispatch_release(semaphore);
++
++		return ret;
++	}
++#endif /* __APPLE_NW_CONNECTION__ */
++
+ 	debug3_f("entering");
+ 	memset(ntop, 0, sizeof(ntop));
+ 	memset(strport, 0, sizeof(strport));
+@@ -533,16 +678,30 @@ ssh_connect_direct(struct ssh *ssh, cons
+ 	return 0;
+ }
+ 
++#ifdef __APPLE_NW_CONNECTION__
++int
++ssh_connect(struct ssh *ssh, const char *host, const char *host_arg,
++    struct addrinfo *addrs, struct sockaddr_storage *hostaddr, u_short port,
++    int connection_attempts,
++    int family, int want_multipath,
++    int *timeout_ms, int want_keepalive)
++#else
+ int
+ ssh_connect(struct ssh *ssh, const char *host, const char *host_arg,
+     struct addrinfo *addrs, struct sockaddr_storage *hostaddr, u_short port,
+     int connection_attempts, int *timeout_ms, int want_keepalive)
++#endif
+ {
+ 	int in, out;
+ 
+ 	if (options.proxy_command == NULL) {
++#ifdef __APPLE_NW_CONNECTION__
++		return ssh_connect_direct(ssh, host, addrs, hostaddr, port,
++		    family, connection_attempts, timeout_ms, want_keepalive, want_multipath);
++#else
+ 		return ssh_connect_direct(ssh, host, addrs, hostaddr, port,
+ 		    connection_attempts, timeout_ms, want_keepalive);
++#endif
+ 	} else if (strcmp(options.proxy_command, "-") == 0) {
+ 		if ((in = dup(STDIN_FILENO)) == -1 ||
+ 		    (out = dup(STDOUT_FILENO)) == -1) {
+--- a/sshconnect.h	1696394050.000000000
++++ b/sshconnect.h	1697450845.984596933
+@@ -63,8 +63,15 @@ struct ssh_conn_info;
+ 	"r", conn_info->remuser, \
+ 	"u", conn_info->locuser
+ 
++#include <TargetConditionals.h>
++#if TARGET_OS_BRIDGE && __APPLE_NW_CONNECTION__
++#undef __APPLE_NW_CONNECTION__
++#endif
+ int	 ssh_connect(struct ssh *, const char *, const char *,
+ 	    struct addrinfo *, struct sockaddr_storage *, u_short,
++#ifdef __APPLE_NW_CONNECTION__
++	    int, int,
++#endif
+ 	    int, int *, int);
+ void	 ssh_kill_proxy_command(void);
+ 
+--- a/sshconnect2.c	1697454511.920301579
++++ b/sshconnect2.c	1697450849.063945403
+@@ -75,6 +75,11 @@
+ #include "ssh-sk.h"
+ #include "sk-api.h"
+ 
++#ifdef __APPLE_KEYCHAIN__
++#include "keychain.h"
++int found_in_keychain = 0;
++#endif
++
+ #ifdef GSSAPI
+ #include "ssh-gss.h"
+ #endif
+@@ -1689,6 +1694,12 @@ load_identity_file(Identity *id)
+ 	snprintf(prompt, sizeof prompt,
+ 	    "Enter passphrase for key '%.100s': ", id->filename);
+ 	for (i = 0; i <= options.number_of_password_prompts; i++) {
++#ifdef __APPLE_KEYCHAIN__
++		if (i == 0 && options.use_keychain && (passphrase = keychain_read_passphrase(id->filename)) != NULL) {
++			found_in_keychain = 1;
++			debug2("using passphrase from keychain");
++		} else
++#endif
+ 		if (i == 0)
+ 			passphrase = "";
+ 		else {
+@@ -1738,6 +1749,14 @@ load_identity_file(Identity *id)
+ 			private = NULL;
+ 			quit = 1;
+ 		}
++
++#ifdef __APPLE_KEYCHAIN__
++		if (!quit && private != NULL && !(id->key && id->isprivate) && options.use_keychain && !found_in_keychain) {
++			debug2("storing passphrase in keychain");
++			store_in_keychain(id->filename, passphrase);
++		}
++#endif
++
+ 		if (!quit && private != NULL && id->agent_fd == -1 &&
+ 		    !(id->key && id->isprivate))
+ 			maybe_add_key_to_agent(id->filename, private, comment,
+--- a/sshd.c	1697454511.922959912
++++ b/sshd.c	1697450861.039636905
+@@ -43,6 +43,9 @@
+  */
+ 
+ #include "includes.h"
++#ifdef __APPLE_ENDPOINTSECURITY__
++#include "submit-ess-event.h"
++#endif
+ 
+ #include <sys/types.h>
+ #include <sys/ioctl.h>
+@@ -92,6 +95,13 @@
+ #include <systemd/sd-daemon.h>
+ #endif
+ 
++#ifdef __APPLE_MANAGED_CONFIGURATION__
++#include <SoftLinking/WeakLinking.h>
++#include <libmanagedconfigurationfiles.h>
++
++WEAK_LINK_FORCE_IMPORT(mcf_service_path_for_service_type);
++#endif
++
+ #include "xmalloc.h"
+ #include "ssh.h"
+ #include "ssh2.h"
+@@ -1661,6 +1671,29 @@ main(int ac, char **av)
+ 	/* Initialize configuration options to their default values. */
+ 	initialize_server_options(&options);
+ 
++#ifdef __APPLE_MANAGED_CONFIGURATION__
++	if (mcf_service_path_for_service_type != NULL) {
++		char buf[PATH_MAX];
++		errno = 0;
++		size_t rc = mcf_service_path_for_service_type(
++		    "com.apple.sshd", buf, sizeof(buf));
++		if (rc > sizeof(buf)) {
++			error("Error reading managed configuration, "
++			    "path length > PATH_MAX. "
++			    "Proceeding with default configuration.");
++		} else if (rc > 0) {
++			xasprintf(&config_file_name,
++			    "%s" _PATH_SERVER_CONFIG_FILE, buf);
++		} else if (0 != errno) {
++			error("Error reading managed configuration (%d: %s). "
++			    "Proceeding with default configuration.", errno,
++			    strerror(errno));
++		} else {
++			verbose("No managed configuration found.");
++		}
++	}
++#endif
++
+ 	/* Parse command-line arguments. */
+ 	while ((opt = getopt(ac, av,
+ 	    "C:E:b:c:f:g:h:k:o:p:u:46DGQRTdeiqrtV")) != -1) {
+@@ -2384,6 +2417,14 @@ main(int ac, char **av)
+ #ifdef SSH_AUDIT_EVENTS
+ 	audit_event(ssh, SSH_AUTH_SUCCESS);
+ #endif
++#ifdef __APPLE_ENDPOINTSECURITY__
++	// The above call to audit_event(SSH_AUTH_SUCCESS) sets up
++	// the audit session, allowing ES clients to observe the new
++	// audit session ID and the authenticated user's audit uid
++	// on the audit token of the process, even though the
++	// process is still running with uid/euid 0.
++	submit_ess_event(ssh->remote_ipaddr, authctxt->user, SSH_AUTH_SUCCESS);
++#endif
+ 
+ #ifdef GSSAPI
+ 	if (options.gss_authentication) {
+@@ -2432,6 +2473,9 @@ main(int ac, char **av)
+ #ifdef SSH_AUDIT_EVENTS
+ 	PRIVSEP(audit_event(ssh, SSH_CONNECTION_CLOSE));
+ #endif
++#ifdef __APPLE_ENDPOINTSECURITY__
++	PRIVSEP(submit_ess_event(ssh->remote_ipaddr, authctxt->user, SSH_CONNECTION_CLOSE));
++#endif
+ 
+ 	ssh_packet_close(ssh);
+ 
+@@ -2609,5 +2653,12 @@ cleanup_exit(int i)
+ 	if (the_active_state != NULL && (!use_privsep || mm_is_monitor()))
+ 		audit_event(the_active_state, SSH_CONNECTION_ABANDON);
+ #endif
++
++#ifdef __APPLE_ENDPOINTSECURITY__
++	if (the_active_state != NULL && the_authctxt != NULL && (!use_privsep || mm_is_monitor())) {
++		submit_ess_event(the_active_state->remote_ipaddr, the_authctxt->user, SSH_CONNECTION_ABANDON);
++	}
++#endif
++
+ 	_exit(i);
+ }
+--- a/sshkey.c	1697454511.926934994
++++ b/sshkey.c	1697450865.712758744
+@@ -55,6 +55,7 @@
+ #include "sshbuf.h"
+ #include "cipher.h"
+ #include "digest.h"
++#include "log.h"
+ #define SSHKEY_INTERNAL
+ #include "sshkey.h"
+ #include "match.h"
+@@ -2365,6 +2366,8 @@ sshkey_cert_check_authority(const struct
+ int
+ sshkey_cert_check_authority_now(const struct sshkey *k,
+     int want_host, int require_principal, int wildcard_pattern,
++#ifdef __APPLE__
++#endif
+     const char *name, const char **reason)
+ {
+ 	time_t now;
+@@ -2374,6 +2377,8 @@ sshkey_cert_check_authority_now(const st
+ 		*reason = "Certificate invalid: not yet valid";
+ 		return SSH_ERR_KEY_CERT_INVALID;
+ 	}
++#ifdef __APPLE__
++#endif
+ 	return sshkey_cert_check_authority(k, want_host, require_principal,
+ 	    wildcard_pattern, (uint64_t)now, name, reason);
+ }
+@@ -2386,6 +2391,8 @@ sshkey_cert_check_host(const struct sshk
+ 	int r;
+ 
+ 	if ((r = sshkey_cert_check_authority_now(key, 1, 0, wildcard_principals,
++#ifdef __APPLE__
++#endif
+ 	    host, reason)) != 0)
+ 		return r;
+ 	if (sshbuf_len(key->cert->critical) != 0) {
+--- a/sshkey.h	1697454511.927606098
++++ b/sshkey.h	1697450871.175280302
+@@ -238,6 +238,8 @@ int	 sshkey_cert_copy(const struct sshke
+ int	 sshkey_cert_check_authority(const struct sshkey *, int, int, int,
+     uint64_t, const char *, const char **);
+ int	 sshkey_cert_check_authority_now(const struct sshkey *, int, int, int,
++#ifdef __APPLE__
++#endif
+     const char *, const char **);
+ int	 sshkey_cert_check_host(const struct sshkey *, const char *,
+     int , const char *, const char **);
+--- a/sshd-keygen-wrapper.8	1900-01-00 00:00:00.000000000 +0000
++++ b/sshd-keygen-wrapper.8	1697454262.298885595
+@@ -0,0 +1,23 @@
++.\"
++.\" Copyright (c) 2017 Apple Inc. All rights reserved.
++.\"
++.Dd April 14, 2017
++.Dt SSHD-KEYGEN-WRAPPER 1
++.Os iOS
++.Sh NAME
++.Nm sshd-keygen-wrapper
++.Nd Simple wrapper for sshd ensuring host keys are properly created
++.Sh SYNOPSIS
++.Nm
++.Op Fl s
++.Op Ar arguments ...
++.Sh DESCRIPTION
++.Nm
++is a simple wrapper for
++.Nm sshd,
++which ensures host keys for all the supported algorithms have been created before the
++.Nm sshd
++service gets started.
++If
++.Fl s
++is specified, password authentication is disabled.
+--- a/sshd-keygen-wrapper.c	1900-01-00 00:00:00.000000000 +0000
++++ b/sshd-keygen-wrapper.c	1697454466.664952578
+@@ -0,0 +1,167 @@
++#include <os/log.h>
++#include <printf.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <limits.h>
++#include <unistd.h>
++#include <string.h>
++#include <errno.h>
++#include <sysexits.h>
++#include <sys/stat.h>
++#include <sys/wait.h>
++
++#import <CrashReporterClient.h>
++
++#define PREFIX "/usr"
++#define SSHDIR "/etc/ssh"
++
++static os_log_t logger;
++static printf_domain_t xp = NULL;
++
++static int
++fprintf_shell(FILE *stream, const struct printf_info *info, const void *const *args)
++{
++    static const char safechars[] = "_-/:%,.0123456789"
++        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
++    const char *s = *(const char **)args[0];
++    if (s[0] != '\0' && strlen(s) == strspn(s, safechars)) {
++        return fprintf(stream, "%s", s);
++    }
++    int count = 2; // leading & trailing single quotes
++    fputc('\'', stream);
++    for (; *s != '\0'; s++) {
++        switch (*s) {
++        case '\'':
++            count += fprintf(stream, "'\\''");
++            break;
++        default:
++            fputc(*s, stream);
++            count++;
++            break;
++        }
++    }
++    fputc('\'', stream);
++    return count;
++}
++
++static int
++fprintf_shell_arginfo(const struct printf_info *info, size_t n, int *argtypes)
++{
++    argtypes[0] = PA_STRING;
++    return 1;
++}
++
++static void
++setup_printf(void)
++{
++    xp = new_printf_domain();
++    register_printf_domain_function(xp, 'S', fprintf_shell, fprintf_shell_arginfo, NULL);
++}
++
++static int
++fmt_argv(char *buf, size_t buflen, int argc, char **argv)
++{
++    char *end = &buf[buflen];
++    char *p = buf;
++    for (int i = 0; i < argc && argv[i] != NULL; ++i) {
++        int n = sxprintf(p, end - p, xp, NULL, "%s%S", i ? " " : "", argv[i]);
++        if (n < 0 || n >= end - p) {
++            return 1;
++        }
++        p += n;
++    }
++    return 0;
++}
++
++
++static int
++check_and_gen_key(const char *key_type, char *envp[])
++{
++    char path[PATH_MAX];
++    char *key = strdup(key_type);
++    struct stat s;
++
++    snprintf(path, sizeof(path), "%s/ssh_host_%s_key", SSHDIR, key_type);
++    if (0 != stat(path, &s)) {
++        pid_t child;
++        char *argv[] = { PREFIX "/bin/ssh-keygen",
++                         "-q",
++                         "-t", key,
++                         "-f", path,
++                         "-N", "",
++                         "-C", "",
++                         0};
++        os_log_info(logger, "Generating %s key at %s", key, path);
++        char msg[1024] = { 0 };
++        fmt_argv(msg, sizeof(msg), sizeof(argv) / sizeof(argv[0]), argv);
++        child = fork();
++        if (child == 0) {
++            logger = os_log_create("com.apple.sshd-keygen-wrapper", "default");
++            if (!freopen("/dev/null", "w", stdout)) {
++                os_log_error(logger, "failed to redirect stdout for ssh-keygen operation");
++            }
++
++            execve(argv[0], &argv[0], envp);
++            os_log_fault(logger, "execve: %{darwin.errno}d: `%s`", errno, msg);
++            CRSetCrashLogMessage(msg);
++            abort();
++        } else {
++            int stat_loc;
++            (void)waitpid(child, &stat_loc, 0);
++            if (WIFEXITED(stat_loc)) {
++                if (WEXITSTATUS(stat_loc)) {
++                    os_log_fault(logger, "`%s` exited with status %d",
++                        msg, WEXITSTATUS(stat_loc));
++                }
++            } else if (WIFSTOPPED(stat_loc)) {
++                os_log_fault(logger, "`%s` stopped on signal %d",
++                    msg, WSTOPSIG(stat_loc));
++            } else if (WIFSIGNALED(stat_loc)) {
++                os_log_fault(logger, "`%s` terminated on signal %d",
++                    msg, WTERMSIG(stat_loc));
++            }
++        }
++    }
++
++    free(key);
++    return 0;
++}
++
++static void
++usage(void)
++{
++    fprintf(stderr, "Usage: sshd-keygen-wrapper [-s]\n");
++    exit(EX_USAGE);
++}
++extern int optind;
++
++int
++main(int argc, char **argv_, char **envp)
++{
++    setup_printf();
++    char *argv[] = { PREFIX "/sbin/sshd", "-i", 0 };
++    int ch = -1;
++
++    logger = os_log_create("com.apple.sshd-keygen-wrapper", "default");
++
++    while ((ch = getopt(argc, argv_, "")) != -1) {
++        switch (ch) {
++        default:
++            usage();
++        }
++    }
++    argc -= optind;
++    argv_ += optind;
++
++    check_and_gen_key("rsa", envp);
++    check_and_gen_key("dsa", envp);
++    check_and_gen_key("ecdsa", envp);
++    check_and_gen_key("ed25519", envp);
++
++    char msg[1024] = { 0 };
++    fmt_argv(msg, sizeof(msg), sizeof(argv) / sizeof(argv[0]), argv);
++    os_log_debug(logger, "execve: `%s`", msg);
++    execve(argv[0], &argv[0], envp);
++    os_log_fault(logger, "execve: %{darwin.errno}d: `%s`", errno, msg);
++    abort();
++}
+--- /dev/null	1900-01-00 00:00:00.000000000 +0000
++++ b/dlopen_lv.c	1697450895.710776551
+@@ -0,0 +1,63 @@
++#include "includes.h"
++
++#ifdef __APPLE_CLEAR_LV__
++#include <dlfcn.h>
++#include <unistd.h>
++#include <sys/fcntl.h>
++__attribute__((weak_import)) int _dyld_shared_cache_contains_path(const char *path);
++#include <System/sys/codesign.h>
++#include "log.h"
++
++/*
++ * <rdar://problem/65693657> [sshd] Adopt
++ * com.apple.private.security.clear-library-validation. Attempt to
++ * dynamically load a module. Disable LV on the process if necessary.
++ * NB: Code is based on OpenPAM's openpam_dlopen().
++ */
++
++void *
++dlopen_lv(char *path, int mode)
++{
++    /* Fast path: dyld shared cache. */
++    if (_dyld_shared_cache_contains_path(path)) {
++        return dlopen(path, mode);
++    }
++
++    /* Slow path: check file on disk. */
++    if (faccessat(AT_FDCWD, path, R_OK, AT_EACCESS) != 0) {
++        return NULL;
++    }
++
++    void *dlh = dlopen(path, mode);
++    if (dlh != NULL) {
++        return dlh;
++    }
++
++    /*
++     * The module exists and is readable, but failed to load.  If
++     * library validation is enabled, try disabling it and then try
++     * again.
++     */
++    int   csflags = 0;
++    pid_t pid     = getpid();
++    csops(pid, CS_OPS_STATUS, &csflags, sizeof(csflags));
++    if ((csflags & (CS_FORCED_LV | CS_REQUIRE_LV)) == 0) {
++        return NULL;
++    }
++
++    int rv = csops(getpid(), CS_OPS_CLEAR_LV, NULL, 0);
++    if (rv != 0) {
++        error("csops(CS_OPS_CLEAR_LV) failed: %d", rv);
++        return NULL;
++    }
++
++    dlh = dlopen(path, mode);
++    if (dlh == NULL) {
++        /* Failed to load even with LV disabled: re-enable LV. */
++        csflags = CS_REQUIRE_LV;
++        csops(pid, CS_OPS_SET_STATUS, &csflags, sizeof(csflags));
++    }
++
++    return dlh;
++}
++#endif /* __APPLE_CLEAR_LV__ */
+--- /dev/null	1900-01-00 00:00:00.000000000 +0000
++++ b/keychain.h	1697450525.269172805
+@@ -0,0 +1,37 @@
++/*
++ * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
++ *
++ * @APPLE_BSD_LICENSE_HEADER_START@
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ * 1.  Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ * 2.  Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in the
++ *     documentation and/or other materials provided with the distribution.
++ * 3.  Neither the name of Apple Inc. ("Apple") nor the names of its
++ *     contributors may be used to endorse or promote products derived from
++ *     this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE AND ITS CONTRIBUTORS "AS IS" AND ANY
++ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL APPLE OR ITS CONTRIBUTORS BE LIABLE FOR ANY
++ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ *
++ * @APPLE_BSD_LICENSE_HEADER_END@
++ */
++
++void	store_in_keychain(const char *filename, const char *passphrase);
++void	remove_from_keychain(const char *filename);
++char	*keychain_read_passphrase(const char *filename);
++int 	load_identities_from_keychain(int (^add_identity)(const char *identity));
++void	warn_keychain_option(void);
+--- /dev/null	1900-01-00 00:00:00.000000000 +0000
++++ b/keychain.m	1697450527.716985392
+@@ -0,0 +1,247 @@
++/*
++ * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
++ *
++ * @APPLE_BSD_LICENSE_HEADER_START@
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ * 1.  Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ * 2.  Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in the
++ *     documentation and/or other materials provided with the distribution.
++ * 3.  Neither the name of Apple Inc. ("Apple") nor the names of its
++ *     contributors may be used to endorse or promote products derived from
++ *     this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE AND ITS CONTRIBUTORS "AS IS" AND ANY
++ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL APPLE OR ITS CONTRIBUTORS BE LIABLE FOR ANY
++ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ *
++ * @APPLE_BSD_LICENSE_HEADER_END@
++ */
++
++#import <Foundation/Foundation.h>
++#import <Security/Security.h>
++#import <Security/SecItemPriv.h>
++#include <sys/stat.h>
++#include <stdio.h>
++
++#include "xmalloc.h"
++#include "sshkey.h"
++#include "ssherr.h"
++#include "authfile.h"
++#include "openbsd-compat/openbsd-compat.h"
++#include "log.h"
++
++char *keychain_read_passphrase(const char *filename)
++{
++	OSStatus	ret = errSecSuccess;
++	NSString	*accountString = [NSString stringWithUTF8String: filename];
++	NSData		*passphraseData = NULL;
++
++	if (accountString == nil) {
++		debug2("Cannot retrieve identity passphrase from the keychain since the path is not UTF8.");
++		return NULL;
++	}
++
++	NSDictionary	*searchQuery = @{
++			       (id)kSecClass: (id)kSecClassGenericPassword,
++			       (id)kSecAttrAccount: accountString,
++			       (id)kSecAttrLabel: [NSString stringWithFormat: @"SSH: %@", accountString],
++			       (id)kSecAttrService: @"OpenSSH",
++			       (id)kSecUseDataProtectionKeychain: @YES,
++			       (id)kSecAttrAccessGroup: @"com.apple.ssh.passphrases",
++			       (id)kSecReturnData: @YES,
++			       (id)kSecUseAuthenticationUI: (id)kSecUseAuthenticationUIFail};
++	debug3("Search for item with query: %s", [[searchQuery description] UTF8String]);
++	ret = SecItemCopyMatching((CFDictionaryRef)searchQuery, (CFTypeRef *)&passphraseData);
++	if (ret == errSecItemNotFound) {
++		debug2("Passphrase not found in the keychain.");
++		return NULL;
++	} else if (ret != errSecSuccess) {
++		NSString *errorString = (NSString *)SecCopyErrorMessageString(ret, NULL);
++		debug2("Unexpected keychain error while searching for an item: %s", [errorString UTF8String]);
++		[errorString release];
++		[passphraseData release];
++		return NULL;
++	}
++
++	if (![passphraseData isKindOfClass: [NSData class]]) {
++		debug2("Malformed result returned from the keychain");
++		[passphraseData release];
++		return NULL;
++	}
++
++	char *passphrase = xcalloc([passphraseData length] + 1, sizeof(char));
++	[passphraseData getBytes: passphrase length: [passphraseData length]];
++	[passphraseData release];
++
++	// Try to load the key first and only return the passphrase if we know it's the right one
++	struct sshkey *private = NULL;
++	int r = sshkey_load_private_type(KEY_UNSPEC, filename, passphrase, &private, NULL);
++	if (r != SSH_ERR_SUCCESS) {
++		debug2("Could not unlock key with the passphrase retrieved from the keychain.");
++		freezero(passphrase, strlen(passphrase));
++		return NULL;
++	}
++	sshkey_free(private);
++
++	return passphrase;
++}
++
++void store_in_keychain(const char *filename, const char *passphrase)
++{
++	OSStatus	ret = errSecSuccess;
++	BOOL		updateExistingItem = NO;
++	NSString	*accountString = [NSString stringWithUTF8String: filename];
++
++	if (accountString == nil) {
++		debug2("Cannot store identity passphrase into the keychain since the path is not UTF8.");
++		return;
++	}
++
++	NSDictionary	*defaultAttributes = @{
++				(id)kSecClass: (id)kSecClassGenericPassword,
++				(id)kSecAttrAccount: accountString,
++				(id)kSecAttrLabel: [NSString stringWithFormat: @"SSH: %@", accountString],
++				(id)kSecAttrService: @"OpenSSH",
++				(id)kSecUseDataProtectionKeychain: @YES,
++				(id)kSecAttrAccessGroup: @"com.apple.ssh.passphrases",
++				(id)kSecUseAuthenticationUI: (id)kSecUseAuthenticationUIFail};
++
++	CFTypeRef searchResults = NULL;
++	NSMutableDictionary *searchQuery = [@{(id)kSecReturnRef: @YES} mutableCopy];
++	[searchQuery addEntriesFromDictionary: defaultAttributes];
++
++	debug3("Search for existing item with query: %s", [[searchQuery description] UTF8String]);
++	ret = SecItemCopyMatching((CFDictionaryRef)searchQuery, &searchResults);
++	[searchQuery release];
++	if (ret == errSecSuccess) {
++		debug3("Item already exists in the keychain, updating.");
++		updateExistingItem = YES;
++
++	} else if (ret == errSecItemNotFound) {
++		debug3("Item does not exist in the keychain, adding.");
++	} else {
++		NSString *errorString = (NSString *)SecCopyErrorMessageString(ret, NULL);
++		debug3("Unexpected keychain error while searching for an item: %s", [errorString UTF8String]);
++		[errorString release];
++	}
++
++	if (updateExistingItem) {
++		NSDictionary *updateQuery = defaultAttributes;
++		NSDictionary *changes = @{(id)kSecValueData: [NSData dataWithBytesNoCopy: (void *)passphrase length: strlen(passphrase) freeWhenDone: NO]};
++
++		ret = SecItemUpdate((CFDictionaryRef)updateQuery, (CFDictionaryRef)changes);
++		if (ret != errSecSuccess) {
++			NSString *errorString = (NSString *)SecCopyErrorMessageString(ret, NULL);
++			debug3("Unexpected keychain error while updating the item: %s", [errorString UTF8String]);
++			[errorString release];
++		}
++	} else {
++		NSMutableDictionary *addQuery = [@{(id)kSecValueData: [NSData dataWithBytesNoCopy: (void *)passphrase length: strlen(passphrase) freeWhenDone: NO]} mutableCopy];
++
++		[addQuery addEntriesFromDictionary: defaultAttributes];
++		ret = SecItemAdd((CFDictionaryRef)addQuery, NULL);
++		[addQuery release];
++		if (ret != errSecSuccess) {
++			NSString *errorString = (NSString *)SecCopyErrorMessageString(ret, NULL);
++			debug3("Unexpected keychain error while inserting the item: %s", [errorString UTF8String]);
++			[errorString release];
++		}
++	}
++}
++
++/*
++ * Remove the passphrase for a given identity from the keychain.
++ */
++void
++remove_from_keychain(const char *filename)
++{
++	OSStatus	ret = errSecSuccess;
++	NSString	*accountString = [NSString stringWithUTF8String: filename];
++
++	if (accountString == nil) {
++		debug2("Cannot delete identity passphrase from the keychain since the path is not UTF8.");
++		return;
++	}
++
++	NSDictionary	*searchQuery = @{
++			       (id)kSecClass: (id)kSecClassGenericPassword,
++			       (id)kSecAttrAccount: accountString,
++			       (id)kSecAttrService: @"OpenSSH",
++			       (id)kSecUseDataProtectionKeychain: @YES,
++			       (id)kSecAttrAccessGroup: @"com.apple.ssh.passphrases",
++			       (id)kSecUseAuthenticationUI: (id)kSecUseAuthenticationUIFail};
++
++	ret = SecItemDelete((CFDictionaryRef)searchQuery);
++	if (ret == errSecSuccess) {
++		NSString *errorString = (NSString *)SecCopyErrorMessageString(ret, NULL);
++		debug3("Unexpected keychain error while deleting the item: %s", [errorString UTF8String]);
++		[errorString release];
++	}
++}
++
++
++int
++load_identities_from_keychain(int (^add_identity)(const char *identity))
++{
++	int 		ret = 0;
++	OSStatus	err = errSecSuccess;
++
++	NSArray		*searchResults = nil;
++	NSDictionary	*searchQuery = @{
++				(id)kSecClass: (id)kSecClassGenericPassword,
++				(id)kSecAttrService: @"OpenSSH",
++				(id)kSecUseDataProtectionKeychain: @YES,
++				(id)kSecAttrAccessGroup: @"com.apple.ssh.passphrases",
++				(id)kSecReturnAttributes: @YES,
++				(id)kSecMatchLimit: (id)kSecMatchLimitAll,
++				(id)kSecUseAuthenticationUI: (id)kSecUseAuthenticationUIFail};
++
++	err = SecItemCopyMatching((CFDictionaryRef)searchQuery, (CFTypeRef *)&searchResults);
++	if (err == errSecItemNotFound) {
++		fprintf(stderr, "No identity found in the keychain.\n");
++		[searchResults release];
++		return 0;
++	} else if (err != errSecSuccess || ![searchResults isKindOfClass: [NSArray class]]) {
++		return 1;
++	}
++
++	for (NSDictionary *itemAttributes in searchResults) {
++		NSString	*accountString = itemAttributes[(id)kSecAttrAccount];
++		struct stat	st;
++
++		if (stat([accountString UTF8String], &st) < 0)
++			continue;
++		if (add_identity([accountString UTF8String]))
++			ret = 1;
++	}
++	[searchResults release];
++
++	return ret;
++}
++
++void
++warn_keychain_option()
++{
++	static int warned = 0;
++	if (warned++)
++		return;
++	fprintf(stderr,
++"WARNING: The -K and -A flags are deprecated and have been replaced\n"
++"         by the --apple-use-keychain and --apple-load-keychain\n"
++"         flags, respectively.  To suppress this warning, set the\n"
++"         environment variable APPLE_SSH_ADD_BEHAVIOR as described in\n"
++"         the ssh-add(1) manual page.\n");
++}
+--- a/Makefile.in	1697454511.856479885
++++ b/Makefile.in	1697474042.820198004
+@@ -21,6 +21,9 @@ abs_top_builddir=@abs_top_builddir@
+ DESTDIR=
+ VPATH=@srcdir@
+ SSH_PROGRAM=@bindir@/ssh
++SSH_APPLE_PKCS11=$(libexecdir)/ssh-apple-pkcs11
++SSHD_KEYGEN_WRAPPER=$(libexecdir)/sshd-keygen-wrapper
++SLAPCONFIG_KEYGEN=$(libexecdir)/slapconfig-keygen
+ ASKPASS_PROGRAM=$(libexecdir)/ssh-askpass
+ SFTP_SERVER=$(libexecdir)/sftp-server
+ SSH_KEYSIGN=$(libexecdir)/ssh-keysign
+@@ -69,7 +72,16 @@ MKDIR_P=@MKDIR_P@
+ 
+ .SUFFIXES: .lo
+ 
+-TARGETS=ssh$(EXEEXT) sshd$(EXEEXT) ssh-add$(EXEEXT) ssh-keygen$(EXEEXT) ssh-keyscan${EXEEXT} ssh-keysign${EXEEXT} ssh-pkcs11-helper$(EXEEXT) ssh-agent$(EXEEXT) scp$(EXEEXT) sftp-server$(EXEEXT) sftp$(EXEEXT) ssh-sk-helper$(EXEEXT)
++TARGETS=ssh$(EXEEXT) sshd$(EXEEXT) ssh-add$(EXEEXT) ssh-keygen$(EXEEXT) ssh-keyscan${EXEEXT} ssh-keysign${EXEEXT} ssh-pkcs11-helper$(EXEEXT) ssh-agent$(EXEEXT) scp$(EXEEXT) sftp-server$(EXEEXT) sftp$(EXEEXT) ssh-sk-helper$(EXEEXT) \
++	ssh-apple-pkcs11$(EXEEXT) ssh-copy-id$(EXEEXT) sshd-keygen-wrapper$(EXEEXT) slapconfig-keygen$(EXEEXT)
++
++# Apple specific
++SSHAPPLEPKCS11_OBJS=\
++	platform-pledge.o \
++	${SSHOBJS}
++
++SSHDKEYGENWRAPPER_OBJS=\
++	sshd-keygen-wrapper.o
+ 
+ XMSS_OBJS=\
+ 	ssh-xmss.o \
+@@ -112,12 +124,12 @@ LIBSSH_OBJS=${LIBOPENSSH_OBJS} \
+ 	kexsntrup761x25519.o sntrup761.o kexgen.o \
+ 	kexgssc.o \
+ 	sftp-realpath.o platform-pledge.o platform-tracing.o platform-misc.o \
+-	sshbuf-io.o
++	sshbuf-io.o dlopen_lv.o
+ 
+ SKOBJS=	ssh-sk-client.o
+ 
+ SSHOBJS= ssh.o readconf.o clientloop.o sshtty.o \
+-	sshconnect.o sshconnect2.o mux.o $(SKOBJS)
++	sshconnect.o sshconnect2.o mux.o $(SKOBJS) keychain.o
+ 
+ SSHDOBJS=sshd.o auth-rhosts.o auth-passwd.o \
+ 	audit.o audit-bsm.o audit-linux.o platform.o \
+@@ -132,13 +144,13 @@ SSHDOBJS=sshd.o auth-rhosts.o auth-passw
+ 	srclimit.o sftp-server.o sftp-common.o \
+ 	sandbox-null.o sandbox-rlimit.o sandbox-systrace.o sandbox-darwin.o \
+ 	sandbox-seccomp-filter.o sandbox-capsicum.o sandbox-pledge.o \
+-	sandbox-solaris.o uidswap.o $(SKOBJS)
++	sandbox-solaris.o uidswap.o $(SKOBJS) submit-ess-event.o
+ 
+ SFTP_CLIENT_OBJS=sftp-common.o sftp-client.o sftp-glob.o
+ 
+ SCP_OBJS=	scp.o progressmeter.o $(SFTP_CLIENT_OBJS)
+ 
+-SSHADD_OBJS=	ssh-add.o $(SKOBJS)
++SSHADD_OBJS=	ssh-add.o $(SKOBJS) keychain.o
+ 
+ SSHAGENT_OBJS=	ssh-agent.o ssh-pkcs11-client.o $(SKOBJS)
+ 
+@@ -192,6 +204,9 @@ $(LIBSSH_OBJS): Makefile.in config.h
+ $(SSHOBJS): Makefile.in config.h
+ $(SSHDOBJS): Makefile.in config.h
+ 
++keychain.o: keychain.m
++	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
++
+ .c.o:
+ 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+ 
+@@ -204,6 +219,22 @@ libssh.a: $(LIBSSH_OBJS)
+ 	$(AR) rv $@ $(LIBSSH_OBJS)
+ 	$(RANLIB) $@
+ 
++LIBSLAPCONFIG_KEYGEN=$(srcdir)/openssh-legacy/libslapconfig-keygen.a
++$(LIBSLAPCONFIG_KEYGEN):
++	(cd $(srcdir)/openssh-legacy && $(MAKE))
++
++ssh-apple-pkcs11$(EXEEXT): $(SSHAPPLEPKCS11_OBJS)
++	$(LD) -o $@ $(SSHAPPLEPKCS11_OBJS) -lnetwork -lresolv -lssh -lopenbsd-compat -framework Kerberos -lz $(LDFLAGS) $(LIBS)
++
++sshd-keygen-wrapper$(EXEEXT): $(SSHDKEYGENWRAPPER_OBJS)
++	$(LD) -o $@ $(SSHDKEYGENWRAPPER_OBJS) -lMobileGestalt -lCrashReporterClient $(LDFLAGS) $(LIBS)
++
++ssh-copy-id$(EXEEXT):
++	cp $(srcdir)/contrib/ssh-copy-id $@
++
++slapconfig-keygen$(EXEEXT): $(LIBSLAPCONFIG_KEYGEN)
++	$(LD) -o $@ $(LIBSLAPCONFIG_KEYGEN) -lresolv $(LDFLAGS) $(LIBS)
++
+ ssh$(EXEEXT): $(LIBCOMPAT) libssh.a $(SSHOBJS)
+ 	$(LD) -o $@ $(SSHOBJS) $(LDFLAGS) -lssh -lopenbsd-compat $(LIBS) $(GSSLIBS) $(CHANNELLIBS)
+ 
+@@ -298,6 +329,7 @@ clean:	regressclean
+ 	rm -f regress/misc/sk-dummy/*.lo
+ 	rm -f regress/misc/sk-dummy/sk-dummy.so
+ 	(cd openbsd-compat && $(MAKE) clean)
++	(cd $(srcdir)/openssh-legacy && $(MAKE) clean)
+ 
+ distclean:	regressclean
+ 	rm -f *.o *.a $(TARGETS) logintest config.cache config.log
+@@ -393,6 +425,10 @@ install-files:
+ 	$(MKDIR_P) $(DESTDIR)$(mandir)/$(mansubdir)8
+ 	$(MKDIR_P) $(DESTDIR)$(libexecdir)
+ 	$(MKDIR_P) -m 0755 $(DESTDIR)$(PRIVSEP_PATH)
++	$(INSTALL) -m 0755 $(STRIP_OPT) ssh-apple-pkcs11$(EXEEXT) $(DESTDIR)$(SSH_APPLE_PKCS11)$(EXEEXT)
++	$(INSTALL) -m 0755 $(STRIP_OPT) ssh-copy-id$(EXEEXT) $(DESTDIR)$(bindir)/ssh-copy-id$(EXEEXT)
++	$(INSTALL) -m 0755 $(STRIP_OPT) sshd-keygen-wrapper$(EXEEXT) $(DESTDIR)$(SSHD_KEYGEN_WRAPPER)$(EXEEXT)
++	$(INSTALL) -m 0755 $(STRIP_OPT) slapconfig-keygen$(EXEEXT) $(DESTDIR)$(SLAPCONFIG_KEYGEN)$(EXEEXT)
+ 	$(INSTALL) -m 0755 $(STRIP_OPT) ssh$(EXEEXT) $(DESTDIR)$(bindir)/ssh$(EXEEXT)
+ 	$(INSTALL) -m 0755 $(STRIP_OPT) scp$(EXEEXT) $(DESTDIR)$(bindir)/scp$(EXEEXT)
+ 	$(INSTALL) -m 0755 $(STRIP_OPT) ssh-add$(EXEEXT) $(DESTDIR)$(bindir)/ssh-add$(EXEEXT)
+@@ -405,6 +441,8 @@ install-files:
+ 	$(INSTALL) -m 0755 $(STRIP_OPT) ssh-sk-helper$(EXEEXT) $(DESTDIR)$(SSH_SK_HELPER)$(EXEEXT)
+ 	$(INSTALL) -m 0755 $(STRIP_OPT) sftp$(EXEEXT) $(DESTDIR)$(bindir)/sftp$(EXEEXT)
+ 	$(INSTALL) -m 0755 $(STRIP_OPT) sftp-server$(EXEEXT) $(DESTDIR)$(SFTP_SERVER)$(EXEEXT)
++	$(INSTALL) -m 644 $(srcdir)/contrib/ssh-copy-id.1 $(DESTDIR)$(mandir)/$(mansubdir)1/ssh-copy-id.1
++	$(INSTALL) -m 644 $(srcdir)/sshd-keygen-wrapper.8 $(DESTDIR)$(mandir)/$(mansubdir)8/sshd-keygen-wrapper.8
+ 	$(INSTALL) -m 644 ssh.1.out $(DESTDIR)$(mandir)/$(mansubdir)1/ssh.1
+ 	$(INSTALL) -m 644 scp.1.out $(DESTDIR)$(mandir)/$(mansubdir)1/scp.1
+ 	$(INSTALL) -m 644 ssh-add.1.out $(DESTDIR)$(mandir)/$(mansubdir)1/ssh-add.1
+--- /dev/null	1900-01-00 00:00:00.000000000 +0000
++++ b/submit-ess-event.c	1697451011.461209836
+@@ -0,0 +1,134 @@
++//
++//  submit-ess-event.c
++//  sshd
++//
++//  Copyright © 2022 Apple Inc. All rights reserved.
++//
++
++#ifdef __APPLE_ENDPOINTSECURITY__
++#include <EndpointSecuritySystem/ESSubmitSPI.h>
++#include <SoftLinking/WeakLinking.h>
++
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <netdb.h>
++#include <string.h>
++#include <errno.h>
++
++#include "submit-ess-event.h"
++#include "log.h"
++
++extern Authctxt *the_authctxt;
++
++WEAK_LINK_FORCE_IMPORT(ess_notify_openssh_login);
++WEAK_LINK_FORCE_IMPORT(ess_notify_openssh_logout);
++
++ess_address_type_t
++get_socket_family(const char *ip_addr)
++{
++	struct addrinfo *ai;
++	int r;
++	ess_address_type_t address_type;
++
++	if ((r = getaddrinfo(ip_addr, NULL, NULL, &ai)) != 0) {
++		error("getaddrinfo failed for %.100s: %.100s", ip_addr,
++		    r == EAI_SYSTEM ? strerror(errno) : gai_strerror(r));
++		return ESS_ADDRESS_TYPE_NONE;
++	}
++
++	switch (ai->ai_family) {
++		case AF_INET:
++			address_type = ESS_ADDRESS_TYPE_IPV4;
++			break;
++		case AF_INET6:
++			address_type = ESS_ADDRESS_TYPE_IPV6;
++			break;
++		default:
++			address_type = ESS_ADDRESS_TYPE_NONE;
++			break;
++	}
++
++	freeaddrinfo(ai);
++	return address_type;
++}
++
++void
++submit_ess_event(const char *source_address, const char *username, ssh_audit_event_t audit_event)
++{
++	if (ess_notify_openssh_login == NULL || ess_notify_openssh_logout == NULL ) {
++		return;
++	}
++
++	ess_address_type_t address_type = get_socket_family(source_address);
++	if (address_type == ESS_ADDRESS_TYPE_NONE) {
++		return;
++	}
++
++	bool is_disconnect = false;
++	ess_openssh_login_result_type_t login_result_type;
++	switch(audit_event) {
++		case SSH_LOGIN_EXCEED_MAXTRIES:
++			login_result_type = ESS_OPENSSH_LOGIN_EXCEED_MAXTRIES;
++			break;
++		case SSH_LOGIN_ROOT_DENIED:
++			login_result_type = ESS_OPENSSH_LOGIN_ROOT_DENIED;
++			break;
++		case SSH_AUTH_SUCCESS:
++			login_result_type = ESS_OPENSSH_AUTH_SUCCESS;
++			break;
++		case SSH_AUTH_FAIL_NONE:
++			login_result_type = ESS_OPENSSH_AUTH_FAIL_NONE;
++			break;
++		case SSH_AUTH_FAIL_PASSWD:
++			login_result_type = ESS_OPENSSH_AUTH_FAIL_PASSWD;
++			break;
++		case SSH_AUTH_FAIL_KBDINT:
++			login_result_type = ESS_OPENSSH_AUTH_FAIL_KBDINT;
++			break;
++		case SSH_AUTH_FAIL_PUBKEY:
++			login_result_type = ESS_OPENSSH_AUTH_FAIL_PUBKEY;
++			break;
++		case SSH_AUTH_FAIL_HOSTBASED:
++			login_result_type = ESS_OPENSSH_AUTH_FAIL_HOSTBASED;
++			break;
++		case SSH_AUTH_FAIL_GSSAPI:
++			login_result_type = ESS_OPENSSH_AUTH_FAIL_GSSAPI;
++			break;
++		case SSH_INVALID_USER:
++			login_result_type = ESS_OPENSSH_INVALID_USER;
++			break;
++		case SSH_NOLOGIN:
++			// This isn't emitted by ssh.
++			return;
++		case SSH_CONNECTION_CLOSE:
++		case SSH_CONNECTION_ABANDON:
++			// Treat CLOSE and ABANDON the same, as the most common case of
++			// regular connection close emits an ABANDON, not a CLOSE, and
++			// we don't make that distinction in EndpointSecurity anyway.
++			// The use of CLOSE and ABANDON should probably be revisited
++			// upstream.
++			is_disconnect = true;
++			break;
++		case SSH_AUDIT_UNKNOWN:
++			error("Unknown audit event type : %d", audit_event);
++			return;
++	}
++
++	if (the_authctxt == NULL) {
++		error("auth context not available");
++		return;
++	}
++
++	uid_t uid = -1;
++	if (the_authctxt->valid) {
++		uid = the_authctxt->pw->pw_uid;
++	}
++
++	if (!is_disconnect) {
++		ess_notify_openssh_login(login_result_type, address_type, source_address, username, (the_authctxt->valid) ? &uid : NULL);
++	} else if (the_authctxt->authenticated) {
++		// Only emit a logout event if the session was authenticated.
++		ess_notify_openssh_logout(address_type, source_address, username, uid);
++	}
++}
++#endif
+--- /dev/null	1900-01-00 00:00:00.000000000 +0000
++++ b/submit-ess-event.h	1697451011.461515995
+@@ -0,0 +1,17 @@
++//
++//  submit-ess-event.h
++//  sshd
++//
++//  Copyright © 2022 Apple Inc. All rights reserved.
++//
++
++#ifndef submit_ess_event_h
++#define submit_ess_event_h
++
++#include "audit.h"
++#include "hostfile.h"
++#include "auth.h"
++
++void submit_ess_event(const char *source_address, const char *username, ssh_audit_event_t event);
++
++#endif /* submit_ess_event_h */

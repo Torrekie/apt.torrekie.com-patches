@@ -1,0 +1,32 @@
+--- a/lib/libpam/openpam_constants.c	1551039319.000000000
++++ b/lib/libpam/openpam_constants.c	1676974486.709182108
+@@ -175,11 +193,11 @@ const char *openpam_policy_path[] = {
+ };
+ 
+ const char *openpam_module_path[] = {
+-#ifdef OPENPAM_MODULES_DIRECTORY
+-	OPENPAM_MODULES_DIRECTORY,
++#ifdef OPENPAM_MODULES_DIR
++	OPENPAM_MODULES_DIR,
+ #else
+-	"/usr/lib",
+-	"/usr/local/lib",
++	"/usr/lib/pam",
++	"/usr/local/lib/pam",
+ #endif
+ 	NULL
+ };
+--- a/lib/libpam/openpam_log.c	1664721945.000000000
++++ b/lib/libpam/openpam_log.c	1697098663.305988355
+@@ -48,7 +48,11 @@
+ #include "openpam_impl.h"
+ #include "openpam_asprintf.h"
+ 
++#ifdef OPENPAM_DEBUG
++int openpam_debug = 1;
++#else
+ int openpam_debug = 0;
++#endif
+ 
+ #if !defined(openpam_log)
+ 
