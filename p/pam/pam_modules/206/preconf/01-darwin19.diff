@@ -226,147 +226,6 @@
  	krb5_free_context(pam_context);
  
      PAM_LOG_DEBUG("Done cleanup3");
---- a/modules/pam_launchd/pam_launchd.c	1695412850.000000000
-+++ b/modules/pam_launchd/pam_launchd.c	1697282659.407516434
-@@ -30,7 +30,6 @@
- #include <string.h>
- #include <unistd.h>
- #include <vproc.h>
--#include <vproc_priv.h>
- #include <servers/bootstrap.h>
- #include <bootstrap_priv.h>
- #include <pwd.h>
-@@ -53,8 +52,106 @@ PAM_DEFINE_LOG(launchd)
-  * default type will be created.
-  */
- 
-+#if !TARGET_OS_EMBEDDED
-+#include <vproc_priv.h>
- extern vproc_err_t _vproc_post_fork_ping(void);
-+#else
-+#include <pthread.h>
-+#include <spawn.h>
-+#include <sys/syslog.h>
-+#define VPROCMGR_SESSION_BACKGROUND "Background"
-+/* Torrekie: I give up, fuck you Apple */
-+#if 0
-+struct _os_alloc_once_s {
-+    long once;
-+    void *ptr;
-+};
-+extern void _break(int);
-+extern struct _os_alloc_once_s _os_alloc_once_table[];
-+extern void *_os_alloc_once();
-+extern mach_port_t bootstrap_port;
-+extern int xpc_dictionary_set_mach_send( xpc_object_t xdict, const char *key, mach_port_t );
-+extern char *xpc_strerror(kern_return_t error);
-+extern void _os_assumes_log(int64_t);
-+extern mach_port_t _xpc_dictionary_extract_mach_send(xpc_object_t, const char *);
-+static kern_return_t _xpc_interface_routine(int a1, int a2, xpc_object_t xdict, xpc_object_t *obj, int a5, int a6)
-+{
-+	struct _os_alloc_once_s *ptr;
-+	if (!_os_alloc_once_table[1].once)
-+		ptr = _os_alloc_once_table[1].ptr;
-+	else
-+		ptr = _os_alloc_once();
-+
-+}
-+static kern_return_t _xpc_domain_routine(int routine, xpc_object_t xdict, xpc_object_t *obj)
-+{
-+	return _xpc_interface_routine(3, routine, xdict, obj, 0, 0);
-+}
-+static int _xpc_set_exception_port(posix_spawnattr_t *attr, mach_port_t new_port)
-+{
-+	int result = 0;
-+	struct _os_alloc_once_s *ptr;
-+	if (!_os_alloc_once_table[1].once)
-+		ptr = (struct _os_alloc_once_s *)_os_alloc_once_table[1].ptr;
-+	else
-+		ptr = _os_alloc_once();
-+
-+	exception_mask_t mask;
-+	if (ptr[2].ptr)
-+		mask = 7168;
-+	else
-+		mask = 14336;
-+
-+	if (attr) {
-+		result = posix_spawnattr_setexceptionports_np(attr, mask, new_port, EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_MASK, 1);
-+		if (result)
-+			_break(1);
-+	} else {
-+		/*
-+		if ( ((_18 ^ (2 * _18)) & 0x4000000000000000LL) != 0 )
-+			_break(0xc471);
-+		*/
-+		return task_set_exception_ports(mach_task_self(), mask, new_port, EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_MASK, 1);
-+	}
-+	return result;
-+}
- 
-+static vproc_err_t _vprocmgr_switch_to_session(const char *target_session, unsigned int flags __attribute__((unused)))
-+{
-+	vproc_err_t ret;
-+	xpc_object_t dict = xpc_dictionary_create(NULL, NULL, 0);
-+	xpc_dictionary_set_uint64(dict, "type", 7);
-+	xpc_dictionary_set_mach_send(dict, "domain-port", bootstrap_port);
-+	xpc_dictionary_set_uint64(dict, "handle", 0);
-+	xpc_dictionary_set_string(dict, "session", target_session);
-+	xpc_object_t obj;
-+	kern_return_t routine = _xpc_domain_routine(824, dict, &obj);
-+	if (routine) {
-+		syslog(LOG_ERR, "Could not adopt Background session: %d: %s", routine, xpc_strerror(routine));
-+		ret = XPC_BOOL_FALSE;
-+	} else {
-+		mach_port_t mach_send = _xpc_dictionary_extract_mach_send(obj, "exc-port");
-+		if ( mach_send + 1 >= 2 ) { // Weird
-+			mach_port_t exception_port = _xpc_set_exception_port(NULL, mach_send);
-+			if (exception_port) {
-+				_os_assumes_log(exception_port);
-+			}
-+			kern_return_t rel = mach_port_deallocate(mach_task_self(), mach_send);
-+			if (rel)
-+				_os_assumes_log(rel);
-+		}
-+		xpc_release(obj);
-+		ret = NULL;
-+	}
-+	xpc_release(dict);
-+	return ret;
-+}
-+void *_vproc_post_fork_ping()
-+{
-+	return _vprocmgr_switch_to_session(VPROCMGR_SESSION_BACKGROUND, 0);
-+}
-+#endif
-+#endif
- static mach_port_t
- get_root_bootstrap_port(void)
- {
-@@ -144,7 +241,8 @@ pam_sm_open_session(pam_handle_t *pamh,
- 	mach_port_mod_refs(mach_task_self(), bootstrap_port, MACH_PORT_RIGHT_SEND, -1);
- 	task_set_bootstrap_port(mach_task_self(), puc);
- 	bootstrap_port = puc;
--	
-+
-+#if !TARGET_OS_EMBEDDED
- 	/* Now move ourselves into the appropriate session. */
- 	if (strncmp(session_type, VPROCMGR_SESSION_BACKGROUND, sizeof(VPROCMGR_SESSION_BACKGROUND)) != 0) {
- 		vproc_err_t verr = NULL;
-@@ -153,11 +251,12 @@ pam_sm_open_session(pam_handle_t *pamh,
- 			return PAM_SESSION_ERR;
- 		}
- 	}
-+
- 	if (NULL != _vproc_post_fork_ping()) {
- 		os_log_error(PAM_LOG, "Calling _vproc_post_fork_ping failed.");
- 		return PAM_SESSION_ERR;
- 	}
--	
-+#endif
- 	return PAM_SUCCESS;
- }
- 
 --- a/modules/pam_localauthentication/pam_localauthentication.c	1695412850.000000000
 +++ b/modules/pam_localauthentication/pam_localauthentication.c	1697284428.580676020
 @@ -29,7 +29,7 @@
@@ -612,3 +471,226 @@
          if (ismember) {
  		DEBUG_MESSAGE("%s: allowing '%s'", MODULE_NAME, username);
  		return PAM_SUCCESS;
+--- a/modules/pam_launchd/pam_launchd.c	1695412850.000000000
++++ b/modules/pam_launchd/pam_launchd.c	1698063140.967806444
+@@ -30,7 +30,6 @@
+ #include <string.h>
+ #include <unistd.h>
+ #include <vproc.h>
+-#include <vproc_priv.h>
+ #include <servers/bootstrap.h>
+ #include <bootstrap_priv.h>
+ #include <pwd.h>
+@@ -39,7 +38,14 @@
+ 
+ PAM_DEFINE_LOG(launchd)
+ #define PAM_LOG PAM_LOG_launchd()
+-
++#define PAM_LOG_DEBUG(...) \
++	printf(__VA_ARGS__); \
++	printf("\n"); \
++	os_log_debug(PAM_LOG, __VA_ARGS__)
++#define PAM_VERBOSE_ERROR(...) \
++	printf(__VA_ARGS__); \
++	printf("\n"); \
++	os_log_error(PAM_LOG, __VA_ARGS__)
+ #define SESSION_TYPE_OPT "launchd_session_type"
+ #define DEFAULT_SESSION_TYPE VPROCMGR_SESSION_BACKGROUND
+ #define NULL_SESSION_TYPE "NullSession"
+@@ -53,8 +59,106 @@ PAM_DEFINE_LOG(launchd)
+  * default type will be created.
+  */
+ 
++#if !TARGET_OS_EMBEDDED
++#include <vproc_priv.h>
+ extern vproc_err_t _vproc_post_fork_ping(void);
++#else
++#include <pthread.h>
++#include <spawn.h>
++#include <sys/syslog.h>
++#define VPROCMGR_SESSION_BACKGROUND "Background"
++/* Torrekie: I give up, fuck you Apple */
++#if 0
++struct _os_alloc_once_s {
++    long once;
++    void *ptr;
++};
++extern void _break(int);
++extern struct _os_alloc_once_s _os_alloc_once_table[];
++extern void *_os_alloc_once();
++extern mach_port_t bootstrap_port;
++extern int xpc_dictionary_set_mach_send( xpc_object_t xdict, const char *key, mach_port_t );
++extern char *xpc_strerror(kern_return_t error);
++extern void _os_assumes_log(int64_t);
++extern mach_port_t _xpc_dictionary_extract_mach_send(xpc_object_t, const char *);
++static kern_return_t _xpc_interface_routine(int a1, int a2, xpc_object_t xdict, xpc_object_t *obj, int a5, int a6)
++{
++	struct _os_alloc_once_s *ptr;
++	if (!_os_alloc_once_table[1].once)
++		ptr = _os_alloc_once_table[1].ptr;
++	else
++		ptr = _os_alloc_once();
++
++}
++static kern_return_t _xpc_domain_routine(int routine, xpc_object_t xdict, xpc_object_t *obj)
++{
++	return _xpc_interface_routine(3, routine, xdict, obj, 0, 0);
++}
++static int _xpc_set_exception_port(posix_spawnattr_t *attr, mach_port_t new_port)
++{
++	int result = 0;
++	struct _os_alloc_once_s *ptr;
++	if (!_os_alloc_once_table[1].once)
++		ptr = (struct _os_alloc_once_s *)_os_alloc_once_table[1].ptr;
++	else
++		ptr = _os_alloc_once();
++
++	exception_mask_t mask;
++	if (ptr[2].ptr)
++		mask = 7168;
++	else
++		mask = 14336;
++
++	if (attr) {
++		result = posix_spawnattr_setexceptionports_np(attr, mask, new_port, EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_MASK, 1);
++		if (result)
++			_break(1);
++	} else {
++		/*
++		if ( ((_18 ^ (2 * _18)) & 0x4000000000000000LL) != 0 )
++			_break(0xc471);
++		*/
++		return task_set_exception_ports(mach_task_self(), mask, new_port, EXCEPTION_STATE_IDENTITY | MACH_EXCEPTION_MASK, 1);
++	}
++	return result;
++}
+ 
++static vproc_err_t _vprocmgr_switch_to_session(const char *target_session, unsigned int flags __attribute__((unused)))
++{
++	vproc_err_t ret;
++	xpc_object_t dict = xpc_dictionary_create(NULL, NULL, 0);
++	xpc_dictionary_set_uint64(dict, "type", 7);
++	xpc_dictionary_set_mach_send(dict, "domain-port", bootstrap_port);
++	xpc_dictionary_set_uint64(dict, "handle", 0);
++	xpc_dictionary_set_string(dict, "session", target_session);
++	xpc_object_t obj;
++	kern_return_t routine = _xpc_domain_routine(824, dict, &obj);
++	if (routine) {
++		syslog(LOG_ERR, "Could not adopt Background session: %d: %s", routine, xpc_strerror(routine));
++		ret = XPC_BOOL_FALSE;
++	} else {
++		mach_port_t mach_send = _xpc_dictionary_extract_mach_send(obj, "exc-port");
++		if ( mach_send + 1 >= 2 ) { // Weird
++			mach_port_t exception_port = _xpc_set_exception_port(NULL, mach_send);
++			if (exception_port) {
++				_os_assumes_log(exception_port);
++			}
++			kern_return_t rel = mach_port_deallocate(mach_task_self(), mach_send);
++			if (rel)
++				_os_assumes_log(rel);
++		}
++		xpc_release(obj);
++		ret = NULL;
++	}
++	xpc_release(dict);
++	return ret;
++}
++void *_vproc_post_fork_ping()
++{
++	return _vprocmgr_switch_to_session(VPROCMGR_SESSION_BACKGROUND, 0);
++}
++#endif
++#endif
+ static mach_port_t
+ get_root_bootstrap_port(void)
+ {
+@@ -90,27 +194,27 @@ pam_sm_open_session(pam_handle_t *pamh,
+ 
+ 	/* Deterine the launchd session type. */
+ 	if (NULL == (default_session_type = openpam_get_option(pamh, SESSION_TYPE_OPT))) {
+-		os_log_debug(PAM_LOG, "No session type specified.");
++		PAM_LOG_DEBUG("No session type specified.");
+ 		default_session_type = DEFAULT_SESSION_TYPE;
+ 	}
+ 	if (NULL == session_type) {
+ 		session_type = default_session_type;
+ 	} else if (0 == strcmp(session_type, NULL_SESSION_TYPE)) {
+-		os_log_debug(PAM_LOG, "Skipping due to NULL session type.");
++		PAM_LOG_DEBUG("Skipping due to NULL session type.");
+ 		return PAM_IGNORE;
+ 	}
+ 	
+ 	/* Get the username (and UID). */
+ 	if (PAM_SUCCESS != pam_get_item(pamh, PAM_USER, (void *)&username) || NULL == username) {
+-		os_log_debug(PAM_LOG, "The username could not be obtained.");
++		PAM_LOG_DEBUG("The username could not be obtained.");
+ 		return PAM_IGNORE;
+ 	}
+ 	if (0 != getpwnam_r(username, &pwdbuf, buffer, sizeof(buffer), &pwd) || NULL == pwd) {
+-		os_log_debug(PAM_LOG, "The pwd for %s could not be obtained.", username);
++		PAM_LOG_DEBUG("The pwd for %s could not be obtained.", username);
+ 		return PAM_IGNORE;
+ 	}
+ 	uid = pwd->pw_uid;
+-	os_log_debug(PAM_LOG, "Going to switch to (%s) %u's %s session", username, uid, session_type);
++	PAM_LOG_DEBUG("Going to switch to (%s) %u's %s session", username, uid, session_type);
+ 	
+ 	/* If we're running as root, set the root Mach bootstrap as our bootstrap port. If not, we fail. */
+ 	if (geteuid() == 0) {
+@@ -121,7 +225,7 @@ pam_sm_open_session(pam_handle_t *pamh,
+ 			bootstrap_port = rbs;
+ 		}
+ 	} else {
+-		os_log_debug(PAM_LOG, "We are not running as root.");
++		PAM_LOG_DEBUG("We are not running as root.");
+ 		return PAM_IGNORE;
+ 	}
+ 
+@@ -131,11 +235,18 @@ pam_sm_open_session(pam_handle_t *pamh,
+ 	mach_port_t puc = MACH_PORT_NULL;
+ 	kern_return_t kr = bootstrap_look_up_per_user(bootstrap_port, NULL, uid, &puc);
+ 	setreuid(suid, 0);
++#if TARGET_OS_EMBEDDED
++#include <errno.h>
++	/* Not doing anything on iOS */
++	if (kr == ENOTSUP) {
++		PAM_LOG_DEBUG("Stubbed bootstrap_look_up_per_user implementation, skip.");
++	} else
++#endif
+ 	if (BOOTSTRAP_SUCCESS != kr) {
+-		os_log_error(PAM_LOG, "Could not look up per-user bootstrap for UID %u.", uid);
++		PAM_VERBOSE_ERROR("Could not look up per-user bootstrap for UID %u.", uid);
+ 		return PAM_IGNORE;
+ 	} else if (BOOTSTRAP_NOT_PRIVILEGED == kr) {
+-		os_log_error(PAM_LOG, "Permission denied to look up per-user bootstrap for UID %u.", uid);
++		PAM_VERBOSE_ERROR("Permission denied to look up per-user bootstrap for UID %u.", uid);
+ 		/* If this happens, bootstrap_port is probably already set appropriately anyway. */
+ 		return PAM_IGNORE;
+ 	}
+@@ -144,20 +255,22 @@ pam_sm_open_session(pam_handle_t *pamh,
+ 	mach_port_mod_refs(mach_task_self(), bootstrap_port, MACH_PORT_RIGHT_SEND, -1);
+ 	task_set_bootstrap_port(mach_task_self(), puc);
+ 	bootstrap_port = puc;
+-	
++
++#if !TARGET_OS_EMBEDDED
+ 	/* Now move ourselves into the appropriate session. */
+ 	if (strncmp(session_type, VPROCMGR_SESSION_BACKGROUND, sizeof(VPROCMGR_SESSION_BACKGROUND)) != 0) {
+ 		vproc_err_t verr = NULL;
+ 		if (NULL != (verr = _vprocmgr_switch_to_session(session_type, 0))) {
+-			os_log_error(PAM_LOG, "Unable to switch to %u's %s session (0x%p).", uid, session_type, verr);
++			PAM_VERBOSE_ERROR("Unable to switch to %u's %s session (0x%p).", uid, session_type, verr);
+ 			return PAM_SESSION_ERR;
+ 		}
+ 	}
++
+ 	if (NULL != _vproc_post_fork_ping()) {
+-		os_log_error(PAM_LOG, "Calling _vproc_post_fork_ping failed.");
++		PAM_VERBOSE_ERROR("Calling _vproc_post_fork_ping failed.");
+ 		return PAM_SESSION_ERR;
+ 	}
+-	
++#endif
+ 	return PAM_SUCCESS;
+ }
+ 
