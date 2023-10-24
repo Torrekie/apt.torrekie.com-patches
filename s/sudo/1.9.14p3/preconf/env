@@ -1,0 +1,5 @@
+# __APPLE_AUDIT__ requires macOS 14+
+CPPFLAGS="-D__APPLE_MDM_SUPPORT__ -D__APPLE_DYNAMIC_LV__"
+# Use execvpe in libiosexec
+ac_cv_func_execvpe=yes
+MVPROG=/usr/bin/mv

@@ -1,0 +1,594 @@
+--- a/lib/util/secure_path.c	1690229531.000000000
++++ b/lib/util/secure_path.c	1698133800.055130958
+@@ -33,6 +33,14 @@
+ #include "sudo_util.h"
+ #include "sudo_debug.h"
+ 
++#ifdef __APPLE_MDM_SUPPORT__
++const char *mdmPrefix = "/private/var/db/ManagedConfigurationFiles/com.apple.sudo/etc/";
++inline bool isManaged(const char *fullPath)
++{
++	return strstr(fullPath, mdmPrefix) == fullPath;
++}
++#endif // __APPLE_MDM_SUPPORT__
++
+ /*
+  * Verify that path is the right type and not writable by other users.
+  */
+@@ -134,6 +142,11 @@ sudo_secure_open(const char *path, int t
+ 	debug_return_int(-1);
+     }
+ 
++#ifdef __APPLE_MDM_SUPPORT__
++    if (isManaged(path)) {
++	*error = SUDO_PATH_SECURE;
++    } else
++#endif
+     *error = sudo_check_secure(sb, type, uid, gid);
+     if (*error == SUDO_PATH_SECURE) {
+ 	(void)fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
+--- a/lib/util/sudo_conf.c	1690229531.000000000
++++ b/lib/util/sudo_conf.c	1698143859.666939181
+@@ -41,6 +41,10 @@
+ #include <fcntl.h>
+ #include <limits.h>
+ 
++#ifdef __APPLE_DYNAMIC_LV__
++#include <System/sys/codesign.h>
++#endif /* __APPLE_DYNAMIC_LV__ */
++
+ #define SUDO_ERROR_WRAP	0
+ 
+ #include "sudo_compat.h"
+@@ -639,6 +643,20 @@ sudo_conf_read_v1(const char *path, int
+     size_t linesize = 0;
+     debug_decl(sudo_conf_read, SUDO_DEBUG_UTIL);
+ 
++#ifdef __APPLE_DYNAMIC_LV__
++    if ((conf_types & SUDO_CONF_PLUGINS) != 0) {
++        int csflags = 0;
++        int rv = 0;
++        pid_t pid = getpid();
++        rv = csops(pid, CS_OPS_STATUS, &csflags, sizeof(csflags));
++        if (rv == 0 && (csflags & CS_INSTALLER) != 0) {
++            /* Suppress SUDO_CONF_PLUGINS when CS_INSTALLER is set. */
++            sudo_debug_printf(SUDO_DEBUG_INFO|SUDO_DEBUG_LINENO, U_("%s: %s"), __func__, U_("clearing SUDO_CONF_PLUGINS due to CS_INSTALLER"));
++            conf_types &= ~SUDO_CONF_PLUGINS;
++        }
++    }
++#endif /* __APPLE_DYNAMIC_LV__ */
++
+     if ((prev_locale = setlocale(LC_ALL, NULL)) == NULL) {
+ 	sudo_warn("setlocale(LC_ALL, NULL)");
+ 	debug_return_int(-1);
+--- a/lib/util/sudo_dso.c	1690229349.000000000
++++ b/lib/util/sudo_dso.c	1698065728.583297136
+@@ -162,6 +162,12 @@ sudo_dso_strerror_v1(void)
+ 
+ #elif defined(HAVE_DLOPEN)
+ 
++#ifdef __APPLE_DYNAMIC_LV__
++#include <System/sys/codesign.h>
++#include <unistd.h>
++#include <fcntl.h>
++#endif /* __APPLE_DYNAMIC_LV__ */
++
+ # ifndef RTLD_GLOBAL
+ #  define RTLD_GLOBAL	0
+ # endif
+@@ -292,6 +298,35 @@ sudo_dso_load_v1(const char *path, int m
+ 	}
+     }
+ # endif /* RTLD_MEMBER */
++	
++#ifdef __APPLE_DYNAMIC_LV__
++    if (ret == NULL && faccessat(AT_FDCWD, path, R_OK, AT_EACCESS) == 0) {
++        /*
++         * The module exists and is readable, but failed to load.
++         * If library validation is enabled, try disabling it and then re-attempt loading again.
++         */
++	int csflags = 0;
++	int rv = 0;
++	pid_t pid = getpid();
++	rv = csops(pid, CS_OPS_STATUS, &csflags, sizeof(csflags));
++	if (rv != 0 || (csflags & (CS_FORCED_LV | CS_REQUIRE_LV)) == 0) {
++	    return NULL; // should be safe to exit here because dlopen_multi_arch is defined for Linux only
++	}
++	
++	rv = csops(pid, CS_OPS_CLEAR_LV, NULL, 0);
++	if (rv != 0) {
++	    return NULL;
++	}
++	
++	ret = dlopen(path, flags);
++	if (ret == NULL) {
++	    /* Failed to load even with LV disabled: re-enable LV. */
++	    csflags = CS_REQUIRE_LV;
++	    (void)csops(pid, CS_OPS_SET_STATUS, &csflags, sizeof(csflags));
++	}
++    }
++#endif /* __APPLE_DYNAMIC_LV__ */
++	
+     /* On failure, try again with a multi-arch path where possible. */
+     if (ret == NULL)
+ 	ret = dlopen_multi_arch(path, flags);
+--- a/plugins/sudoers/audit.c	1690229531.000000000
++++ b/plugins/sudoers/audit.c	1698134011.862163315
+@@ -1,3 +1,4 @@
++
+ /*
+  * SPDX-License-Identifier: ISC
+  *
+@@ -30,9 +31,11 @@
+ #include <string.h>
+ 
+ #include "sudoers.h"
+-#ifdef SUDOERS_LOG_CLIENT
+-# include "log_client.h"
+-#endif
++#include "log_client.h"
++
++#ifdef __APPLE__
++#include <errno.h>
++#endif /*__APPLE__ */
+ 
+ #ifdef HAVE_BSM_AUDIT
+ # include "bsm_audit.h"
+@@ -76,6 +79,118 @@ audit_success(char *const argv[])
+     debug_return_int(rc);
+ }
+ 
++#ifdef __APPLE_AUDIT__
++static void es_parse_command_info(
++    char * const command_info[],
++    char **command_out,
++    char **to_username_out,
++    uid_t *to_uid_out
++)
++{
++    debug_decl(es_parse_command_info, SUDOERS_DEBUG_PLUGIN);
++    char *p = NULL;
++    for (size_t i = 0; command_info[i] != NULL; i++) {
++         p = strstr(command_info[i], "command=");
++        if (NULL != p) {
++            *command_out = &command_info[i][sizeof("command=") - 1];
++        }
++        
++        p = strstr(command_info[i], "runas_user=");
++        if (NULL != p) {
++            *to_username_out = &command_info[i][sizeof("runas_user=") - 1];
++        }
++
++        p = strstr(command_info[i], "runas_uid=");
++        if (NULL != p) {
++            char *to_uid_str = &command_info[i][sizeof("runas_uid=") - 1];
++            char *end;
++            long value = strtol(to_uid_str, &end, 10);
++            if (!(end == to_uid_str || *end != '\0' || errno == ERANGE)) {
++                *to_uid_out = (uid_t)value;
++            }
++        }
++    }
++    debug_return;
++}
++
++API_AVAILABLE(macos(14.0)) API_UNAVAILABLE(ios, tvos, watchos)
++static void
++es_accept(
++    char * const command_info[],
++    char * const run_argv[],
++    char * const run_envp[]
++)
++{
++    debug_decl(es_accept, SUDOERS_DEBUG_PLUGIN);
++    __attribute__((weak_import)) typeof(ess_notify_sudo) ess_notify_sudo;
++    if (ess_notify_sudo == NULL) {
++        sudo_debug_printf(SUDO_DEBUG_INFO,  "%s: failed link ess_notify", __func__);
++        return;
++    }
++
++    char *from_username = sudo_user.name;
++    uid_t from_uid = sudo_user.uid;
++    char *command = NULL;
++    char *to_username = NULL;
++    uid_t to_uid = -1;
++    
++    es_parse_command_info(command_info, &command, &to_username, &to_uid);
++
++    ess_notify_sudo(
++        true, // bool isAccepted
++        NULL, // const ess_sudo_reject_info_t * __nullable reject_info
++        &from_uid, // const uid_t * _Nullable from_uid,
++        from_username, // const char * _Nullable from_username,
++        to_uid == -1 ? NULL: &to_uid, // const uid_t * _Nullable to_uid,
++        to_username, // const char * _Nullable to_username,
++        command // const char* _Nullable command
++    );
++    debug_return;
++}
++
++API_AVAILABLE(macos(14.0)) API_UNAVAILABLE(ios, tvos, watchos)
++static void
++es_reject (
++    const char *plugin_name, 
++    unsigned int plugin_type,
++    const char *message, 
++    char * const command_info[]
++)
++{
++    debug_decl(es_reject, SUDOERS_DEBUG_PLUGIN);
++    __attribute__((weak_import)) typeof(ess_notify_sudo) ess_notify_sudo;
++    if (ess_notify_sudo == NULL) {
++        sudo_debug_printf(SUDO_DEBUG_INFO,  "%s: failed link ess_notify", __func__);
++        return;
++    }
++
++    char *from_username = sudo_user.name;
++    uid_t from_uid = sudo_user.uid;
++    char *command = NULL;
++    char *to_username = NULL;
++    uid_t to_uid = -1;
++    
++    es_parse_command_info(command_info, &command, &to_username, &to_uid);
++
++    ess_sudo_plugin_type_t lastElement = ESS_SUDO_PLUGIN_TYPE_APPROVAL;
++    ess_sudo_reject_info_t reject_info = {};
++    reject_info.failure_message = message;
++    reject_info.plugin_name = plugin_name;
++    reject_info.plugin_type = plugin_type <= lastElement ? plugin_type: ESS_SUDO_PLUGIN_TYPE_UNKNOWN;
++
++    ess_notify_sudo(
++        false, // bool isAccepted
++        &reject_info, // const ess_sudo_reject_info_t * __nullable reject_info
++        &from_uid, // const uid_t * _Nullable from_uid,
++        from_username, // const char * _Nullable from_username,
++        to_uid == -1 ? NULL: &to_uid, // const uid_t * _Nullable to_uid,
++        to_username, // const char * _Nullable to_username,
++        command // const char* _Nullable command
++    );
++    debug_return;
++}
++#endif /* __APPLE_AUDIT__ */
++
+ static int
+ audit_failure_int(char *const argv[], const char *message)
+ {
+@@ -346,31 +461,36 @@ sudoers_audit_accept(const char *plugin_
+ 
+     /* Only log the accept event from the sudo front-end */
+     if (plugin_type != SUDO_FRONT_END)
+-	debug_return_int(true);
++        debug_return_int(true);
+ 
+     if (!def_log_allowed)
+-	debug_return_int(true);
++        debug_return_int(true);
++#ifdef __APPLE_AUDIT__
++    if (__builtin_available(macOS 14.0, *)) {
++        es_accept(command_info, run_argv, run_envp);
++    }
++#endif /* __APPLE_AUDIT__ */
+ 
+     if (audit_success(run_argv) != 0 && !def_ignore_audit_errors)
+-	ret = false;
++    ret = false;
+ 
+     if (!ISSET(sudo_mode, MODE_POLICY_INTERCEPTED))
+-	uuid_str = sudo_user.uuid_str;
++    uuid_str = sudo_user.uuid_str;
+ 
+     audit_to_eventlog(&evlog, command_info, run_argv, run_envp, uuid_str);
+     if (!log_allowed(&evlog) && !def_ignore_logfile_errors)
+-	ret = false;
++    ret = false;
+ 
+     if (!log_server_accept(&evlog)) {
+-	if (!def_ignore_logfile_errors)
+-	    ret = false;
++    if (!def_ignore_logfile_errors)
++        ret = false;
+     }
+ 
+     if (first) {
+-	/* log_subcmds doesn't go through sudo_policy_main again to set this. */
+-	if (def_log_subcmds)
+-	    SET(sudo_mode, MODE_POLICY_INTERCEPTED);
+-	first = false;
++    /* log_subcmds doesn't go through sudo_policy_main again to set this. */
++    if (def_log_subcmds)
++        SET(sudo_mode, MODE_POLICY_INTERCEPTED);
++    first = false;
+     }
+ 
+     debug_return_int(ret);
+@@ -383,7 +503,11 @@ sudoers_audit_reject(const char *plugin_
+     struct eventlog evlog;
+     int ret = true;
+     debug_decl(sudoers_audit_reject, SUDOERS_DEBUG_PLUGIN);
+-
++#ifdef __APPLE_AUDIT__
++    if (__builtin_available(macOS 14.0, *)) {
++        es_reject(plugin_name, plugin_type, message, command_info);
++    }
++#endif /* __APPLE_AUDIT__ */
+     /* Skip reject events that sudoers generated itself. */
+     if (strncmp(plugin_name, "sudoers_", 8) == 0)
+ 	debug_return_int(true);
+--- a/plugins/sudoers/defaults.c	1690229531.000000000
++++ b/plugins/sudoers/defaults.c	1698143827.600558059
+@@ -43,6 +43,10 @@
+ #include "sudo_iolog.h"
+ #include <gram.h>
+ 
++#ifdef __APPLE_DYNAMIC_LV__
++#include <System/sys/codesign.h>
++#endif /* __APPLE_DYNAMIC_LV__ */
++
+ static struct early_default early_defaults[] = {
+     { I_IGNORE_UNKNOWN_DEFAULTS },
+ #ifdef FQDN
+@@ -347,6 +351,20 @@ set_default(const char *var, const char
+     sudo_debug_printf(SUDO_DEBUG_INFO|SUDO_DEBUG_LINENO,
+ 	"%s: setting Defaults %s -> %s", __func__, var, val ? val : "false");
+ 
++#ifdef __APPLE_DYNAMIC_LV__
++    if (strcmp(var, sudo_defs_table[I_SECURE_PATH].name) == 0) {
++        int csflags = 0;
++        int rv = 0;
++        pid_t pid = getpid();
++        rv = csops(pid, CS_OPS_STATUS, &csflags, sizeof(csflags));
++        if (rv == 0 && (csflags & CS_INSTALLER) != 0) {
++            /* Suppress SUDO_CONF_PLUGINS when CS_INSTALLER is set. */
++            sudo_debug_printf(SUDO_DEBUG_INFO|SUDO_DEBUG_LINENO, U_("%s: %s"), __func__, U_("ignoring secure_path due to CS_INSTALLER"));
++            debug_return_bool(true);
++        }
++    }
++#endif /* __APPLE_DYNAMIC_LV__ */
++
+     idx = find_default(var, file, line, column, quiet);
+     if (idx != -1) {
+ 	/* Set parsed value in sudo_defs_table and run callback (if any). */
+--- a/plugins/sudoers/file.c	1690229350.000000000
++++ b/plugins/sudoers/file.c	1698134502.866688368
+@@ -22,6 +22,10 @@
+  */
+ 
+ #include <config.h>
++#ifdef __APPLE_MDM_SUPPORT__
++#include <os/log.h>
++#endif // __APPLE_MDM_SUPPORT__
++
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -30,6 +34,10 @@
+ #include "sudo_lbuf.h"
+ #include <gram.h>
+ 
++#ifdef __APPLE_MDM_SUPPORT__
++bool copyMdmPath(const char **result, const char *fullPath, bool isDir);
++#endif // __APPLE_MDM_SUPPORT__
++
+ struct sudo_file_handle {
+     FILE *fp;
+     struct sudoers_parse_tree parse_tree;
+@@ -70,10 +78,20 @@ sudo_file_open(struct sudo_nss *nss)
+ 	sudo_file_close(nss);
+     }
+ 
++#ifdef __APPLE_MDM_SUPPORT__
++    const char *mdmPath = NULL;
++#endif
++
+     handle = malloc(sizeof(*handle));
+     if (handle != NULL) {
+ 	const struct sudoers_parser_config *conf = policy_sudoers_conf();
++#ifdef __APPLE_MDM_SUPPORT__
++	copyMdmPath(&mdmPath, conf->sudoers_path, false); // do not care about the result because we have probably no better option than continue with the original file in case of the problem
++	os_log(OS_LOG_DEFAULT, "Reading%s config", mdmPath ? " managed":"");
++	handle->fp = open_sudoers(mdmPath ?:conf->sudoers_path, &outfile, false, NULL);
++#else
+ 	handle->fp = open_sudoers(conf->sudoers_path, &outfile, false, NULL);
++#endif // __APPLE_MDM_SUPPORT__
+ 	if (handle->fp != NULL) {
+ 	    init_parser(NULL, policy_sudoers_conf());
+ 	    init_parse_tree(&handle->parse_tree, NULL, NULL, nss);
+@@ -87,6 +105,12 @@ sudo_file_open(struct sudo_nss *nss)
+ 	    handle = NULL;
+ 	}
+     }
++#ifdef __APPLE_MDM_SUPPORT__
++    if (mdmPath) {
++	sudo_rcstr_delref(mdmPath);
++    }
++#endif // __APPLE_MDM_SUPPORT__
++
+     nss->handle = handle;
+     debug_return_int(nss->handle ? 0 : -1);
+ }
+--- a/plugins/sudoers/toke.c	1690229531.000000000
++++ b/plugins/sudoers/toke.c	1698066142.555926486
+@@ -4,6 +4,9 @@
+  */
+ 
+ #include <config.h>
++#ifdef __APPLE_MDM_SUPPORT__
++#include <os/log.h>
++#endif // __APPLE_MDM_SUPPORT__
+ 
+ #line 3 "toke.c"
+ 
+@@ -5471,6 +5474,101 @@ struct include_stack {
+     bool keepopen;
+ };
+ 
++#ifdef __APPLE_MDM_SUPPORT__
++const char *mdmPrefix = "/private/var/db/ManagedConfigurationFiles/com.apple.sudo/etc/";
++
++/* checks if input path is part of the MDM
++ */
++bool isManaged(const char *fullPath)
++{
++    return strstr(fullPath, mdmPrefix) == fullPath;
++}
++
++/* checks if input path is already part of the MDM and if not, returns
++ * appropriate MDM counterpart
++ * returns false if failed
++ * returns true if succeeded
++ *	   result contains path to the MDM-based variant of the originally requested file/dir
++ *
++ * caller responsible for freeing the memory
++ */
++bool copyMdmPath(char **result, const char *fullPath, bool isDir)
++{
++    char *retval = NULL;
++    debug_decl(copyMdmPath, SUDOERS_DEBUG_PARSER);
++
++    // first check if the full path is already pointing to the MDM path
++    if (strstr(fullPath, mdmPrefix) == fullPath) {
++	// path is already pointing to the managed configuration
++	if (result) {
++	    *result = NULL;
++	}
++	os_log_debug(OS_LOG_DEFAULT, "%s is already managed", fullPath);
++	debug_return_bool(true);
++    }
++    
++    const char *postPath = fullPath;
++    const char * const pathTable[] = {
++	"/private/etc/",
++	"/etc/",
++	"/",
++	NULL };
++	
++    for (const char * const *path = &pathTable[0]; *path != NULL; ++path) {
++	if (strstr(fullPath, *path) == fullPath) {
++	    postPath += strlen(*path);
++	    break;
++        }
++    }
++	
++    size_t pathLen = strlen(mdmPrefix) + strlen(postPath) + 1;
++    if (pathLen > PATH_MAX) {
++        sudo_warnx(U_("%s: %s"), __func__, U_("invalid string length"));
++	sudoerserror(NULL);
++	debug_return_bool(false);
++    }
++    char *mdmPath = sudo_rcstr_alloc(pathLen);
++    if (mdmPath == NULL) {
++	sudo_warnx(U_("%s: %s"), __func__, U_("unable to allocate memory"));
++	sudoerserror(NULL);
++	debug_return_bool(false);
++    }
++    // no check for fail because if this malloc fails everything is screwed
++    snprintf(mdmPath, pathLen + 1, "%s%s", mdmPrefix, postPath);
++    os_log_debug(OS_LOG_DEFAULT, "managed path %s", mdmPath);
++
++    // now check if the final file/directory exists
++    struct stat sb;
++
++    if (stat(mdmPath, &sb) == 0) {
++	if (isDir) {
++	    if (S_ISDIR(sb.st_mode)) {
++		retval = mdmPath;
++		os_log_debug(OS_LOG_DEFAULT, "isdir");
++	    } else {
++		os_log_debug(OS_LOG_DEFAULT, "not isdir");
++	    }
++	} else {
++	    if (!S_ISDIR(sb.st_mode)) {
++		retval = mdmPath;
++		os_log_debug(OS_LOG_DEFAULT, "isfile");
++	    } else {
++		os_log_debug(OS_LOG_DEFAULT, "not isfile");
++	    }
++	}
++    } else {
++	os_log_debug(OS_LOG_DEFAULT, "path does not exist");
++    }
++    
++    if (!retval) {
++	sudo_rcstr_delref(mdmPath);
++    } else if (result) {
++	*result = mdmPath;
++    }
++    debug_return_bool(true);;
++}
++#endif // __APPLE_MDM_SUPPORT__
++
+ /*
+  * Compare two struct path_list structs in reverse order.
+  */
+@@ -5820,10 +5918,33 @@ push_include_int(const char *opath, bool
+     struct path_list *pl;
+     char *file = NULL, *path;
+     FILE *fp;
++#ifdef __APPLE_MDM_SUPPORT__
++    char *mdmPath = NULL;
++    bool usingManaged = false;
++#endif // __APPLE_MDM_SUPPORT__
+     debug_decl(push_include, SUDOERS_DEBUG_PARSER);
+ 
+     if ((path = expand_include(opath)) == NULL)
+ 	debug_return_bool(false);
++	
++#ifdef __APPLE_MDM_SUPPORT__
++    bool success = copyMdmPath(&mdmPath, path, isdir);
++    if (!success) {
++	os_log_error(OS_LOG_DEFAULT, "Managed path failed");
++	sudoerserror(NULL);
++	sudo_rcstr_delref(path);
++	debug_return_bool(false);
++    }
++    if (mdmPath == NULL) {
++	os_log(OS_LOG_DEFAULT, "Using original path %s", mdmPath);
++    } else {
++	os_log(OS_LOG_DEFAULT, "Using managed path %s", mdmPath);
++	sudo_rcstr_delref(path);
++	path = sudo_rcstr_addref(mdmPath);
++	sudo_rcstr_delref(mdmPath);
++	usingManaged = true;
++    }
++#endif // __APPLE_MDM_SUPPORT__
+ 
+     /* push current state onto stack */
+     if (idepth >= istacksize) {
+@@ -5856,10 +5977,21 @@ push_include_int(const char *opath, bool
+ 	int count, fd, status;
+ 
+ 	fd = sudo_open_conf_path(path, dname, sizeof(dname), NULL);
+-	status = sudo_secure_fd(fd, S_IFDIR, sudoers_file_uid(),
+-	    sudoers_file_gid(), &sb);
+ 	if (fd != -1)
+ 	    close(fd); /* XXX use in read_dir_files? */
++
++#ifdef __APPLE_MDM_SUPPORT__
++	if (usingManaged) { // do not check rights for MDM based prefs
++	    status = SUDO_PATH_SECURE;
++	} else {
++	    status = sudo_secure_fd(fd, S_IFDIR, sudoers_file_uid(),
++	        sudoers_file_gid(), &sb);
++	}
++#else
++	status = sudo_secure_fd(fd, S_IFDIR, sudoers_file_uid(),
++	    sudoers_file_gid(), &sb);
++#endif // __APPLE_MDM_SUPPORT__
++
+ 	if (status != SUDO_PATH_SECURE) {
+ 	    if (verbose > 0) {
+ 		switch (status) {
+--- a/src/get_pty.c	1676393558.000000000
++++ b/src/get_pty.c	1695412866.000000000
+@@ -38,8 +38,9 @@
+ 
+ #if defined(HAVE_OPENPTY)
+ # if defined(HAVE_LIBUTIL_H)
+-#  include <libutil.h>		/* *BSD */
+-# elif defined(HAVE_UTIL_H)
++#  include <libutil.h>		/* *BSD and macOS */
++# endif
++# if defined(HAVE_UTIL_H)
+ #  include <util.h>		/* macOS */
+ # elif defined(HAVE_PTY_H)
+ #  include <pty.h>		/* Linux */
