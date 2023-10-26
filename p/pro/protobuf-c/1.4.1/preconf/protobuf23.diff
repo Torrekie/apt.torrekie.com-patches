@@ -1,0 +1,297 @@
+diff --git a/build-cmake/CMakeLists.txt b/build-cmake/CMakeLists.txt
+index 95f561c0..c71dd899 100644
+--- a/build-cmake/CMakeLists.txt
++++ b/build-cmake/CMakeLists.txt
+@@ -96,7 +96,7 @@ if (MSVC AND NOT BUILD_SHARED_LIBS)
+ endif (MSVC AND NOT BUILD_SHARED_LIBS)
+ 
+ IF(BUILD_PROTOC)
+-SET(CMAKE_CXX_STANDARD 11)
++SET(CMAKE_CXX_STANDARD 17)
+ SET(CMAKE_CXX_STANDARD_REQUIRED ON)
+ SET(CMAKE_CXX_EXTENSIONS OFF)
+ ADD_CUSTOM_COMMAND(OUTPUT protobuf-c/protobuf-c.pb.cc protobuf-c/protobuf-c.pb.h
+diff --git a/configure.ac b/configure.ac
+index 94d01dca..586ac3c0 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -75,13 +75,8 @@ AC_ARG_ENABLE([protoc],
+   AS_HELP_STRING([--disable-protoc], [Disable building protoc_c (also disables tests)]))
+ if test "x$enable_protoc" != "xno"; then
+   AC_LANG_PUSH([C++])
+-
+-  AX_CXX_COMPILE_STDCXX(11, noext, mandatory)
+-
+-  PKG_CHECK_MODULES([protobuf], [protobuf >= 3.0.0],
+-    [proto3_supported=yes],
+-    [PKG_CHECK_MODULES([protobuf], [protobuf >= 2.6.0])]
+-  )
++  AX_CXX_COMPILE_STDCXX(17, noext, mandatory)
++  PKG_CHECK_MODULES([protobuf], [protobuf >= 3.0.0], [proto3_supported=yes])
+ 
+   save_CPPFLAGS="$CPPFLAGS"
+   CPPFLAGS="$save_CPPFLAGS $protobuf_CFLAGS"
+diff --git a/protoc-c/c_bytes_field.h b/protoc-c/c_bytes_field.h
+index bf873f0f..df91ef73 100644
+--- a/protoc-c/c_bytes_field.h
++++ b/protoc-c/c_bytes_field.h
+@@ -87,8 +87,6 @@ class BytesFieldGenerator : public FieldGenerator {
+ 
+  private:
+   std::map<std::string, std::string> variables_;
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(BytesFieldGenerator);
+ };
+ 
+ 
+diff --git a/protoc-c/c_enum.h b/protoc-c/c_enum.h
+index 9c34b697..089c3366 100644
+--- a/protoc-c/c_enum.h
++++ b/protoc-c/c_enum.h
+@@ -106,8 +106,6 @@ class EnumGenerator {
+  private:
+   const EnumDescriptor* descriptor_;
+   std::string dllexport_decl_;
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(EnumGenerator);
+ };
+ 
+ }  // namespace c
+diff --git a/protoc-c/c_enum_field.h b/protoc-c/c_enum_field.h
+index 3f8c005d..e0c96adf 100644
+--- a/protoc-c/c_enum_field.h
++++ b/protoc-c/c_enum_field.h
+@@ -85,8 +85,6 @@ class EnumFieldGenerator : public FieldGenerator {
+ 
+  private:
+   std::map<std::string, std::string> variables_;
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(EnumFieldGenerator);
+ };
+ 
+ 
+diff --git a/protoc-c/c_extension.h b/protoc-c/c_extension.h
+index 95413885..bda0bc55 100644
+--- a/protoc-c/c_extension.h
++++ b/protoc-c/c_extension.h
+@@ -98,8 +98,6 @@ class ExtensionGenerator {
+   const FieldDescriptor* descriptor_;
+   std::string type_traits_;
+   std::string dllexport_decl_;
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(ExtensionGenerator);
+ };
+ 
+ }  // namespace c
+diff --git a/protoc-c/c_field.h b/protoc-c/c_field.h
+index 3cad35d3..623a872e 100644
+--- a/protoc-c/c_field.h
++++ b/protoc-c/c_field.h
+@@ -103,9 +103,6 @@ class FieldGenerator {
+                                             const std::string &type_macro,
+                                             const std::string &descriptor_addr) const;
+   const FieldDescriptor *descriptor_;
+-
+- private:
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(FieldGenerator);
+ };
+ 
+ // Convenience class which constructs FieldGenerators for a Descriptor.
+@@ -121,8 +118,6 @@ class FieldGeneratorMap {
+   std::unique_ptr<std::unique_ptr<FieldGenerator>[]> field_generators_;
+ 
+   static FieldGenerator* MakeGenerator(const FieldDescriptor* field);
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(FieldGeneratorMap);
+ };
+ 
+ }  // namespace c
+diff --git a/protoc-c/c_file.cc b/protoc-c/c_file.cc
+index 59c1824e..d211a3da 100644
+--- a/protoc-c/c_file.cc
++++ b/protoc-c/c_file.cc
+@@ -119,7 +119,11 @@ void FileGenerator::GenerateHeader(io::Printer* printer) {
+ 
+   int min_header_version = 1000000;
+ #if defined(HAVE_PROTO3)
++# if GOOGLE_PROTOBUF_VERSION >= 4023000
++  if (FileDescriptorLegacy(file_).syntax() == FileDescriptorLegacy::SYNTAX_PROTO3) {
++# else
+   if (file_->syntax() == FileDescriptor::SYNTAX_PROTO3) {
++#endif
+     min_header_version = 1003000;
+   }
+ #endif
+diff --git a/protoc-c/c_file.h b/protoc-c/c_file.h
+index 8dfd8ba0..db1866cd 100644
+--- a/protoc-c/c_file.h
++++ b/protoc-c/c_file.h
+@@ -103,8 +103,6 @@ class FileGenerator {
+   std::unique_ptr<std::unique_ptr<EnumGenerator>[]> enum_generators_;
+   std::unique_ptr<std::unique_ptr<ServiceGenerator>[]> service_generators_;
+   std::unique_ptr<std::unique_ptr<ExtensionGenerator>[]> extension_generators_;
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(FileGenerator);
+ };
+ 
+ }  // namespace c
+diff --git a/protoc-c/c_generator.h b/protoc-c/c_generator.h
+index ac1ffafe..b8b44aaa 100644
+--- a/protoc-c/c_generator.h
++++ b/protoc-c/c_generator.h
+@@ -93,9 +93,6 @@ class PROTOC_C_EXPORT CGenerator : public CodeGenerator {
+                 const std::string& parameter,
+                 OutputDirectory* output_directory,
+                 std::string* error) const;
+-
+- private:
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(CGenerator);
+ };
+ 
+ }  // namespace c
+diff --git a/protoc-c/c_helpers.h b/protoc-c/c_helpers.h
+index 7598a4e1..055528bf 100644
+--- a/protoc-c/c_helpers.h
++++ b/protoc-c/c_helpers.h
+@@ -70,6 +70,10 @@
+ #include <protobuf-c/protobuf-c.pb.h>
+ #include <google/protobuf/io/printer.h>
+ 
++#if GOOGLE_PROTOBUF_VERSION >= 4023000
++# include <google/protobuf/descriptor_legacy.h>
++#endif
++
+ namespace google {
+ namespace protobuf {
+ namespace compiler {
+@@ -172,12 +176,26 @@ int compare_name_indices_by_name(const void*, const void*);
+ // This wrapper is needed to be able to compile against protobuf2.
+ inline int FieldSyntax(const FieldDescriptor* field) {
+ #ifdef HAVE_PROTO3
++# if GOOGLE_PROTOBUF_VERSION >= 4023000
++  return FileDescriptorLegacy(field->file()).syntax() == FileDescriptorLegacy::SYNTAX_PROTO3 ? 3 : 2;
++# else
+   return field->file()->syntax() == FileDescriptor::SYNTAX_PROTO3 ? 3 : 2;
++# endif
+ #else
+   return 2;
+ #endif
+ }
+ 
++// Work around changes in protobuf >= 22.x without breaking compilation against
++// older protobuf versions.
++#if GOOGLE_PROTOBUF_VERSION >= 4022000
++# define GOOGLE_ARRAYSIZE	ABSL_ARRAYSIZE
++# define GOOGLE_CHECK_EQ	ABSL_CHECK_EQ
++# define GOOGLE_CHECK_EQ	ABSL_CHECK_EQ
++# define GOOGLE_DCHECK_GE	ABSL_DCHECK_GE
++# define GOOGLE_LOG		ABSL_LOG
++#endif
++
+ }  // namespace c
+ }  // namespace compiler
+ }  // namespace protobuf
+diff --git a/protoc-c/c_message.cc b/protoc-c/c_message.cc
+index 37e8bf8b..af2974ca 100755
+--- a/protoc-c/c_message.cc
++++ b/protoc-c/c_message.cc
+@@ -499,7 +499,7 @@ GenerateMessageDescriptor(io::Printer* printer, bool gen_init) {
+ 	  // NOTE: not supported by protobuf
+ 	  vars["maybe_static"] = "";
+ 	  vars["field_dv_ctype"] = "{ ... }";
+-	  GOOGLE_LOG(DFATAL) << "Messages can't have default values!";
++	  GOOGLE_LOG(FATAL) << "Messages can't have default values!";
+ 	  break;
+ 	case FieldDescriptor::CPPTYPE_STRING:
+ 	  if (fd->type() == FieldDescriptor::TYPE_BYTES || opt.string_as_bytes())
+@@ -521,7 +521,7 @@ GenerateMessageDescriptor(io::Printer* printer, bool gen_init) {
+ 	    break;
+ 	  }
+ 	default:
+-	  GOOGLE_LOG(DFATAL) << "Unknown CPPTYPE";
++	  GOOGLE_LOG(FATAL) << "Unknown CPPTYPE";
+ 	  break;
+ 	}
+ 	if (!already_defined)
+diff --git a/protoc-c/c_message.h b/protoc-c/c_message.h
+index ea1c3ab3..0d8c6440 100644
+--- a/protoc-c/c_message.h
++++ b/protoc-c/c_message.h
+@@ -136,8 +136,6 @@ class MessageGenerator {
+   std::unique_ptr<std::unique_ptr<MessageGenerator>[]> nested_generators_;
+   std::unique_ptr<std::unique_ptr<EnumGenerator>[]> enum_generators_;
+   std::unique_ptr<std::unique_ptr<ExtensionGenerator>[]> extension_generators_;
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(MessageGenerator);
+ };
+ 
+ }  // namespace c
+diff --git a/protoc-c/c_message_field.h b/protoc-c/c_message_field.h
+index 39b8d999..e485921a 100644
+--- a/protoc-c/c_message_field.h
++++ b/protoc-c/c_message_field.h
+@@ -82,10 +82,6 @@ class MessageFieldGenerator : public FieldGenerator {
+   void GenerateDescriptorInitializer(io::Printer* printer) const;
+   std::string GetDefaultValue(void) const;
+   void GenerateStaticInit(io::Printer* printer) const;
+-
+- private:
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(MessageFieldGenerator);
+ };
+ 
+ 
+diff --git a/protoc-c/c_primitive_field.cc b/protoc-c/c_primitive_field.cc
+index 6990893f..1727af38 100644
+--- a/protoc-c/c_primitive_field.cc
++++ b/protoc-c/c_primitive_field.cc
+@@ -143,7 +143,7 @@ std::string PrimitiveFieldGenerator::GetDefaultValue() const
+     case FieldDescriptor::CPPTYPE_BOOL:
+       return descriptor_->default_value_bool() ? "1" : "0";
+     default:
+-      GOOGLE_LOG(DFATAL) << "unexpected CPPTYPE in c_primitive_field";
++      GOOGLE_LOG(FATAL) << "unexpected CPPTYPE in c_primitive_field";
+       return "UNEXPECTED_CPPTYPE";
+   }
+ }
+diff --git a/protoc-c/c_primitive_field.h b/protoc-c/c_primitive_field.h
+index a9eb893b..aa7079f9 100644
+--- a/protoc-c/c_primitive_field.h
++++ b/protoc-c/c_primitive_field.h
+@@ -82,10 +82,6 @@ class PrimitiveFieldGenerator : public FieldGenerator {
+   void GenerateDescriptorInitializer(io::Printer* printer) const;
+   std::string GetDefaultValue(void) const;
+   void GenerateStaticInit(io::Printer* printer) const;
+-
+- private:
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(PrimitiveFieldGenerator);
+ };
+ 
+ }  // namespace c
+diff --git a/protoc-c/c_service.h b/protoc-c/c_service.h
+index 27125a60..b51472f9 100644
+--- a/protoc-c/c_service.h
++++ b/protoc-c/c_service.h
+@@ -100,8 +100,6 @@ class ServiceGenerator {
+ 
+   const ServiceDescriptor* descriptor_;
+   std::map<std::string, std::string> vars_;
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(ServiceGenerator);
+ };
+ 
+ }  // namespace c
+diff --git a/protoc-c/c_string_field.h b/protoc-c/c_string_field.h
+index 513cea75..b3a1a7ff 100644
+--- a/protoc-c/c_string_field.h
++++ b/protoc-c/c_string_field.h
+@@ -87,8 +87,6 @@ class StringFieldGenerator : public FieldGenerator {
+ 
+  private:
+   std::map<std::string, std::string> variables_;
+-
+-  GOOGLE_DISALLOW_EVIL_CONSTRUCTORS(StringFieldGenerator);
+ };
+ 
+ 
