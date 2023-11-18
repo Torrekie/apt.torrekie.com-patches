@@ -1,0 +1,25 @@
+--- a/librhash/plug_openssl.c	1655238313.000000000
++++ b/librhash/plug_openssl.c	1700302274.533072046
+@@ -224,12 +224,21 @@ static int load_openssl_runtime(void)
+ 	SetErrorMode(oldErrorMode); /* restore error mode */
+ #else
+ 	static const char* libNames[] = {
+-		"libcrypto.so",
++# if defined(__APPLE__)
++		"/usr/lib/libcrypto.3.dylib",
++		"/usr/lib/libcrypto.1.1.dylib",
++		"/usr/lib/libcrypto.1.0.2.dylib",
++		"/usr/lib/libcrypto.1.0.0.dylib",
++		"/usr/lib/libcrypto.0.9.8.dylib",
++		"/usr/lib/libcrypto.dylib",
++# else
+ 		"libcrypto.so.3",
+ 		"libcrypto.so.1.1",
+ 		"libcrypto.so.1.0.2",
+ 		"libcrypto.so.1.0.0",
+ 		"libcrypto.so.0.9.8",
++		"libcrypto.so",
++#endif
+ 	};
+ 	void* handle = 0;
+ 	size_t i;
