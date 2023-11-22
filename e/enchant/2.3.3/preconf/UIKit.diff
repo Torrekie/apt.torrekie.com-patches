@@ -1,0 +1,127 @@
+--- a/configure.ac	1650124479.000000000
++++ b/configure.ac	1700566996.023422018
+@@ -221,7 +221,7 @@ dnl FIXME: The test below assumes GCC(-c
+ dnl OBJCXX is set even if no compiler is found.
+ if test "$ac_cv_objcxx_compiler_gnu" = "yes"; then
+   AC_LANG_PUSH([Objective C++])
+-  ENCHANT_CHECK_LIB_PROVIDER([applespell], [APPLESPELL], [NOLIB],, [-framework Cocoa], [Cocoa/Cocoa.h])
++  ENCHANT_CHECK_LIB_PROVIDER([applespell], [APPLESPELL], [NOLIB],, [-framework UIKit -framework Foundation], [UIKit/UIKit.h])
+   AC_LANG_POP([Objective C++])
+ fi
+ dnl Must call AM_CONDITIONAL outside conditional
+--- a/providers/applespell_checker.mm	1513541314.000000000
++++ b/providers/applespell_checker.mm	1700566895.975738621
+@@ -23,7 +23,8 @@
+ #include <glib.h>
+ #include <gmodule.h>
+ 
+-#import <Cocoa/Cocoa.h>
++#import <UIKit/UITextChecker.h>
++#import <Foundation/Foundation.h>
+ 
+ #include "enchant-provider.h"
+ 
+@@ -46,7 +47,7 @@ class AppleSpellChecker
+ 	NSString *	codeForDictionary (NSString * dict);
+ 	char **		NSArrayToCArray (NSArray<NSString *> *array, size_t *nresult);
+ 
+-	NSSpellChecker *	m_checker;
++	UITextChecker *	m_checker;
+ 	NSMutableDictionary *	m_languages;
+ 	NSMutableDictionary *	m_dictionaries;
+ };
+@@ -61,7 +62,7 @@ AppleSpellChecker::AppleSpellChecker()
+ {
+ 	// NSLog (@"AppleSpellChecker::AppleSpellChecker");
+ 
+-	m_checker = [NSSpellChecker sharedSpellChecker];
++	m_checker = [[UITextChecker alloc] init];
+ 
+ 	m_languages = [[NSMutableDictionary alloc] initWithCapacity:16];
+ 	m_dictionaries = [[NSMutableDictionary alloc] initWithCapacity:16];
+@@ -175,9 +176,9 @@ bool AppleSpellChecker::checkWord (const
+ 
+ 	// NSLog (@"AppleSpellChecker::checkWord: word=\"%@\"", str);
+ 
+-	[m_checker setLanguage:lang];
++//	[m_checker setLanguage:lang];
+ 
+-	NSRange result = [m_checker checkSpellingOfString:str startingAt:0];
++	NSRange result = [m_checker rangeOfMisspelledWordInString:str range:NSMakeRange(0, [str length]) startingAt:0 wrap:NO language:lang];
+ 
+ 	[str release];
+ 
+@@ -193,7 +194,7 @@ char ** AppleSpellChecker::suggestWord (
+ 
+ 	*nsug = 0;
+ 
+-	[m_checker setLanguage:lang];
++//	[m_checker setLanguage:lang];
+ 
+ 	NSString * str = [[NSString alloc] initWithBytes:word length:len encoding:NSUTF8StringEncoding];
+ 	if (!str)
+@@ -202,7 +203,7 @@ char ** AppleSpellChecker::suggestWord (
+ 	// NSLog (@"AppleSpellChecker::suggestWord: word=\"%@\"", str);
+ 
+ 	NSRange range = NSMakeRange(0, [str length]);
+-	NSArray<NSString *>* result = [m_checker guessesForWordRange:range inString:str language:lang inSpellDocumentWithTag:0];
++	NSArray<NSString *>* result = [m_checker guessesForWordRange:range inString:str language:lang];
+ 
+ 	[str release];
+ 
+@@ -217,18 +218,18 @@ NSString * AppleSpellChecker::requestDic
+ 		return 0;
+ 
+ 	NSString * dictionary = dictionaryForCode ([NSString stringWithUTF8String:code]);
+-	if (dictionary)
+-		{
+-			NSString * language = [m_checker language];
+-			// NSLog (@"AppleSpellChecker::requestDictionary: ld language=\"%@\", new language=\"%@\"", language, dictionary);
+-			if (![m_checker setLanguage:dictionary])
+-				{
+-					// NSLog (@"AppleSpellChecker::requestDictionary: failed to set new language!");
+-					dictionary = 0;
+-				}
+-			if (language)
+-				[m_checker setLanguage:language];
+-		}
++//	if (dictionary)
++//		{
++//			NSString * language = [m_checker language];
++//			// NSLog (@"AppleSpellChecker::requestDictionary: ld language=\"%@\", new language=\"%@\"", language, dictionary);
++//			if (![m_checker setLanguage:dictionary])
++//				{
++//					// NSLog (@"AppleSpellChecker::requestDictionary: failed to set new language!");
++//					dictionary = 0;
++//				}
++//			if (language)
++//				[m_checker setLanguage:language];
++//		}
+ 	return dictionary;
+ }
+ 
+@@ -239,7 +240,7 @@ char **AppleSpellChecker::listDictionari
+ 	if (!m_checker)
+ 		return 0;
+ 
+-	NSArray<NSString *> *availLanguages = [m_checker availableLanguages];
++	NSArray<NSString *> *availLanguages = [UITextChecker availableLanguages];
+ 	NSMutableArray<NSString *> *availDicts = [NSMutableArray arrayWithCapacity:[availLanguages count]];
+ 
+ 	for (NSString *string in availLanguages) {
+--- a/src/enchant-2.1	1650124707.000000000
++++ b/src/enchant-2.1	1700641780.475418465
+@@ -60,11 +60,11 @@ Default: \fI~/.config/enchant\fR
+ \fICSIDL_LOCAL_APPDATA\\enchant\fR (Windows systems)
+ Default: \fIC:\\Documents and Settings\\\fRusername\fI\\Local Settings\\Application Data\\enchant
+ .TP
+-\fI/home/rrt/.local/share/enchant\fR
++\fI/usr/share/enchant\fR
+ (Or the equivalent location relative to the enchant library for a relocatable build.)
+ .PP
+ Dictionaries are looked for in a subdirectory with the same name as the
+-provider; for example, \fI/home/rrt/.local/share/enchant/hunspell\fR and
++provider; for example, \fI/usr/share/enchant/hunspell\fR and
+ \fI~/.config/enchant/hunspell\fR.
+ .PP
+ Some providers may also look in a standard system directory for their

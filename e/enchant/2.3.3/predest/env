@@ -1,0 +1,2 @@
+# Debian addition to compat with previous enchant
+pkgdatadir=/usr/share/enchant-2
