@@ -1,0 +1,399 @@
+--- a/meson.build	1680595111.000000000
++++ b/meson.build	1701162055.276517678
+@@ -16,7 +16,7 @@ config_h.set_quoted('PACKAGE', meson.pro
+ config_h.set_quoted('PACKAGE_VERSION', meson.project_version())
+ 
+ cc_args = []
+-if host_machine.system() != 'freebsd'
++if host_machine.system() not in ['darwin', 'ios', 'freebsd']
+ 	cc_args += ['-D_POSIX_C_SOURCE=200809L']
+ endif
+ add_project_arguments(cc_args, language: 'c')
+@@ -69,7 +69,7 @@ endif
+ config_h.set10('HAVE_BROKEN_MSG_CMSG_CLOEXEC', have_broken_msg_cmsg_cloexec)
+ 
+ if get_option('libraries')
+-	if host_machine.system() == 'freebsd'
++	if ['darwin', 'ios', 'freebsd'].contains(host_machine.system())
+ 		# When building for FreeBSD, epoll(7) is provided by a userspace
+ 		# wrapper around kqueue(2).
+ 		epoll_dep = dependency('epoll-shim')
+--- a/src/wayland-os.c	1680595111.000000000
++++ b/src/wayland-os.c	1701162128.360640989
+@@ -68,18 +68,18 @@ int
+ wl_os_socket_cloexec(int domain, int type, int protocol)
+ {
+ 	int fd;
+-
++#ifndef __APPLE__
+ 	fd = socket(domain, type | SOCK_CLOEXEC, protocol);
+ 	if (fd >= 0)
+ 		return fd;
+ 	if (errno != EINVAL)
+ 		return -1;
+-
++#endif
+ 	fd = socket(domain, type, protocol);
+ 	return set_cloexec_or_close(fd);
+ }
+ 
+-#if defined(__FreeBSD__)
++#if defined(LOCAL_PEERCRED)
+ int
+ wl_os_socket_peercred(int sockfd, uid_t *uid, gid_t *gid, pid_t *pid)
+ {
+@@ -95,6 +95,13 @@ wl_os_socket_peercred(int sockfd, uid_t
+ #if HAVE_XUCRED_CR_PID
+ 	/* Since https://cgit.freebsd.org/src/commit/?id=c5afec6e895a */
+ 	*pid = ucred.cr_pid;
++#elif defined(LOCAL_PEERPID)
++        size_t pid_size;
++	pid_t peerpid;
++	if (getsockopt(sockfd, SOL_LOCAL, LOCAL_PEERCRED, &peerpid, &pid_size))
++		*pid = peerpid;
++	else
++		*pid = 0;
+ #else
+ 	*pid = 0;
+ #endif
+@@ -168,7 +175,7 @@ recvmsg_cloexec_fallback(int sockfd, str
+ ssize_t
+ wl_os_recvmsg_cloexec(int sockfd, struct msghdr *msg, int flags)
+ {
+-#if HAVE_BROKEN_MSG_CMSG_CLOEXEC
++#if HAVE_BROKEN_MSG_CMSG_CLOEXEC || defined(__APPLE__)
+ 	/*
+ 	 * FreeBSD had a broken implementation of MSG_CMSG_CLOEXEC between 2015
+ 	 * and 2021, so we have to use the non-MSG_CMSG_CLOEXEC fallback
+@@ -210,7 +217,7 @@ wl_os_accept_cloexec(int sockfd, struct
+ {
+ 	int fd;
+ 
+-#ifdef HAVE_ACCEPT4
++#if defined(HAVE_ACCEPT4) && !defined(__APPLE__)
+ 	fd = accept4(sockfd, addr, addrlen, SOCK_CLOEXEC);
+ 	if (fd >= 0)
+ 		return fd;
+--- a/tests/client-test.c	1680595111.000000000
++++ b/tests/client-test.c	1701158497.874789259
+@@ -87,8 +87,13 @@ TEST(client_destroy_listener)
+ 	struct wl_resource *resource;
+ 	struct client_destroy_listener a, b;
+ 	int s[2];
+-
++#ifdef SOCK_CLOEXEC
+ 	assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s) == 0);
++#else
++	assert(socketpair(AF_UNIX, SOCK_STREAM, 0, s) == 0);
++	assert(set_cloexec_or_close(s[0]) != -1);
++	assert(set_cloexec_or_close(s[1]) != -1);
++#endif
+ 	display = wl_display_create();
+ 	assert(display);
+ 	client = wl_client_create(display, s[0]);
+--- a/tests/connection-test.c	1680595111.000000000
++++ b/tests/connection-test.c	1701158450.528574518
+@@ -48,8 +48,13 @@ setup(int *s)
+ {
+ 	struct wl_connection *connection;
+ 
++#ifdef SOCK_CLOEXEC
+ 	assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s) == 0);
+-
++#else
++	assert(socketpair(AF_UNIX, SOCK_STREAM, 0, s) == 0);
++	assert(set_cloexec_or_close(s[0]) != -1);
++	assert(set_cloexec_or_close(s[1]) != -1);
++#endif
+ 	connection = wl_connection_create(s[0]);
+ 	assert(connection);
+ 
+@@ -181,8 +186,14 @@ struct marshal_data {
+ static void
+ setup_marshal_data(struct marshal_data *data)
+ {
++#ifdef SOCK_CLOEXEC
+ 	assert(socketpair(AF_UNIX,
+ 			  SOCK_STREAM | SOCK_CLOEXEC, 0, data->s) == 0);
++#else
++	assert(socketpair(AF_UNIX, SOCK_STREAM , 0, data->s) == 0);
++	assert(set_cloexec_or_close(data->s[0]) != -1);
++	assert(set_cloexec_or_close(data->s[1]) != -1);
++#endif
+ 	data->read_connection = wl_connection_create(data->s[0]);
+ 	assert(data->read_connection);
+ 	data->write_connection = wl_connection_create(data->s[1]);
+@@ -823,8 +834,13 @@ TEST(request_bogus_size)
+ 	 */
+ 	for (bogus_size = 11; bogus_size >= 0; bogus_size--) {
+ 		fprintf(stderr, "* bogus size %d\n", bogus_size);
+-
++#ifdef SOCK_CLOEXEC
+ 		assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s) == 0);
++#else
++		assert(socketpair(AF_UNIX, SOCK_STREAM, 0, s) == 0);
++		assert(set_cloexec_or_close(s[0]) != -1);
++		assert(set_cloexec_or_close(s[1]) != -1);
++#endif
+ 		display = wl_display_create();
+ 		assert(display);
+ 		client = wl_client_create(display, s[0]);
+--- a/tests/os-wrappers-test.c	1680595111.000000000
++++ b/tests/os-wrappers-test.c	1701163874.453487801
+@@ -23,6 +23,8 @@
+  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  * SOFTWARE.
+  */
++/* This test should be skipped on Darwin */
++#ifndef __APPLE__
+ #include "../config.h"
+ 
+ #define _GNU_SOURCE
+@@ -62,7 +64,6 @@ static int fall_back;
+  * wants to override, so we have to declare our own weak symbols for
+  * __interceptor_ and check at run time if they linked to anything or not.
+ */
+-
+ #define DECL(ret_type, func, ...) \
+ 	ret_type __interceptor_ ## func(__VA_ARGS__) __attribute__((weak)); \
+ 	static ret_type (*real_ ## func)(__VA_ARGS__);			\
+@@ -92,7 +93,11 @@ socket(int domain, int type, int protoco
+ {
+ 	wrapped_calls_socket++;
+ 
+-	if (fall_back && (type & SOCK_CLOEXEC)) {
++	if (fall_back
++#ifdef SOCK_CLOEXEC
++		 && (type & SOCK_CLOEXEC)
++#endif
++	) {
+ 		errno = EINVAL;
+ 		return -1;
+ 	}
+@@ -141,7 +146,11 @@ recvmsg(int sockfd, struct msghdr *msg,
+ {
+ 	wrapped_calls_recvmsg++;
+ 
+-	if (fall_back && (flags & MSG_CMSG_CLOEXEC)) {
++	if (fall_back
++#if defined(MSG_CMSG_CLOEXEC)
++		 && (flags & MSG_CMSG_CLOEXEC)
++#endif
++	) {
+ 		errno = EINVAL;
+ 		return -1;
+ 	}
+@@ -253,9 +262,14 @@ struct marshal_data {
+ static void
+ setup_marshal_data(struct marshal_data *data)
+ {
++#ifdef SOCK_CLOEXEC
+ 	assert(socketpair(AF_UNIX,
+ 			  SOCK_STREAM | SOCK_CLOEXEC, 0, data->s) == 0);
+-
++#else
++	assert(socketpair(AF_UNIX, SOCK_STREAM, 0, data->s) == 0);
++	assert(set_cloexec_or_close(data->s[0]) != -1);
++	assert(set_cloexec_or_close(data->s[1]) != -1);
++#endif
+ 	data->read_connection = wl_connection_create(data->s[0]);
+ 	assert(data->read_connection);
+ 
+@@ -342,7 +356,7 @@ do_os_wrappers_recvmsg_cloexec(int n)
+ 	struct marshal_data data;
+ 
+ 	data.nr_fds_begin = count_open_fds();
+-#if HAVE_BROKEN_MSG_CMSG_CLOEXEC
++#if HAVE_BROKEN_MSG_CMSG_CLOEXEC || __APPLE__
+ 	/* We call the fallback directly on FreeBSD versions with a broken
+ 	 * MSG_CMSG_CLOEXEC, so we don't call the local recvmsg() wrapper. */
+ 	data.wrapped_calls = 0;
+@@ -408,3 +422,4 @@ TEST(os_wrappers_epoll_create_cloexec_fa
+ }
+ 
+ /* FIXME: add tests for wl_os_accept_cloexec() */
++#endif
+--- a/tests/resources-test.c	1680595111.000000000
++++ b/tests/resources-test.c	1701158812.238698051
+@@ -39,8 +39,13 @@ TEST(create_resource_tst)
+ 	struct wl_list *link;
+ 	int s[2];
+ 	uint32_t id;
+-
++#ifdef SOCK_CLOEXEC
+ 	assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s) == 0);
++#else
++	assert(socketpair(AF_UNIX, SOCK_STREAM, 0, s) == 0);
++	assert(set_cloexec_or_close(s[0]) != -1);
++	assert(set_cloexec_or_close(s[1]) != -1);
++#endif
+ 	display = wl_display_create();
+ 	assert(display);
+ 	client = wl_client_create(display, s[0]);
+@@ -110,8 +115,13 @@ TEST(destroy_res_tst)
+ 	struct wl_listener destroy_listener = {
+ 		.notify = &destroy_notify
+ 	};
+-
++#ifdef SOCK_CLOEXEC
+ 	assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s) == 0);
++#else
++	assert(socketpair(AF_UNIX, SOCK_STREAM, 0, s) == 0);
++	assert(set_cloexec_or_close(s[0]) != -1);
++	assert(set_cloexec_or_close(s[1]) != -1);
++#endif
+ 	display = wl_display_create();
+ 	assert(display);
+ 	client = wl_client_create(display, s[0]);
+@@ -158,8 +168,13 @@ TEST(create_resource_with_same_id)
+ 	struct wl_resource *res, *res2;
+ 	int s[2];
+ 	uint32_t id;
+-
++#ifdef SOCK_CLOEXEC
+ 	assert(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, s) == 0);
++#else
++	assert(socketpair(AF_UNIX, SOCK_STREAM, 0, s) == 0);
++	assert(set_cloexec_or_close(s[0]) != -1);
++	assert(set_cloexec_or_close(s[1]) != -1);
++#endif
+ 	display = wl_display_create();
+ 	assert(display);
+ 	client = wl_client_create(display, s[0]);
+--- a/tests/test-helpers.c	1680595111.000000000
++++ b/tests/test-helpers.c	1701163935.074489462
+@@ -61,6 +61,29 @@ count_open_fds(void)
+ 	assert(error == 0 && "sysctl KERN_PROC_NFDS failed.");
+ 	return nfds;
+ }
++#elif defined(__APPLE__)
++/*
++ * Sadly, the alternative method they provided does not work on Darwin Embedded
++ * since it never created /dev/fd.
++ */
++#include <libproc.h>
++int
++count_open_fds(void)
++{
++	int buffer_size, buffer_used;
++	pid_t pid = getpid();
++	int nfds;
++	struct proc_fdinfo *fdinfo;
++
++	buffer_size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, 0, 0);
++	fdinfo = malloc(buffer_size);
++
++	buffer_used = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fdinfo, buffer_size);
++	assert(buffer_used > 0 && "proc_pidinfo PROC_PIDLISTFDS failed.");
++
++	nfds = buffer_used / PROC_PIDLISTFD_SIZE;
++	return nfds;
++}
+ #else
+ int
+ count_open_fds(void)
+--- a/tests/test-runner.c	1680595111.000000000
++++ b/tests/test-runner.c	1701162680.450158795
+@@ -63,7 +63,12 @@ static int timeouts_enabled = 1;
+ /* set to one if the output goes to the terminal */
+ static int is_atty = 0;
+ 
++#if __APPLE__
++extern const struct test __start_test_section __asm("section$start$__DATA$test_section");
++extern const struct test __stop_test_section __asm("section$end$__DATA$test_section");
++#else
+ extern const struct test __start_test_section, __stop_test_section;
++#endif
+ 
+ static const struct test *
+ find_test(const char *name)
+@@ -308,6 +313,30 @@ is_debugger_attached(void)
+ 
+ 	return rc;
+ }
++#elif __APPLE__
++#include <sys/sysctl.h>
++// https://stackoverflow.com/a/2200786
++static int
++is_debugger_attached(void)
++{
++    int                 junk;
++    int                 mib[4];
++    struct kinfo_proc   info;
++    size_t              size;
++
++    info.kp_proc.p_flag = 0;
++
++    mib[0] = CTL_KERN;
++    mib[1] = KERN_PROC;
++    mib[2] = KERN_PROC_PID;
++    mib[3] = getpid();
++
++    size = sizeof(info);
++    junk = sysctl(mib, sizeof(mib) / sizeof(*mib), &info, &size, NULL, 0);
++    assert(junk == 0);
++
++    return ( (info.kp_proc.p_flag & P_TRACED) != 0 );
++}
+ #endif
+ 
+ int main(int argc, char *argv[])
+--- a/tests/test-runner.h	1680595111.000000000
++++ b/tests/test-runner.h	1701162431.594033741
+@@ -37,11 +37,17 @@ struct test {
+ 	int must_fail;
+ } __attribute__ ((aligned (16)));
+ 
++#if __APPLE__
++#define TEST_SECTION "__DATA,test_section"
++#else
++#define TEST_SECTION "test_section"
++#endif
++
+ #define TEST(name)							\
+ 	static void name(void);						\
+ 									\
+ 	const struct test test##name					\
+-		 __attribute__ ((used, section ("test_section"))) = {	\
++		 __attribute__ ((used, section (TEST_SECTION))) = {	\
+ 		#name, name, 0						\
+ 	};								\
+ 									\
+@@ -51,7 +57,7 @@ struct test {
+ 	static void name(void);						\
+ 									\
+ 	const struct test test##name					\
+-		 __attribute__ ((used, section ("test_section"))) = {	\
++		 __attribute__ ((used, section (TEST_SECTION))) = {	\
+ 		#name, name, 1						\
+ 	};								\
+ 									\
+@@ -93,3 +99,28 @@ test_disable_coredumps(void);
+ 	} while (0);
+ 
+ #endif
++
++/* For systems without SOCK_CLOEXEC */
++#include <fcntl.h>
++__attribute__((used))
++static int
++set_cloexec_or_close(int fd)
++{
++	long flags;
++
++	if (fd == -1)
++		return -1;
++
++	flags = fcntl(fd, F_GETFD);
++	if (flags == -1)
++		goto err;
++
++	if (fcntl(fd, F_SETFD, flags | FD_CLOEXEC) == -1)
++		goto err;
++
++	return fd;
++
++err:
++	close(fd);
++	return -1;
++}
