@@ -1,0 +1,14 @@
+GOVER=1.21.4
+GOROOT=${srcroot}
+GOROOT_FINAL=/usr/libexec/go-1.21
+GOPATH=${srcroot}/gopath
+GOCACHE=${GOPATH}/gocache
+# Required on iOS
+CGO_ENABLED=1
+GOOS=ios
+GOARCH=arm64
+CC=clang
+# Create a path contains wrapper of target compilers
+CC_FOR_TARGET="cc"
+CXX_FOR_TARGET="c++"
+PATH="${srcroot}/shimbin:${PATH}"
