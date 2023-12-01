@@ -1,0 +1,17 @@
+--- a/libusb/core.c	1668749408.000000000
++++ b/libusb/core.c	1701424044.598020472
+@@ -584,14 +584,12 @@ static int initialize_device(struct usb_
+ 	dev->num_children = 0;
+ 	dev->children = NULL;
+ 
+-	libusb_ref_device(newlib_dev);
+ 	return 0;
+ }
+ 
+ static void free_device(struct usb_device *dev)
+ {
+ 	clear_device(dev);
+-	libusb_unref_device(dev->dev);
+ 	free(dev);
+ }
+ 

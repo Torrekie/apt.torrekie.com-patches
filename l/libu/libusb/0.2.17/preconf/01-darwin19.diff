@@ -1,0 +1,91 @@
+--- a/libusb/os/darwin_usb.c	1701341667.000000000
++++ b/libusb/os/darwin_usb.c	1701422462.260936891
+@@ -43,9 +43,6 @@
+ #define DARWIN_REENUMERATE_TIMEOUT_US (10 * USEC_PER_SEC)
+ 
+ #include <AvailabilityMacros.h>
+-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060 && MAC_OS_X_VERSION_MIN_REQUIRED < 101200
+-  #include <objc/objc-auto.h>
+-#endif
+ 
+ #include "darwin_usb.h"
+ 
+@@ -470,21 +467,9 @@ static void *darwin_event_thread_main (v
+   CFRunLoopSourceRef libusb_shutdown_cfsource;
+   CFRunLoopSourceContext libusb_shutdown_cfsourcectx;
+ 
+-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+   /* Set this thread's name, so it can be seen in the debugger
+      and crash reports. */
+   pthread_setname_np ("org.libusb.device-hotplug");
+-#endif
+-
+-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060 && MAC_OS_X_VERSION_MIN_REQUIRED < 101200
+-  /* Tell the Objective-C garbage collector about this thread.
+-     This is required because, unlike NSThreads, pthreads are
+-     not automatically registered. Although we don't use
+-     Objective-C, we use CoreFoundation, which does.
+-     Garbage collection support was entirely removed in 10.12,
+-     so don't bother there. */
+-  objc_registerThreadWithCollector();
+-#endif
+ 
+   /* hotplug (device arrival/removal) sources */
+   CFRunLoopSourceRef     libusb_notification_cfsource;
+@@ -1164,12 +1149,8 @@ static enum libusb_error process_new_dev
+     case kUSBDeviceSpeedLow: dev->speed = LIBUSB_SPEED_LOW; break;
+     case kUSBDeviceSpeedFull: dev->speed = LIBUSB_SPEED_FULL; break;
+     case kUSBDeviceSpeedHigh: dev->speed = LIBUSB_SPEED_HIGH; break;
+-#if MAC_OS_X_VERSION_MAX_ALLOWED >= 1080
+     case kUSBDeviceSpeedSuper: dev->speed = LIBUSB_SPEED_SUPER; break;
+-#endif
+-#if MAC_OS_X_VERSION_MAX_ALLOWED >= 101200
+     case kUSBDeviceSpeedSuperPlus: dev->speed = LIBUSB_SPEED_SUPER_PLUS; break;
+-#endif
+     default:
+       usbi_warn (ctx, "Got unknown device speed %d", devSpeed);
+     }
+@@ -1808,9 +1789,7 @@ static int darwin_reenumerate_device (st
+   /* if we need to release capture */
+   if (HAS_CAPTURE_DEVICE()) {
+     if (capture) {
+-#if MAC_OS_X_VERSION_MAX_ALLOWED >= 101000
+       options |= kUSBReEnumerateCaptureDeviceMask;
+-#endif
+     }
+   } else {
+     capture = false;
+@@ -2411,33 +2390,12 @@ static int darwin_handle_transfer_comple
+ 
+ void usbi_get_monotonic_time(struct timespec *tp) {
+ /* Check if the SDK is new enough to declare clock_gettime(), and the deployment target is at least 10.12. */
+-#if ((MAC_OS_X_VERSION_MAX_ALLOWED >= 101200) && (MAC_OS_X_VERSION_MIN_REQUIRED >= 101200))
+   clock_gettime(CLOCK_MONOTONIC, tp);
+-#else
+-  mach_timebase_info_data_t machTimeBaseInfo;
+-  mach_timebase_info(&machTimeBaseInfo);
+-
+-  uint64_t uptime = mach_absolute_time();
+-  uint64_t uptimeNano = uptime * machTimeBaseInfo.numer / machTimeBaseInfo.denom;
+-
+-  uint64_t uptimeSeconds = uptimeNano / NSEC_PER_SEC;
+-  uint64_t uptimeNanoRemainder = uptimeNano - (uptimeSeconds * NSEC_PER_SEC);
+-
+-  tp->tv_sec = uptimeSeconds;
+-  tp->tv_nsec = uptimeNanoRemainder;
+-#endif
+ }
+ 
+ void usbi_get_real_time(struct timespec *tp) {
+ /* Check if the SDK is new enough to declare clock_gettime(), and the deployment target is at least 10.12. */
+-#if ((MAC_OS_X_VERSION_MAX_ALLOWED >= 101200) && (MAC_OS_X_VERSION_MIN_REQUIRED >= 101200))
+   clock_gettime(CLOCK_REALTIME, tp);
+-#else
+-  struct timeval tv;
+-  gettimeofday(&tv, NULL);
+-  tp->tv_sec = tv.tv_sec;
+-  tp->tv_nsec = tv.tv_usec * NSEC_PER_USEC;
+-#endif
+ }
+ 
+ #if InterfaceVersion >= 550
