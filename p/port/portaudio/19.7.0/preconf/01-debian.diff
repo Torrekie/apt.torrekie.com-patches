@@ -1,0 +1,283 @@
+--- a/src/hostapi/alsa/pa_linux_alsa.c	1701685111.778681272
++++ b/src/hostapi/alsa/pa_linux_alsa.c	1701685317.884416997
+@@ -3637,10 +3637,18 @@ error:
+ 
+ /** Fill in pollfd objects.
+  */
+-static PaError PaAlsaStreamComponent_BeginPolling( PaAlsaStreamComponent* self, struct pollfd* pfds )
++static PaError PaAlsaStreamComponent_BeginPolling( PaAlsaStreamComponent* self, struct pollfd* pfds, int *xrunOccurred )
+ {
+     int nfds = alsa_snd_pcm_poll_descriptors( self->pcm, pfds, self->nfds );
+     /* If alsa returns anything else, like -EPIPE return */
++    if( -EPIPE == nfds )
++    {
++      *xrunOccurred = 1;
++    }
++    else
++    {
++      assert( nfds == self->nfds );
++    }
+     if( nfds != self->nfds )
+     {
+         return paUnanticipatedHostError;
+@@ -3804,7 +3812,7 @@ static PaError PaAlsaStream_WaitForFrame
+         if( pollCapture )
+         {
+             capturePfds = self->pfds;
+-            PaError res = PaAlsaStreamComponent_BeginPolling( &self->capture, capturePfds );
++            PaError res = PaAlsaStreamComponent_BeginPolling( &self->capture, capturePfds, &xrun );
+             if( res != paNoError)
+             {
+                 xrun = 1;
+@@ -3816,7 +3824,7 @@ static PaError PaAlsaStream_WaitForFrame
+         {
+             /* self->pfds is in effect an array of fds; if necessary, index past the capture fds */
+             playbackPfds = self->pfds + (pollCapture ? self->capture.nfds : 0);
+-            PaError res = PaAlsaStreamComponent_BeginPolling( &self->playback, playbackPfds );
++            PaError res = PaAlsaStreamComponent_BeginPolling( &self->playback, playbackPfds, &xrun );
+             if( res != paNoError)
+             {
+                 xrun = 1;
+@@ -3825,6 +3833,11 @@ static PaError PaAlsaStream_WaitForFrame
+             totalFds += self->playback.nfds;
+         }
+ 
++        if ( xrun )
++        {
++          break;
++        }
++
+ #ifdef PTHREAD_CANCELED
+         if( self->callbackMode )
+         {
+--- a/include/portaudio.h
++++ b/include/portaudio.h
+@@ -1197,6 +1197,15 @@
+ signed long Pa_GetStreamWriteAvailable( PaStream* stream );
+ 
+ 
++/** Retrieve the host type handling an open stream.
++
++ @return Returns a non-negative value representing the host API type
++ handling an open stream or, a PaErrorCode (which are always negative)
++ if PortAudio is not initialized or an error is encountered.
++*/
++PaHostApiTypeId Pa_GetStreamHostApiType( PaStream* stream );
++
++
+ /* Miscellaneous utilities */
+ 
+ 
+--- a/src/common/pa_front.c
++++ b/src/common/pa_front.c
+@@ -1257,8 +1257,10 @@
+                                   hostApiInputParametersPtr, hostApiOutputParametersPtr,
+                                   sampleRate, framesPerBuffer, streamFlags, streamCallback, userData );
+ 
+-    if( result == paNoError )
++    if( result == paNoError ) {
+         AddOpenStream( *stream );
++        PA_STREAM_REP(*stream)->hostApiType = hostApi->info.type;
++    }
+ 
+ 
+     PA_LOGAPI(("Pa_OpenStream returned:\n" ));
+@@ -1770,6 +1772,32 @@
+     return result;
+ }
+ 
++PaHostApiTypeId Pa_GetStreamHostApiType( PaStream* stream )
++{
++    PaError error = PaUtil_ValidateStreamPointer( stream );
++    PaHostApiTypeId result;
++
++#ifdef PA_LOG_API_CALLS
++    PaUtil_DebugPrint("Pa_GetStreamHostApiType called:\n" );
++    PaUtil_DebugPrint("\tPaStream* stream: 0x%p\n", stream );
++#endif
++
++    if( error == paNoError )
++    {
++        result = PA_STREAM_REP(stream)->hostApiType;
++    }
++    else
++    {
++        result = (PaHostApiTypeId) error;
++    }
++
++#ifdef PA_LOG_API_CALLS
++    PaUtil_DebugPrint("Pa_GetStreamHostApiType returned:\n" );
++    PaUtil_DebugPrint("\tPaError: %d ( %s )\n\n", result, Pa_GetErrorText( result ) );
++#endif
++
++    return result;
++}
+ 
+ PaError Pa_GetSampleSize( PaSampleFormat format )
+ {
+--- a/src/common/pa_stream.c
++++ b/src/common/pa_stream.c
+@@ -93,6 +93,8 @@
+     streamRepresentation->streamInfo.inputLatency = 0.;
+     streamRepresentation->streamInfo.outputLatency = 0.;
+     streamRepresentation->streamInfo.sampleRate = 0.;
++
++    streamRepresentation->hostApiType = 0;
+ }
+ 
+ 
+--- a/src/common/pa_stream.h
++++ b/src/common/pa_stream.h
+@@ -152,6 +152,7 @@
+     PaStreamFinishedCallback *streamFinishedCallback;
+     void *userData;
+     PaStreamInfo streamInfo;
++    PaHostApiTypeId hostApiType;
+ } PaUtilStreamRepresentation;
+ 
+ 
+--- a/src/hostapi/alsa/pa_linux_alsa.c
++++ b/src/hostapi/alsa/pa_linux_alsa.c
+@@ -621,6 +621,7 @@
+     StreamDirection streamDir;
+ 
+     snd_pcm_channel_area_t *channelAreas;  /* Needed for channel adaption */
++    int card;
+ } PaAlsaStreamComponent;
+ 
+ /* Implementation specific stream structure */
+@@ -1873,6 +1874,7 @@
+ {
+     PaError result = paNoError;
+     PaSampleFormat userSampleFormat = params->sampleFormat, hostSampleFormat = paNoError;
++    snd_pcm_info_t* pcmInfo;
+     assert( params->channelCount > 0 );
+ 
+     /* Make sure things have an initial value */
+@@ -1900,6 +1902,9 @@
+     self->device = params->device;
+ 
+     PA_ENSURE( AlsaOpen( &alsaApi->baseHostApiRep, params, streamDir, &self->pcm ) );
++
++    snd_pcm_info_alloca( &pcmInfo );
++    self->card = snd_pcm_info_get_card( pcmInfo );
+     self->nfds = alsa_snd_pcm_poll_descriptors_count( self->pcm );
+ 
+     PA_ENSURE( hostSampleFormat = PaUtil_SelectClosestAvailableFormat( GetAvailableFormats( self->pcm ), userSampleFormat ) );
+@@ -4605,9 +4610,7 @@
+     /* XXX: More descriptive error? */
+     PA_UNLESS( stream->capture.pcm, paDeviceUnavailable );
+ 
+-    alsa_snd_pcm_info_alloca( &pcmInfo );
+-    PA_ENSURE( alsa_snd_pcm_info( stream->capture.pcm, pcmInfo ) );
+-    *card = alsa_snd_pcm_info_get_card( pcmInfo );
++    *card = stream->capture.card;
+ 
+ error:
+     return result;
+@@ -4624,9 +4627,7 @@
+     /* XXX: More descriptive error? */
+     PA_UNLESS( stream->playback.pcm, paDeviceUnavailable );
+ 
+-    alsa_snd_pcm_info_alloca( &pcmInfo );
+-    PA_ENSURE( alsa_snd_pcm_info( stream->playback.pcm, pcmInfo ) );
+-    *card = alsa_snd_pcm_info_get_card( pcmInfo );
++    *card = stream->playback.card;
+ 
+ error:
+     return result;
+--- a/configure.in
++++ b/configure.in
+@@ -420,6 +420,7 @@
+                    DLL_LIBS="$DLL_LIBS -lossaudio"
+                    LIBS="$LIBS -lossaudio"
+            fi
++           INCLUDES="$INCLUDES pa_unix_oss.h"
+            AC_DEFINE(PA_USE_OSS,1)
+         fi
+ 
+--- a/src/hostapi/oss/pa_unix_oss.c	1701685375.448192159
++++ b/src/hostapi/oss/pa_unix_oss.c	1701685572.280750211
+@@ -2050,3 +2050,27 @@ error:
+     return result;
+ #endif
+ }
++
++const char *PaOSS_GetStreamInputDevice( PaStream* s )
++{
++    PaOssStream *stream = (PaOssStream*)s;
++
++    if( stream->capture )
++    {
++      return stream->capture->devName;
++    }
++
++   return NULL;
++}
++
++const char *PaOSS_GetStreamOutputDevice( PaStream* s )
++{
++    PaOssStream *stream = (PaOssStream*)s;
++
++    if( stream->playback )
++    {
++      return stream->playback->devName;
++    }
++
++   return NULL;
++}
+--- /dev/null	1701685682.653112000
++++ b/include/pa_unix_oss.h	1701685660.443512144
+@@ -0,0 +1,52 @@
++#ifndef PA_UNIX_OSS_H
++#define PA_UNIX_OSS_H
++
++/*
++ * $Id: portaudio.patch,v 1.10 2009-06-30 04:52:59 llucius Exp $
++ * PortAudio Portable Real-Time Audio Library
++ * OSS-specific extensions
++ *
++ * Copyright (c) 1999-2000 Ross Bencina and Phil Burk
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining
++ * a copy of this software and associated documentation files
++ * (the "Software"), to deal in the Software without restriction,
++ * including without limitation the rights to use, copy, modify, merge,
++ * publish, distribute, sublicense, and/or sell copies of the Software,
++ * and to permit persons to whom the Software is furnished to do so,
++ * subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be
++ * included in all copies or substantial portions of the Software.
++ *
++ * Any person wishing to distribute modifications to the Software is
++ * requested to send the modifications to the original developer so that
++ * they can be incorporated into the canonical version.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
++ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR
++ * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
++ * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
++ * WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ *
++ */
++
++/** @file
++ * OSS-specific PortAudio API extension header file.
++ */
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++const char *PaOSS_GetStreamInputDevice( PaStream *s );
++
++const char *PaOSS_GetStreamOutputDevice( PaStream *s );
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif

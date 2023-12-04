@@ -1,0 +1,142 @@
+--- a/Makefile.in	1617237341.000000000
++++ b/Makefile.in	1701682016.242920940
+@@ -143,6 +143,7 @@ SRC_DIRS = \
+ 	src/hostapi/asihpi \
+ 	src/hostapi/asio \
+ 	src/hostapi/coreaudio \
++	src/hostapi/coreaudio_ios \
+ 	src/hostapi/dsound \
+ 	src/hostapi/jack \
+ 	src/hostapi/oss \
+--- configure.in.orig	1617237342.000000000
++++ configure.in	1701686602.484230155
+@@ -209,75 +209,29 @@ CFLAGS="$CFLAGS -I\$(top_srcdir)/include
+ 
+ case "${host_os}" in
+   darwin* )
+-        dnl Mac OS X configuration
++        dnl Darwin configuration
+ 
+-        AC_DEFINE(PA_USE_COREAUDIO,1)
++        darwin_embedded=no
++        AC_RUN_IFELSE([AC_LANG_PROGRAM([#include <TargetConditionals.h>], [
++            #if !TARGET_OS_EMBEDDED
++            exit(1);
++            #endif
++        ])], [darwin_embedded=yes])
++
++        if [[ x"$darwin_embedded" = "xyes" ]]; then
++            AC_DEFINE(PA_USE_COREAUDIO_IOS,1)
++            LIBS="-framework CoreAudio -framework AudioToolbox -framework CoreFoundation -framework CoreServices"
++            OTHER_OBJS="src/hostapi/coreaudio_ios/pa_ios_core.o src/hostapi/coreaudio_ios/pa_ios_core_utilities.o src/hostapi/coreaudio_ios/pa_ios_core_blocking.o"
++        else
++            AC_DEFINE(PA_USE_COREAUDIO,1)
+ 
+-        CFLAGS="$CFLAGS -I\$(top_srcdir)/src/os/unix -Wno-deprecated -Werror"
+-        LIBS="-framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework CoreFoundation -framework CoreServices"
++            LIBS="-framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework CoreFoundation -framework CoreServices"
++            OTHER_OBJS="src/hostapi/coreaudio/pa_mac_core.o src/hostapi/coreaudio/pa_mac_core_utilities.o src/hostapi/coreaudio/pa_mac_core_blocking.o"
++        fi
+ 
+-        if test "x$enable_mac_universal" = "xyes" ; then
+-           case `xcodebuild -version | sed -n 's/Xcode \(.*\)/\1/p'` in
+-
+-           3.0|3.1)
+-              dnl In pre-3.2 versions of Xcode, xcodebuild doesn't
+-              dnl support -sdk, so we can't use that to look for
+-              dnl SDKs.  However, in those versions of Xcode, the
+-              dnl SDKs are under /Developer/SDKs, so we can just look
+-              dnl there.  Also, we assume they had no SDKs later
+-              dnl than 10.5, as 3.2 was the version that came with
+-              dnl 10.6, at least if the Wikipedia page for Xcode
+-              dnl is to be believed.
+-              if [[ -d /Developer/SDKs/MacOSX10.5.sdk ]] ; then
+-                 mac_version_min="-mmacosx-version-min=10.3"
+-                 mac_sysroot="-isysroot /Developer/SDKs/MacOSX10.5.sdk"
+-              else
+-                 mac_version_min="-mmacosx-version-min=10.3"
+-                 mac_sysroot="-isysroot /Developer/SDKs/MacOSX10.4u.sdk"
+-              fi
+-              ;;
+-
+-           *)
+-              dnl In 3.2 and later, xcodebuild supports -sdk, and, in
+-              dnl 4.3 and later, the SDKs aren't under /Developer/SDKs
+-              dnl as there *is* no /Developer, so we use -sdk to check
+-              dnl what SDKs are available and to get the full path of
+-              dnl the SDKs.
+-              if xcrun --sdk macosx10.5 --show-sdk-path >/dev/null 2>&1 ; then
+-                 mac_version_min="-mmacosx-version-min=10.5"
+-                 mac_sysroot="-isysroot $(xcrun --sdk macosx10.5 --show-sdk-path)"
+-              else
+-                 mac_version_min="-mmacosx-version-min=10.6"
+-                 mac_sysroot="-isysroot $(xcrun --sdk macosx --show-sdk-path)"
+-              fi
+-           esac
+-
+-           dnl Pick which architectures to build for based on what
+-           dnl the compiler and SDK supports.
+-           mac_arches=""
+-           for arch in x86_64 arm64
+-           do
+-              save_CFLAGS="$CFLAGS"
+-              CFLAGS="$CFLAGS -arch $arch"
+-              AC_COMPILE_IFELSE(
+-                 [AC_LANG_SOURCE([$PAMAC_TEST_PROGRAM])],
+-                 [
+-                    if [[ -z "$mac_arches" ]] ; then
+-                       mac_arches="-arch $arch"
+-                    else
+-                       mac_arches="$mac_arches -arch $arch"
+-                    fi
+-                 ])
+-              CFLAGS="$save_CFLAGS"
+-           done
+-        else
+-           mac_arches=""
+-           mac_sysroot=""
+-           mac_version=""
+-        fi
+-        SHARED_FLAGS="$LIBS -dynamiclib $mac_arches $mac_sysroot $mac_version_min"
+-        CFLAGS="-std=c99 $CFLAGS $mac_arches $mac_sysroot $mac_version_min"
+-        OTHER_OBJS="src/os/unix/pa_unix_hostapis.o src/os/unix/pa_unix_util.o src/hostapi/coreaudio/pa_mac_core.o src/hostapi/coreaudio/pa_mac_core_utilities.o src/hostapi/coreaudio/pa_mac_core_blocking.o src/common/pa_ringbuffer.o"
++        OTHER_OBJS="$OTHER_OBJS src/os/unix/pa_unix_hostapis.o src/os/unix/pa_unix_util.o src/common/pa_ringbuffer.o"
++        SHARED_FLAGS="$LIBS -dynamiclib -Wl,-dead_strip_dylibs"
++        CFLAGS="-std=c99 -I\$(top_srcdir)/src/os/unix -Wno-deprecated $CFLAGS"
+         PADLL="libportaudio.dylib"
+         ;;
+ 
+--- ../iosau/iOS_audio/submodules/portaudio/src/hostapi/coreaudio_ios/pa_ios_core.c	1644566881.000000000
++++ ../src/hostapi/coreaudio_ios/pa_ios_core.c	1701683701.946341987
+@@ -61,7 +61,9 @@
+ #include "pa_ios_core_internal.h"
+ 
+ #include <string.h>
+-
++#include <objc/objc.h>
++#include <objc/runtime.h>
++#include <objc/message.h>
+ #include <libkern/OSAtomic.h>
+ 
+ #include <mach/mach_time.h>
+@@ -607,6 +609,20 @@ OpenStream(struct PaUtilHostApiRepresent
+ 	UInt32 inputLatencyFrames = 0;
+ 	UInt32 outputLatencyFrames = 0;
+ 
++	/* https://stackoverflow.com/questions/71481460/how-to-patch-portaudio-for-low-latency-ios-usage */
++	Class AVAudioSession = objc_getClass("AVAudioSession");
++	SEL sharedInstance = sel_registerName("sharedInstance");
++	id instance = ((id(*)(Class, SEL))objc_msgSend)(AVAudioSession, sharedInstance);
++	SEL setActiveErrorSelector = sel_getUid("setActive:error:");
++	BOOL active = YES;
++	((void (*)(id, SEL, BOOL, id))objc_msgSend)(instance, setActiveErrorSelector, active, nil);
++	SEL setPreferredSampleRateErr = sel_getUid("setPreferredSampleRate:error:");
++	BOOL isSetPrefSamp = ((BOOL (*)(id, SEL, double, id))objc_msgSend)(instance, setPreferredSampleRateErr, sampleRate, nil);
++	if (!isSetPrefSamp) VDBUG(("Error setting pref samplerate to %f", sampleRate));
++	SEL setPreferredIOBufferDurationErr = sel_getUid("setPreferredIOBufferDuration:error:");
++	BOOL isSetPrefIOBuf = ((BOOL (*)(id, SEL, double, id))objc_msgSend)(instance, setPreferredIOBufferDurationErr, (double)((sampleRate > 0) ? ((requestedFramesPerBuffer + 1) / sampleRate) : 0.0), nil);
++	if (!isSetPrefIOBuf) VDBUG(("Error setting pref iobuffer duration to %f", (double)((sampleRate > 0) ? ((requestedFramesPerBuffer + 1) / sampleRate) : 0.0)));
++
+ 	if (requestedFramesPerBuffer == paFramesPerBufferUnspecified)
+ 		requestedFramesPerBuffer = sampleRate * 0.016;
+ 
