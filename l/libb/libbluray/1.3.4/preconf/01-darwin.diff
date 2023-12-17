@@ -1,0 +1,66 @@
+--- a/configure.ac	1669470324.000000000
++++ b/configure.ac	1702810530.606891902
+@@ -46,7 +46,7 @@ case "${host_os}" in
+     ;;
+   *darwin*)
+     SYS=darwin
+-    EXTRA_LIBS="${EXTRA_LIBS} -framework CoreFoundation -framework DiskArbitration"
++    EXTRA_LIBS="${EXTRA_LIBS} -framework CoreFoundation"
+     ;;
+   netbsd*)
+     SYS=netbsd
+--- a/doc/doxygen-footer.html	1669470324.000000000
++++ b/doc/doxygen-footer.html	1702809405.324951494
+@@ -5,7 +5,6 @@
+     <a href="http://www.doxygen.org/index.html">
+     <img class="footer" src="doxygen.png" alt="doxygen"/></a> 1.7.1<br />
+     Copyright &copy; 2010 John Stebbins et al.<br />
+-    <a rel="license" href="http://creativecommons.org/licenses/by-sa/3.0/"><img alt="Creative Commons License" border="0" src="http://i.creativecommons.org/l/by-sa/3.0/88x31.png"/></a><br/>
+     This documentation is licensed and distributed under the <a rel="license" href="http://creativecommons.org/licenses/by-sa/3.0/">Creative Commons Attribution-ShareAlike 3.0 Unported License</a>.<br/>
+   </small>
+ </div>
+--- a/src/file/dl_posix.c	1669470324.000000000
++++ b/src/file/dl_posix.c	1702809516.262649777
+@@ -77,6 +77,7 @@ void *dl_dlopen(const char *path, const
+     */
+     static const char *search_paths[] = {"", "@loader_path/lib/", "@loader_path/", "@executable_path/",
+                                          "@executable_path/lib/", "@executable_path/../lib/",
++                                         "/usr/lib/",
+                                          "@executable_path/../Resources/", "@rpath/", "/usr/local/lib/", NULL};
+     version = NULL;
+ #else
+@@ -148,7 +149,7 @@ const char *dl_get_path(void)
+             }
+             BD_DEBUG(DBG_FILE, "library file is %s\n", lib_path);
+         } else {
+-            BD_DEBUG(DBG_FILE, "Can't determine libbluray.so install path\n");
++            BD_DEBUG(DBG_FILE, "Can't determine libbluray.dylib install path\n");
+         }
+ #else
+         BD_DEBUG(DBG_FILE, "Can't determine libbluray.so install path\n");
+--- a/src/file/mount_darwin.c	1669470324.000000000
++++ b/src/file/mount_darwin.c	1702810487.334812463
+@@ -21,6 +21,17 @@
+ #include "config.h"
+ #endif
+ 
++#include <TargetConditionals.h>
++#if TARGET_OS_EMBEDDED
++#ifdef _POSIX_C_SOURCE
++#undef _POSIX_C_SOURCE
++#ifndef _DARWIN_C_SOURCE
++#define _DARWIN_C_SOURCE
++#endif
++#endif
++#include "mount_getfsstat.c"
++#else
++
+ #include "mount.h"
+ 
+ #include "util/strutl.h"
+@@ -79,3 +90,4 @@ char *mount_get_mountpoint(const char *d
+ 
+     return str_dup(device_path);
+ }
++#endif
++
