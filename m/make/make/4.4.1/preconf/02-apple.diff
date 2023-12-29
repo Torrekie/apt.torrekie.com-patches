@@ -1,0 +1,954 @@
+--- a/Makefile.am	1676930682.000000000
++++ b/Makefile.am	1703856833.008899959
+@@ -37,7 +37,7 @@ make_SRCS =	src/ar.c src/arscan.c src/co
+ 		src/mkcustom.h src/os.h src/output.c src/output.h src/read.c \
+ 		src/remake.c src/rule.c src/rule.h src/shuffle.h src/shuffle.c \
+ 		src/signame.c src/strcache.c src/variable.c src/variable.h \
+-		src/version.c src/vpath.c
++		src/version.c src/vpath.c src/next.c
+ 
+ w32_SRCS =	src/w32/pathstuff.c src/w32/w32os.c src/w32/compat/dirent.c \
+ 		src/w32/compat/posixfcn.c src/w32/include/dirent.h \
+--- a/src/default.c	1676923866.000000000
++++ b/src/default.c	1703857034.836795439
+@@ -444,6 +444,9 @@ static const char *default_variables[] =
+        However, there is no way to make implicit rules use them and FC.  */
+     "F77", "$(FC)",
+     "F77FLAGS", "$(FFLAGS)",
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++    "GNUMAKE", "YES",	/* I'm not sure who uses this.  Dave Payne 8/10/99 */
++#endif /* __APPLE__ || NeXT || NeXT_PDO */
+     "LD", "link",
+     "LEX", "lex",
+     "PC", "pascal",
+@@ -542,7 +545,7 @@ static const char *default_variables[] =
+     "CXX", "gcc",
+ #  endif /* __MSDOS__ */
+ # else
+-    "CXX", "g++",
++    "CXX", "c++",
+ # endif
+ #endif
+     /* This expands to $(CO) $(COFLAGS) $< $@ if $@ does not exist,
+--- a/src/expand.c	1674919096.000000000
++++ b/src/expand.c	1703857141.229115963
+@@ -88,6 +88,36 @@ initialize_variable_output ()
+ 
+   return variable_buffer;
+ }
++
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++char *
++save_variable_output(savelenp)
++    int *savelenp;
++{
++  char *save;
++
++  save = variable_buffer;
++  *savelenp = variable_buffer_length;
++  
++  variable_buffer = 0;
++  variable_buffer_length = 0;
++
++  return (save);
++}
++
++void
++restore_variable_output (save, savelen)
++    char *save;
++    int savelen;
++{
++  if (variable_buffer != 0)
++    free (variable_buffer);
++
++  variable_buffer = save;
++  variable_buffer_length = savelen;
++}
++#endif /* __APPLE__ || NeXT || NeXT_PDO */
++
+ 
+ /* Recursively expand V.  The returned string is malloc'd.  */
+ 
+--- a/src/file.c	1672585561.000000000
++++ b/src/file.c	1703857178.062534730
+@@ -347,6 +347,9 @@ rename_file (struct file *from_file, con
+   rehash_file (from_file, to_hname);
+   while (from_file)
+     {
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++      from_file->old_name = from_file->name;
++#endif  /* __APPLE__ || NeXT || NeXT_PDO */
+       from_file->name = from_file->hname;
+       from_file = from_file->prev;
+     }
+@@ -872,6 +875,14 @@ snap_deps (void)
+             f2->command_flags |= COMMANDS_SILENT;
+     }
+ 
++  f = lookup_file (".POSIX");
++  if (f != 0 && f->is_target) {
++    posix_pedantic = 1;
++#ifndef VMS
++    define_variable("ARFLAGS", 7, "-rv", o_default, 1);
++#endif
++  }
++
+   f = lookup_file (".NOTPARALLEL");
+   if (f != 0 && f->is_target)
+     {
+--- a/src/filedef.h	1672585561.000000000
++++ b/src/filedef.h	1703857201.645499772
+@@ -41,6 +41,10 @@ struct file
+                                    entries for the same file.  */
+     struct file *last;          /* Last entry for the same file name.  */
+ 
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++    char *old_name;
++#endif
++
+     /* File that this file was renamed to.  After any time that a
+        file could be renamed, call 'check_renamed' (below).  */
+     struct file *renamed;
+--- a/src/implicit.c	1676787957.000000000
++++ b/src/implicit.c	1703859936.083623922
+@@ -962,8 +962,24 @@ pattern_search (struct file *file, int a
+     }
+ 
+   /* RULE is nil if the loop went through the list but everything failed.  */
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO) /* for NEXT_VPATH_FLAG support */
++  if (rule == 0) {
++    if ((next_flag & NEXT_VPATH_FLAG) && file->old_name != 0) {
++      char *save_name = file->name;
++      file->name = file->old_name;
++      file->old_name = 0;
++      /* bad hack: rule should be non-null so the function returns a non-zero result */
++      if (pattern_search(file, archive, depth, recursions, 0))
++        rule = (struct rule *)1;
++      file->old_name = file->name;
++      file->name = save_name;
++    }
++    goto done;
++  }
++#else
+   if (rule == 0)
+     goto done;
++#endif	/* __APPLE__ || NeXT || NeXT_PDO */
+ 
+   foundrule = ri;
+ 
+--- a/src/job.c	1677030828.000000000
++++ b/src/job.c	1703856280.407824952
+@@ -28,6 +28,9 @@ this program.  If not, see <https://www.
+ #include "dep.h"
+ #include "shuffle.h"
+ 
++#if USE_POSIX_SPAWN
++#include <spawn.h>
++#endif
+ /* Default shell to use.  */
+ #ifdef WINDOWS32
+ # include <windows.h>
+@@ -1175,6 +1178,8 @@ start_job_command (struct child *child)
+ {
+   int flags;
+   char *p;
++  int already_set_status = 0;
++  char *saved_cmd_ptr = NULL;
+ #ifdef VMS
+ # define FREE_ARGV(_a)
+   char *argv;
+@@ -1192,7 +1197,9 @@ start_job_command (struct child *child)
+   flags = (child->file->command_flags
+            | child->file->cmds->lines_flags[child->command_line - 1]);
+ 
+-  p = child->command_ptr;
++  saved_cmd_ptr = p = child->command_ptr;
++  /* noerror is a single bit, so unless COMMANDS_NOERROR has the low bit set,
++    the ?1:0 isn't redundant */
+   child->noerror = ANY_SET (flags, COMMANDS_NOERROR);
+ 
+   while (*p != '\0')
+@@ -1293,7 +1300,8 @@ start_job_command (struct child *child)
+   /* If -q was given, say that updating 'failed' if there was any text on the
+      command line, or 'succeeded' otherwise.  The exit status of 1 tells the
+      user that -q is saying 'something to do'; the exit status for a random
+-     error is 2.  */
++     error is 2.  NOTE: in posix_pedantic mode we continue to look at commands,
++     without posix_pedantic we cna short curcuit */
+   if (argv != 0 && question_flag && NONE_SET (flags, COMMANDS_RECURSE))
+     {
+       FREE_ARGV (argv);
+@@ -1303,20 +1311,43 @@ start_job_command (struct child *child)
+         {
+ #endif
+           child->file->update_status = us_question;
+-          notice_finished_file (child->file);
+-          return;
++          already_set_status = 1;
++          if (!posix_pedantic) {
++             notice_finished_file (child->file);
++             return;
++          } else {
++             argv = 0;
++          }
+ #ifdef VMS
+         }
+ #endif
+     }
+ 
+-  if (touch_flag && NONE_SET (flags, COMMANDS_RECURSE))
+-    {
+-      /* Go on to the next command.  It might be the recursive one.
+-         We construct ARGV only to find the end of the command line.  */
+-      FREE_ARGV (argv);
+-      argv = 0;
+-    }
++  if (argv && touch_flag) {
++      if (NONE_SET (flags, COMMANDS_RECURSE)) {
++         /* Go on to the next command.  It might be the recursive one.
++            We construct ARGV only to find the end of the command line.  */
++         FREE_ARGV (argv);
++         argv = 0;
++      } else {
++         /* insert a non-recursave version of the current command next on
++           the command list so that all the proper non-recursave stuff
++           happens.  This fixes a signifigant bug where if all the commands
++           for a given target were recursave "make -t" would not touch the
++           target!
++         */
++         struct child *nk = malloc(sizeof(struct child));
++         *nk = *child;
++         char *cp = saved_cmd_ptr;
++         while(*cp == '-' || *cp == '+' || *cp == '@') {
++             fprintf(stderr, "cp %p %c\n", cp, *cp);
++             cp++;
++         }
++         nk->command_ptr = cp;
++         child->next = nk;
++         nk->file->cmds->lines_flags[nk->command_line - 1] &= ~COMMANDS_RECURSE;
++      }
++  }
+ 
+   if (argv == 0)
+     {
+@@ -1332,7 +1363,9 @@ start_job_command (struct child *child)
+           /* No more commands.  Make sure we're "running"; we might not be if
+              (e.g.) all commands were skipped due to -n.  */
+           set_command_state (child->file, cs_running);
+-          child->file->update_status = us_success;
++          if (!already_set_status) {
++              child->file->update_status = us_success;
++          }
+           notice_finished_file (child->file);
+         }
+ 
+@@ -2988,22 +3021,7 @@ construct_command_argv_internal (char *l
+             }
+           else if (*p == '\\' && p[1] == '\n')
+             {
+-              /* Backslash-newline is handled differently depending on what
+-                 kind of string we're in: inside single-quoted strings you
+-                 keep them; in double-quoted strings they disappear.  For
+-                 DOS/Windows/OS2, if we don't have a POSIX shell, we keep the
+-                 pre-POSIX behavior of removing the backslash-newline.  */
+-              if (instring == '"'
+-#if defined (__MSDOS__) || defined (__EMX__) || defined (WINDOWS32)
+-                  || !unixy_shell
+-#endif
+-                  )
+                 ++p;
+-              else
+-                {
+-                  *(ap++) = *(p++);
+-                  *(ap++) = *p;
+-                }
+             }
+           else if (*p == '\n' && restp != NULL)
+             {
+@@ -3495,24 +3513,6 @@ construct_command_argv_internal (char *l
+           }
+         else if (*p == '\\' && p[1] == '\n')
+           {
+-            /* POSIX says we keep the backslash-newline.  If we don't have a
+-               POSIX shell on DOS/Windows/OS2, mimic the pre-POSIX behavior
+-               and remove the backslash/newline.  */
+-#if defined (__MSDOS__) || defined (__EMX__) || defined (WINDOWS32)
+-# define PRESERVE_BSNL  unixy_shell
+-#else
+-# define PRESERVE_BSNL  1
+-#endif
+-            if (PRESERVE_BSNL)
+-              {
+-                *(ap++) = '\\';
+-                /* Only non-batch execution needs another backslash,
+-                   because it will be passed through a recursive
+-                   invocation of this function.  */
+-                if (!batch_mode_shell)
+-                  *(ap++) = '\\';
+-                *(ap++) = '\n';
+-              }
+             ++p;
+             continue;
+           }
+--- a/src/main.c	1676955831.000000000
++++ b/src/main.c	1703861560.908264039
+@@ -45,6 +45,9 @@ this program.  If not, see <https://www.
+ #ifdef HAVE_FCNTL_H
+ # include <fcntl.h>
+ #endif
++#if __APPLE__
++# include <mach-o/dyld.h>
++#endif
+ 
+ #ifdef _AMIGA
+ int __stack = 20000; /* Make sure we have 20K of stack space */
+@@ -109,6 +112,28 @@ static void decode_env_switches (const c
+ static char *quote_for_env (char *out, const char *in);
+ static void initialize_global_hash_tables (void);
+ 
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++/*
++ * The various Apple, NeXT, and NeXT PDO hacks are no longer enabled by
++ * default, so that default behaves matches GNU make.
++ *
++ * The hacks can be enabled selectively enabling the following options.
++ * They can be enabled by setting the variable USE_APPLE_PB_SUPPORT to one
++ * or more of the options, or by specify "-N <option>" on the command line.
++ *
++ *	all		Turn on all NeXT features.
++ *
++ *	makefiles	DON'T remake Makefiles
++ *
++ *	quiet		Be quiet: warn about using vpath compatibility
++ *			mode or missing targets or overriding implicit rules.
++ *
++ *	vpath		Use the System V vpath compatibility mode.
++ *
++ *	errexit		Use "sh -ec" (instead of "sh -c") to execute rules.
++ */
++#endif
++
+ 
+ /* True if C is a switch value that corresponds to a short option.  */
+ 
+@@ -192,6 +217,10 @@ int keep_going_flag;
+ static const int default_keep_going_flag = 0;
+ static enum variable_origin keep_going_origin = o_default;
+ 
++/* we are required to track these so we can show them in MAKEFLAGS rather
++ then merely showing the current state */
++int seen_k_switch = 0, seen_S_switch = 0;
++
+ /* Nonzero means check symlink mtimes.  */
+ 
+ int check_symlink_flag = 0;
+@@ -208,12 +237,49 @@ int print_version_flag = 0;
+ 
+ static struct stringlist *makefiles = 0;
+ 
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++/* Apple's hacks are OFF by default, and are enabled by putting the
++   "use-apple-pbhacks-*" directives in the pb_makefiles. */
++unsigned int next_flag = 0;
++static struct stringlist *next_flag_list = 0;
++#endif
++
+ /* Size of the stack when we started.  */
+ 
+ #ifdef SET_STACK_SIZE
+ struct rlimit stack_limit;
+ #endif
+ 
++#ifdef __APPLE__
++static void
++define_makefilepath_variable(void)
++{
++	uint32_t bufsize;
++	char buf[PATH_MAX], path[PATH_MAX];
++	char *p;
++	struct stat sb;
++
++	/* For $ANY_DIR/usr/bin/make, try $ANY_DIR/Makefiles */
++	bufsize = sizeof(buf);
++	if (_NSGetExecutablePath(buf, &bufsize) == 0 && realpath(buf, path) != NULL) {
++		p = strstr(path, "/usr/bin/gnumake");
++		if (p == NULL) {
++			p = strstr(path, "/usr/bin/make");
++		}
++
++		if (p != NULL && p != path) {
++			strcpy(p, "/Makefiles");
++			if (lstat(path, &sb) == 0 && S_ISDIR(sb.st_mode)) {
++				define_variable("MAKEFILEPATH", 12, path, o_default, 0);
++				return;
++			}
++		}
++	}
++
++	/* Fallback is $DEVELOPER_DIR/Makefiles */
++	define_variable("MAKEFILEPATH", 12, "$(shell /usr/bin/xcode-select -print-path 2>/dev/null || echo /usr/share)/Makefiles", o_default, 1);
++}
++#endif /* __APPLE__ */
+ 
+ /* Number of job slots for parallelism.  */
+ 
+@@ -397,6 +463,11 @@ static const char *const usage[] =
+                               Consider FILE to be infinitely new.\n"),
+     N_("\
+   --warn-undefined-variables  Warn when an undefined variable is referenced.\n"),
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++    N_("\
++  -N OPTION, --NeXT-option=OPTION\n\
++                              Turn on value of NeXT OPTION.\n"),
++#endif /* __APPLE__ || NeXT || NeXT_PDO */
+     NULL
+   };
+ 
+@@ -484,6 +555,9 @@ static struct command_switch switches[]
+     { 'o', filename, &old_files, 0, 0, 0, 0, 0, 0, "old-file", 0 },
+     { 'O', string, &output_sync_option, 1, 1, 0, 0, "target", 0, "output-sync", 0 },
+     { 'W', filename, &new_files, 0, 0, 0, 0, 0, 0, "what-if", 0 },
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++    { 'N', string, (char *) &next_flag_list, 0, 0, 0, 0, 0, 0, "NeXT-option", 0 },
++#endif /* __APPLE__ || NeXT || NeXT_PDO */
+ 
+     /* These are long-style options.  */
+     { CHAR_MAX+1, strlist, &db_flags, 1, 1, 0, 0, "basic", 0, "debug", 0 },
+@@ -1628,6 +1702,28 @@ main (int argc, char **argv, char **envp
+       arg_job_slots = env_slots;
+   }
+ 
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++  if (next_flag_list != 0) {
++        char **p;
++      next_flag = 0;
++      for (p = next_flag_list->list; *p != 0; p++) {
++          if (strcmp(*p, "vpath") == 0) {
++              next_flag |= NEXT_VPATH_FLAG;
++          } else if (strcmp(*p, "quiet") == 0) {
++              next_flag |= NEXT_QUIET_FLAG;
++          } else if (strcmp(*p, "makefiles") == 0) {
++              next_flag |= NEXT_MAKEFILES_FLAG;
++          } else if (strcmp(*p, "errexit") == 0) {
++              next_flag |= NEXT_ERREXIT_FLAG;
++          } else if (strcmp(*p, "all") == 0) {
++              next_flag = NEXT_ALL_FLAGS;
++          } else {
++              OS (error, NILF, "Unrecognized flag `%s'.", *p);
++          }
++      }
++  }
++#endif  /* __APPLE__ || NeXT || NeXT_PDO */
++
+   if (print_usage_flag)
+     print_usage (0);
+ 
+@@ -2038,6 +2134,10 @@ main (int argc, char **argv, char **envp
+   /* Define the default variables.  */
+   define_default_variables ();
+ 
++#ifdef __APPLE__
++  define_makefilepath_variable ();
++#endif /* __APPLE__ */
++
+   default_file = enter_file (strcache_add (".DEFAULT"));
+ 
+   default_goal_var = define_variable_cname (".DEFAULT_GOAL", "", o_file, 0);
+@@ -2344,6 +2444,9 @@ main (int argc, char **argv, char **envp
+     DB (DB_BASIC, (_("Enabled shuffle mode: %s\n"), shuffle_mode));
+ 
+   if (read_files)
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++      if (!(next_flag & NEXT_MAKEFILES_FLAG))
++#endif
+     {
+       /* Update any makefiles if necessary.  */
+ 
+@@ -2938,6 +3041,11 @@ main (int argc, char **argv, char **envp
+       O (error, NILF,
+          _("warning:  Clock skew detected.  Your build may be incomplete."));
+ 
++    /* Without this a make -q on a target containing all +'ed actions
++      returns MAKE_SUCCESS */
++    if (question_flag && commands_started && makefile_status == MAKE_SUCCESS) {
++	makefile_status = MAKE_TROUBLE;
++    }
+     /* Exit.  */
+     die (makefile_status);
+   }
+@@ -3182,6 +3290,13 @@ decode_switches (int argc, const char **
+               if (doit)
+                 cs->specified = 1;
+ 
++              if (c == 'k') {
++                  seen_k_switch = 1;
++              }
++              else if (c == 'S') {
++                  seen_S_switch = 1;
++              }
++
+               switch (cs->type)
+                 {
+                 default:
+@@ -3514,6 +3629,15 @@ define_makeflags (int makefile)
+       flagslen += 2 + strlen (cs->long_name);                                 \
+   } while (0)
+ 
++#define ADD_SWITCH(CH, ARG,LEN) { \
++    const struct command_switch *cs;  \
++    for(cs = switches; cs->c != '\0'; ++cs) {  \
++	if (cs->c == CH) {  \
++	    ADD_FLAG(ARG, LEN); \
++	}  \
++    } \
++}
++
+   for (cs = switches; cs->c != '\0'; ++cs)
+     if (cs->toenv && (!makefile || !cs->no_makefile))
+       switch (cs->type)
+@@ -3584,6 +3708,13 @@ define_makeflags (int makefile)
+           abort ();
+         }
+ 
++  if (seen_S_switch) {
++      ADD_SWITCH('S', 0, 0);
++      if (seen_k_switch && !keep_going_flag) {
++         ADD_SWITCH('k', 0, 0);
++      }
++  }
++
+ #undef  ADD_FLAG
+ 
+   /* Four more for the possible " -- ", plus variable references.  */
+@@ -3683,7 +3814,7 @@ define_makeflags (int makefile)
+      precedence over the new one.  Of course, an override or command
+      definition will still take precedence.  */
+   v =  define_variable_cname (MAKEFLAGS_NAME, flagstring,
+-                              env_overrides ? o_env_override : o_file, 1);
++                              env_overrides ? (posix_pedantic ? o_env : o_env_override) : o_file, 1);
+   v->special = 1;
+ 
+   return v;
+--- a/src/makeint.h	1676814715.000000000
++++ b/src/makeint.h	1703858443.521125261
+@@ -737,6 +737,21 @@ extern unsigned long command_count;
+ 
+ extern const char *default_shell;
+ 
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++extern unsigned int next_flag;
++#define NEXT_VPATH_FLAG			(1 << 0)
++#define NEXT_QUIET_FLAG			(1 << 1)
++#define NEXT_MAKEFILES_FLAG		(1 << 2)
++#define NEXT_ERREXIT_FLAG		(1 << 3)
++#define NEXT_ALL_FLAGS			(NEXT_VPATH_FLAG | 	\
++					 NEXT_QUIET_FLAG | 	\
++					 NEXT_MAKEFILES_FLAG |	\
++					 NEXT_ERREXIT_FLAG)
++
++extern int general_vpath_search();
++extern char *allocated_vpath_expand_for_file();
++#endif	/* __APPLE__ || NeXT || NeXT_PDO */
++
+ /* can we run commands via 'sh -c xxx' or must we use batch files? */
+ extern int batch_mode_shell;
+ 
+--- /dev/null	1900-01-00 00:00:00.000000000 +0000
++++ b/src/next.c	1703861335.312077862
+@@ -0,0 +1,236 @@
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO) /* for NEXT_VPATH_FLAG support */
++#include "makeint.h"
++#include "job.h"
++#include "commands.h"
++#include "filedef.h"
++#include "variable.h"
++#include "dep.h"
++#include <sys/types.h>
++#include <sys/stat.h>
++
++#if !__STDC__
++#define const
++#endif
++
++char *
++savestring (const char *str, unsigned int length)
++{
++  register char *out = (char *) xmalloc (length + 1);
++  if (length > 0)
++    bcopy (str, out, length);
++  out[length] = '\0';
++  return out;
++}
++
++/* Search through a pathlist for a file.  `search_path' will parse `path',
++ * a list of pathnames separated by colons, prepending each pathname to
++ * `filename'.  The resulting filename will be checked for existence via
++ * stat().
++ */
++static int
++search_path(path, file)
++    const char *path;
++    char **file;
++{
++    int n, length;
++    char *filename, *name;
++    const char *nextchar, *lastchar;
++
++    filename = *file;
++    n = strlen(filename);
++    length = strlen(path) + n + 10;
++    name = alloca(length) + length - 1;
++    *name = '\0';
++
++    filename += n;
++    while (--n >= 0)
++	*--name = *--filename;
++
++    if (*name == '/' || path == 0)
++	path = "";
++
++    /* Strip off leading './'s, if any. */
++    while (*name == '.' && *(name + 1) == '/')
++	name += 2;
++
++    do {
++	/* Advance to the end of the next path in our path list. */
++	nextchar = path;
++#if defined (__MSDOS__) || defined (WIN32)
++	while ((*nextchar != '\0' && *nextchar != ':' && !isspace (*nextchar))
++	|| (*nextchar == ':' && nextchar - path == 1
++	  && (nextchar[1] == '/' || nextchar[1] == '\\')))
++	    nextchar++;
++#else
++	while (*nextchar != '\0' && *nextchar != ':' && !isspace (*nextchar))
++	    nextchar++;
++#endif
++
++	lastchar = nextchar;
++	filename = name;
++
++	/* If we actually have a path, prepend the file name with a '/'. */
++	if (nextchar != path)
++	    *--filename = '/';
++
++	/* Prepend the file name with the path. */
++	while (nextchar != path)
++	    *--filename = *--nextchar;
++
++	path = (*lastchar) ? lastchar + 1 : lastchar;
++
++	{
++	    struct stat s;
++	    if (stat(filename, &s) >= 0) {
++		/* We have found a file.
++		 * Store the name we found into *FILE for the caller.  */
++		*file = savestring(filename, strlen(filename));
++		return (1);
++	    }
++	}
++    } while (*path != 0);
++    return (0);
++}
++
++int
++general_vpath_search(file)
++    char **file;
++{
++    int s;
++    int savelen;
++    char *vpath, *save;
++    
++    save = save_variable_output(&savelen);
++    vpath = variable_expand ("$(VPATH)");
++    if (**file == '/' || *vpath == '\0') {
++	restore_variable_output(save, savelen);
++	return 0;
++    }
++    s = search_path(vpath, file);
++    restore_variable_output(save, savelen);
++    return s;
++}
++
++static int
++match_dep(filename, file)
++    char **filename;
++    struct file *file;
++{
++    struct dep *d;
++
++    /* don't substitute for . or .. */
++    if (!strcmp (*filename, ".") || !strcmp (*filename, ".."))
++        return 0;
++    
++    for (d = file->deps; d != 0; d = d->next) {
++	if (d->file->old_name != 0) {
++	    if (strcmp(*filename, d->file->old_name) == 0) {
++		*filename = dep_name(d);
++		return 1;
++	    }
++	}
++	if (strcmp(*filename, dep_name(d)) == 0) {
++	    if (general_vpath_search(filename))
++		return 1;
++	}
++    }
++    return 0;
++}
++
++/* Scan LINE for vpath references. */
++
++static char *
++vpath_expand(line, file)
++    char *line;
++    struct file *file;
++{
++    struct variable *v;
++    char *p, *p1, *o;
++    static char *meta = 0;
++
++    if (meta == 0) {
++	static char buffer[256] = {0};
++	meta = buffer;
++	meta['\0'] = 1;
++	for (p = "=|^();&<>*?[]:$`'\"\\\n"; *p != 0; p++)
++	    meta[*p] = 1;
++    }
++
++    p = line;
++    o = initialize_variable_output ();
++
++    while (1) {
++	/* Copy all following uninteresting chars all at once to the
++	   variable output buffer, and skip them.  Uninteresting chars end
++	   at the next space or semicolon. */
++
++	for (p1 = p; *p1 != 0 && (isspace(*p1) || meta[*p1]); p1++)
++	    ;
++	o = variable_buffer_output (o, p, p1 - p);
++	if (*p1 == 0)
++	    break;
++	p = p1;
++	while (*p1 != 0 && !(isspace(*p1) || meta[*p1]))
++	    p1++;
++	{
++	    unsigned int n = p1 - p;
++	    char *buffer = malloc(n + 1);
++	    char *filename = buffer;
++	    struct dep *dep;
++
++	    strncpy(filename, p, n);
++	    filename[n] = 0;
++
++	    if (match_dep(&filename, file)) {
++		static struct file *last_file = 0;
++		if (last_file != file) {
++		    last_file = file;
++		    if (!(next_flag & NEXT_QUIET_FLAG)) {
++		      O (error, &file->cmds->fileinfo,
++			    "Using old-style VPATH substitution.");
++		      O (error, &file->cmds->fileinfo,
++			    "Consider using automatic variable substitution instead.");
++		    }
++		}
++		o = variable_buffer_output (o, filename, strlen(filename));
++	    } else {
++		o = variable_buffer_output (o, filename, n);
++	    }
++	    p = p1;
++	    free(buffer);
++	}
++	if (*p == '\0')
++	    break;
++    }
++    (void) variable_buffer_output (o, "", 1);
++    return initialize_variable_output ();
++}
++
++char *
++allocated_vpath_expand_for_file(line, file)
++    char *line;
++    struct file *file;
++{
++    char *save, *value;
++    struct variable_set_list *save_set_list;
++    int savelen;
++
++    if (file == 0)
++	O (fatal, NILF, "Can't do VPATH expansion on a null file.\n");
++    
++    save = save_variable_output (&savelen);
++    
++    save_set_list = current_variable_set_list;
++    current_variable_set_list = file->variables;
++    reading_file = &file->cmds->fileinfo;
++    value = vpath_expand (line, file);
++    current_variable_set_list = save_set_list;
++    reading_file = 0;
++
++    value = savestring (value, strlen (value));
++    
++    restore_variable_output (save, savelen);
++    
++    return value;
++}
++#endif	/* __APPLE__ || NeXT || NeXT_PDO */
+--- a/src/read.c	1703858952.093784596
++++ b/src/read.c	1703860908.100875426
+@@ -107,6 +107,10 @@ static const char *default_include_direc
+    This is defined as a placeholder.  */
+ # define INCLUDEDIR "."
+ #endif
++/* This means we are compiling with known prefix */
++#if defined(__APPLE__) && !defined(INCLUDEDIR)
++# define INCLUDEDIR "/usr/share/SDKs/iPhoneOS.sdk/usr/include"
++#endif
+ #ifndef _AMIGA
+     "/usr/gnu/include",
+     "/usr/local/include",
+@@ -2172,6 +2176,9 @@ record_files (struct nameseq *filenames,
+             OS (fatal, flocp,
+                 _("target file '%s' has both : and :: entries"), f->name);
+ 
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++          if (!(next_flag & NEXT_QUIET_FLAG)) {
++#endif
+           /* If CMDS == F->CMDS, this target was listed in this rule
+              more than once.  Just give a warning since this is harmless.  */
+           if (cmds != 0 && cmds == f->cmds)
+@@ -2192,6 +2199,9 @@ record_files (struct nameseq *filenames,
+                      _("warning: ignoring old recipe for target '%s'"),
+                      f->name);
+             }
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++	      }
++#endif
+ 
+           /* Defining .DEFAULT with no deps or cmds clears it.  */
+           if (f == default_file && this == 0 && cmds == 0)
+--- a/src/remake.c	1703858952.096343192
++++ b/src/remake.c	1703858672.112707755
+@@ -252,6 +252,9 @@ update_goal_chain (struct goaldep *goald
+                      or not at all.  G->changed will have been set above if
+                      any commands were actually started for this goal.  */
+                   && file->update_status == us_success && !g->changed
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++		  && !(next_flag & NEXT_QUIET_FLAG)
++#endif
+                   /* Never give a message under -s or -q.  */
+                   && !run_silent && !question_flag)
+                 OS (message, 1, ((file->phony || file->cmds == 0)
+@@ -605,6 +608,9 @@ update_file_1 (struct file *file, unsign
+ 
+           if (is_updating (d->file))
+             {
++#if __APPLE__ || NeXT || NeXT_PDO
++         if (!(next_flag & NEXT_QUIET_FLAG))
++#endif
+               OSS (error, NILF, _("Circular %s <- %s dependency dropped."),
+                    file->name, d->file->name);
+ 
+@@ -1164,6 +1170,9 @@ check_dep (struct file *file, unsigned i
+ 
+               if (is_updating (d->file))
+                 {
++#if __APPLE__ || NeXT || NeXT_PDO
++		  if (!(next_flag & NEXT_QUIET_FLAG))
++#endif
+                   OSS (error, NILF, _("Circular %s <- %s dependency dropped."),
+                        file->name, d->file->name);
+                   if (ld == 0)
+@@ -1296,12 +1305,23 @@ remake_file (struct file *file)
+            Pretend it was successfully remade.  */
+         file->update_status = us_success;
+       else
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++      {
++	char *name = file->name;
++	if ((next_flag & NEXT_VPATH_FLAG) && general_vpath_search(&name)) {
++	  free(name);
++	  file->update_status = 0;
++	} else
++#endif /* defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO) */
+         {
+           /* This is a dependency file we cannot remake.  Fail.  */
+           if (!rebuilding_makefiles || !file->dontcare)
+             complain (file);
+           file->update_status = us_failed;
+         }
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++      }
++#endif
+     }
+   else
+     {
+--- a/src/variable.c	1674929087.000000000
++++ b/src/variable.c	1703858799.078876677
+@@ -183,6 +183,41 @@ struct variable_set_list *current_variab
+ 
+ /* Implement variables.  */
+ 
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++static void check_apple_pb_support (name, length, value)
++     const char *name;
++     unsigned int length;
++     char *value;
++{
++  char *p;
++
++  if (length == 20 && !strncmp (name, "USE_APPLE_PB_SUPPORT", length)) {
++    //if (makelevel == 0) error(NILF, "USE_APPLE_PB_SUPPORT is deprecated");
++    for (p = value; *p != '\0'; p++) {
++      if (isspace (*p)) {
++	continue;
++      }
++      if (!strncmp (p, "all", 3)) {
++	p += 3;
++	next_flag |= NEXT_ALL_FLAGS;
++      } else if (!strncmp (p, "vpath", 5)) {
++	p += 5;
++	next_flag |= NEXT_VPATH_FLAG;
++      } else if (!strncmp (p, "quiet", 5)) {
++	p += 5;
++	next_flag |= NEXT_QUIET_FLAG;
++      } else if (!strncmp (p, "makefiles", 9)) {
++	p += 9;
++	next_flag |= NEXT_MAKEFILES_FLAG;
++      } else if (!strncmp (p, "errexit", 7)) {
++	p += 7;
++	next_flag |= NEXT_ERREXIT_FLAG;
++      }
++    }
++  }
++}
++#endif /* __APPLE__ || NeXT || NeXT_PDO */
++
+ void
+ init_hash_global_variable_set (void)
+ {
+@@ -207,6 +242,10 @@ define_variable_in_set (const char *name
+   struct variable **var_slot;
+   struct variable var_key;
+ 
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++  check_apple_pb_support (name, length, value);
++#endif /* __APPLE__ || NeXT || NeXT_PDO */
++
+   if (set == NULL)
+     set = &global_variable_set;
+ 
+--- a/src/variable.h	1674929087.000000000
++++ b/src/variable.h	1703858850.860003847
+@@ -126,6 +126,13 @@ extern struct variable shell_var;
+ #endif
+ 
+ char *variable_buffer_output (char *ptr, const char *string, size_t length);
++
++#if defined(__APPLE__) || defined(NeXT) || defined(NeXT_PDO)
++char *initialize_variable_output (void);
++char *save_variable_output (int *savelenp);
++void restore_variable_output (char *save, int savelen);
++#endif /* __APPLE__ || NeXT || NeXT_PDO */
++
+ char *variable_expand (const char *line);
+ char *variable_expand_for_file (const char *line, struct file *file);
+ char *allocated_variable_expand_for_file (const char *line, struct file *file);
