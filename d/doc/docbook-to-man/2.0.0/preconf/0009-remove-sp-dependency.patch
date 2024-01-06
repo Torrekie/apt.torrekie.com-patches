@@ -1,0 +1,201 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Fri, 12 May 2017 10:49:00 +0200
+Subject: remove-sp-dependency
+
+---
+ Doc/Makefile   |  2 +-
+ Doc/instant.1  |  8 ++++----
+ Doc/transpec.1 |  8 ++++----
+ Instant/main.c |  4 ++--
+ README         | 10 +++++-----
+ README.ANS     | 12 ++++++------
+ 6 files changed, 22 insertions(+), 22 deletions(-)
+
+diff --git a/Doc/Makefile b/Doc/Makefile
+index 9aac90e..4b14921 100644
+--- a/Doc/Makefile
++++ b/Doc/Makefile
+@@ -1,6 +1,6 @@
+ # $Id: Makefile,v 1.1 1999/07/03 15:27:44 debacle Exp $
+ 
+ docbook-to-man.1: docbook-to-man.sgml
+-	nsgmls -i roff docbook-to-man.sgml | \
++	onsgmls -i roff docbook-to-man.sgml | \
+ 	    instant -t docbook-to-man.ts -c roff.cmap -s roff.sdata > \
+ 	    docbook-to-man.1
+diff --git a/Doc/instant.1 b/Doc/instant.1
+index bc99c69..8af092e 100644
+--- a/Doc/instant.1
++++ b/Doc/instant.1
+@@ -52,7 +52,7 @@ instant - manipulates ESIS from parsed SGML instance
+ .PP
+ The \fBinstant\fP program manipulates an SGML document instance in a variety of ways, 
+ including translating into a form suitable for a formatting application and printing information about this instance. 
+-Input to \fBinstant\fP is the output of \fBnsgmls\fP, whose format is called Element Structure Information Set (ESIS).
++Input to \fBinstant\fP is the output of \fBonsgmls\fP, whose format is called Element Structure Information Set (ESIS).
+ .SH "Flags"
+ .PP
+ The following are the possible command line options to \fBinstant\fP. Output is sent to the standard output, except where otherwise noted.
+@@ -109,7 +109,7 @@ which include moving among and examining the various nodes in the hierarchy of t
+ .IP "\fB-I\fP"
+ List the IDs of all elements in the instance that have an ID.  The format is more suitable for other programs than humans. 
+ Lines show the ID, element GI, filename, and line, separated by colons. 
+-(This depends on the \fB-l\fP option to \fBnsgmls\fP which provide filenames and line numbers.)
++(This depends on the \fB-l\fP option to \fBonsgmls\fP which provide filenames and line numbers.)
+ .IP "\fB-i\fP \fIid\fP"
+ When translating the instance, begin processing at the element whose ID is \fIid\fP instead of the topmost element.
+ .IP "\fB-D\fP \fIvariable\fP\fB=\fP\fIvalue\fP"
+@@ -120,7 +120,7 @@ Do not print warning messages.
+ Print a help message briefly describing the options.
+ .IP "\fIfile\fP"
+ Read the instance from the file \fIfile\fP. 
+-This is expected to be the output of the program \fBnsgmls\fP.
++This is expected to be the output of the program \fBonsgmls\fP.
+ If not specified, \fBinstant\fP reads the instance from its standard input.
+ 'br\" labeled list end
+ .PP
+@@ -193,4 +193,4 @@ Character mapping file.
+ 'br\" labeled list end
+ .SH "Related Information"
+ .PP
+-\fBtranspec\fP(5), \fBnsgmls\fP(1), Standard Generalized Markup Language (SGML), ISO 8879.
++\fBtranspec\fP(5), \fBonsgmls\fP(1), Standard Generalized Markup Language (SGML), ISO 8879.
+diff --git a/Doc/transpec.1 b/Doc/transpec.1
+index b98dea8..f9f018a 100644
+--- a/Doc/transpec.1
++++ b/Doc/transpec.1
+@@ -262,7 +262,7 @@ Variables may be used as attributes are, that is in any of the text strings ment
+ In fact, if an attribute name is referred to and it is not set for a given element, 
+ \fBinstant\fP looks for a variable with the same name.  This way global defaults can be set. 
+ If you want to be sure that you are accessing a local variable value, not an attribute value, you can use lower or mixed case names. 
+-Attribute names, as passed by \fBnsgmls\fP, are in upper case.
++Attribute names, as passed by \fBonsgmls\fP, are in upper case.
+ .PP
+ Any number of \fBVar\fP actions may appear in the spec file.  These set the values of the variables before any translation takes place. 
+ The \fBSet\fP actions within transpecs are performed when that spec is processed when an element matches the given criteria.
+@@ -396,7 +396,7 @@ Find the element with \fIid\fP and use \fIspec-id\fP, if set.  If not set, use t
+ Insert the file \fIfilename\fP into the output stream.
+ .IP "\fB_infile\fP [\fBline\fP]"
+ Print the name of the sgml instance file to the output stream. If \fBline\fP is specified, also print the line number. 
+-This depends on \fBnsgmls\fP being called with the \fB\-l\fP option.
++This depends on \fBonsgmls\fP being called with the \fB\-l\fP option.
+ .IP "\fB_insertnode\fP \fBS\fP|\fBE\fP \fIspec-id\fP"
+ Do \fIspec-id\fP when the current element is traversed at a later pass. 
+ This can be considered inserting a node, without content, into the hierarchy.
+@@ -406,7 +406,7 @@ so that when the elements found by one of these actions are processed in their t
+ \fB_insertnode\fP would be specified as the action of a \fIspec-id\fP pointed to in a \fB_chasetogi\fP or \fB_followlink\fP usage.
+ .IP "\fB_location\fP"
+ The location of the current element is printed to the output stream in several ways: the path to the element (see \fB_path\fP), 
+-a position hint, which is the nearest title, the line number, if the ESIS (output from \fBnsgmls\fP) contains line numbers,
++a position hint, which is the nearest title, the line number, if the ESIS (output from \fBonsgmls\fP) contains line numbers,
+ and the ID of the element, if it has one. 
+ This is especially useful when using the \fBMessage\fP action to validate an instance.
+ .IP "\fB_namelist\fP \fIspec-id\fP [\fIspec-id2\fP]"
+@@ -523,4 +523,4 @@ SpecID:         1
+ .DE
+ .SH "Related Information"
+ .PP
+-\fBinstant\fP(1), \fBnsgmls\fP(1), \fBegrep\fP(1).
++\fBinstant\fP(1), \fBonsgmls\fP(1), \fBegrep\fP(1).
+diff --git a/Instant/main.c b/Instant/main.c
+index b3162e8..64a5e96 100644
+--- a/Instant/main.c
++++ b/Instant/main.c
+@@ -665,7 +665,7 @@ ReadESIS(
+ 				      ((*(src+1)-'0') << 3) +
+ 				      ((*(src+2)-'0'));
+                                if ( xml_mode && *dst == 10 && *(dst-1) == '\n') {
+-                                   /* nsgmls outputs \n\012 for XML line endings and we want
++                                   /* onsgmls outputs \n\012 for XML line endings and we want
+                                     to ignore the \012 */
+                                    /* fprintf(stderr, "found newline!: %c\n", *dst); */
+                                    *dst--;
+@@ -782,7 +782,7 @@ ReadESIS(
+ 		} /* if !do_DATAhack */
+ 
+ 		/* Remove any empty elements (not sure you can ever */
+-		/* get this from NSGMLS, but while I'm here...)     */
++		/* get this from ONSGMLS, but while I'm here...)     */
+ 		if (*buf == '\0') {
+ 		   /* Nothing left - skip this chunk */
+ 		   break;
+diff --git a/README b/README
+index 9650c59..087cedd 100644
+--- a/README
++++ b/README
+@@ -32,7 +32,7 @@ Software Foundation:
+ SETUP NOTES
+ ===========
+ 
+-This tool presumes that nsgmls and the DocBook DTDs have been installed
++This tool presumes that onsgmls and the DocBook DTDs have been installed
+ into "default" places.  Mainly, this means where the DTD files are
+ expected to be found (/usr/local/sgmls, /usr/local/sgmls/Davenport/dtd).
+ If you've installed them elsewhere, please modify the paths at the top
+@@ -72,13 +72,13 @@ User-level command:	docbook-to-man
+ 	<RefEntry>) into pretty-much vanilla -man macros, with tables
+ 	rendered in tbl.
+ 
+-SGML parsing engine:    nsgmls (or sgmls)
++SGML parsing engine:    onsgmls (or nsgmls or sgmls)
+ 
+ 	** not included in this package -- see ftp://ftp.jclark.com/pub/sp **
+ 
+-	The nsgmls or sgmls tool is called to parse a DocBook <RefEntry>
+-	instance and generate ESIS which is the input to the instant
+-	program.
++	The onsgmls or nsgmls or sgmls tool is called to parse a DocBook
++	<RefEntry> instance and generate ESIS which is the input to the
++	instant program.
+ 
+ Converter engine:	instant
+ 
+diff --git a/README.ANS b/README.ANS
+index 41b1b18..3ecaf30 100644
+--- a/README.ANS
++++ b/README.ANS
+@@ -24,7 +24,7 @@ version on the following platforms:
+ We use the package as follows:
+ 
+   * Install Jade and DocBook as normal - the command below assumes that
+-    the 'nsgmls' binary is available to parse a DocBook document.
++    the 'onsgmls' binary is available to parse a DocBook document.
+ 
+   * Install 'instant' binary into appropriate directory (/usr/local/bin
+     or wherever).
+@@ -39,17 +39,17 @@ We use the package as follows:
+   * Translate a source with a command such as (shown on multiple lines
+     but entered as a single line command):
+ 
+-        nsgmls -i roff {document} |
++        onsgmls -i roff {document} |
+         instant -t docbook-to-man.ts -c roff.cmap -s roff.sdata > {output}
+  
+     This assumes a document with a RefEntry as the top level element.
+     To extract a single RefEntry from a larger document, the "-i id"
+     option should be given to instant.  For documents containing a
+-    number of RefEntry elements, the initial nsgmls output may be saved
++    number of RefEntry elements, the initial onsgmls output may be saved
+     and reused for each instant execution (thus saving the SGML parsing
+     overhead).
+ 
+-    Note: the "-i roff" to nsgmls is not required, but we use that to
++    Note: the "-i roff" to onsgmls is not required, but we use that to
+     control conditional entities in our documents)
+ 
+ -- David
+@@ -87,12 +87,12 @@ General
+ Instant
+ -------
+ 
+-  * Process ESIS data for document (output from nsgmls) during the first
++  * Process ESIS data for document (output from onsgmls) during the first
+     stage of input rather than waiting until eventual output in the
+     DoData/OutputString functions.  The "pre-processing" handles
+     quoting, CMAP and SDATA and cleans up a lot of the trickier issues
+     with "\" translation in the earlier code, since "\" is used both by
+-    nsgmls for quoting as well as by the instant output processing for
++    onsgmls for quoting as well as by the instant output processing for
+     items such as the cmap file.
+ 
+   * Absorb whitespace during ESIS parsing unless within an environment

@@ -1,0 +1,29 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Fri, 12 May 2017 10:58:54 +0200
+Subject: Prevent undefined behaviour in memcpy parameter overlap.
+
+On i386 (but not armhf or amd64), docbook-to-man inserts random
+characters into the output. e.g. it will sometimes generate an "I"
+instead of a literal tab.
+
+Thanks to Chris West <solo-debianbugs@goeswhere.com> and Yuri Gribov
+<tetra2005@gmail.com>
+
+Debian-Bugs: #842635 #858389
+---
+ Instant/main.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Instant/main.c b/Instant/main.c
+index 64a5e96..0341670 100644
+--- a/Instant/main.c
++++ b/Instant/main.c
+@@ -796,7 +796,7 @@ ReadESIS(
+ 			if ( ! buf[2] )
+ 				break;
+ 			buf[0] = ' ';
+-			memcpy(&buf[1], &buf[2], strlen(buf)-1);
++			memmove(&buf[1], &buf[2], strlen(buf)-1);
+ 		}
+ 
+ 		cont[ncont].ch.data = strdup(buf);

@@ -1,0 +1,1535 @@
+From: Philipp Benner <philipp@debian.org>
+Date: Fri, 12 May 2017 10:48:59 +0200
+Subject: conglomeration
+
+Needs to be broken out (FIXME).
+---
+ Doc/Makefile                       |   6 ++
+ Doc/docbook-to-man.1               | 141 ++++++++++++++++++++++++++
+ Doc/docbook-to-man.sgml            | 125 +++++++++++++++++++++++
+ Doc/instant.1                      |  96 +++++++++---------
+ Doc/transpec.1                     | 100 +++++++++----------
+ Instant/general.h                  |   1 +
+ Instant/main.c                     |  20 +++-
+ Instant/tptregexp/regexp.c         |   3 -
+ Makefile                           |   2 +-
+ Transpec/docbook-to-man.prolog     |  14 +--
+ Transpec/docbook-to-man.ts         |  53 ++++++++--
+ Transpec/docbook-to-man.ts-PUSHPOP |   7 +-
+ Transpec/roff.cmap                 |   1 +
+ Transpec/roff.sdata                | 200 +++++++++++++++++++++++++++----------
+ ans.patch                          |   8 +-
+ cmd/docbook-to-man.sh              | 144 ++++----------------------
+ 16 files changed, 619 insertions(+), 302 deletions(-)
+ create mode 100644 Doc/Makefile
+ create mode 100644 Doc/docbook-to-man.1
+ create mode 100644 Doc/docbook-to-man.sgml
+
+diff --git a/Doc/Makefile b/Doc/Makefile
+new file mode 100644
+index 0000000..9aac90e
+--- /dev/null
++++ b/Doc/Makefile
+@@ -0,0 +1,6 @@
++# $Id: Makefile,v 1.1 1999/07/03 15:27:44 debacle Exp $
++
++docbook-to-man.1: docbook-to-man.sgml
++	nsgmls -i roff docbook-to-man.sgml | \
++	    instant -t docbook-to-man.ts -c roff.cmap -s roff.sdata > \
++	    docbook-to-man.1
+diff --git a/Doc/docbook-to-man.1 b/Doc/docbook-to-man.1
+new file mode 100644
+index 0000000..517766c
+--- /dev/null
++++ b/Doc/docbook-to-man.1
+@@ -0,0 +1,141 @@
++.\" $Header: /aolnet/dev/src/CVS/sgml/docbook-to-man/cmd/docbook-to-man.sh,v 1.1.1.1 1998/11/13 21:31:59 db3l Exp $
++.\"
++.\"	transcript compatibility for postscript use.
++.\"
++.\"	synopsis:  .P! <file.ps>
++.\"
++.de P!
++.fl
++\!!1 setgray
++.fl
++\\&.\"
++.fl
++\!!0 setgray
++.fl			\" force out current output buffer
++\!!save /psv exch def currentpoint translate 0 0 moveto
++\!!/showpage{}def
++.fl			\" prolog
++.sy sed \-e 's/^/!/' \\$1\" bring in postscript file
++\!!psv restore
++.
++.de pF
++.ie     \\*(f1 .ds f1 \\n(.f
++.el .ie \\*(f2 .ds f2 \\n(.f
++.el .ie \\*(f3 .ds f3 \\n(.f
++.el .ie \\*(f4 .ds f4 \\n(.f
++.el .tm ? font overflow
++.ft \\$1
++..
++.de fP
++.ie     !\\*(f4 \{\
++.	ft \\*(f4
++.	ds f4\"
++'	br \}
++.el .ie !\\*(f3 \{\
++.	ft \\*(f3
++.	ds f3\"
++'	br \}
++.el .ie !\\*(f2 \{\
++.	ft \\*(f2
++.	ds f2\"
++'	br \}
++.el .ie !\\*(f1 \{\
++.	ft \\*(f1
++.	ds f1\"
++'	br \}
++.el .tm ? font underflow
++..
++.ds f1\"
++.ds f2\"
++.ds f3\"
++.ds f4\"
++'\" t 
++.ta 8n 16n 24n 32n 40n 48n 56n 64n 72n  
++.TH "docbook-to-man" "1" 
++.SH "NAME" 
++docbook-to-man \(em convert \fBDocBook\fP       SGML into roff \-man macros 
++.SH "SYNOPSIS" 
++.PP 
++\fBdocbook-to-man\fR [\fIsource.sgml\fR]  [>]  [\fIdestination.1\fR]  
++.SH "DESCRIPTION" 
++.PP 
++The docbook-to-man tool is a batch converter that transforms 
++UNIX-style manpages from the \fBDocBook\fP SGML       DTD into nroff/troff \-man macros. 
++.PP 
++docbook-to-man is the shell command that runs the low-level 
++components to translate a single \fBDocBook\fP SGML document 
++instance (whose document element is <RefEntry>) into 
++pretty-much vanilla \-man macros, with tables rendered in 
++tbl. 
++.PP 
++This is not the original version by Fred Dalrymple, but one 
++with the ANS Modifications by David Bolen (db3l@ans.net). 
++.PP 
++This manual page and some small changes are by W. Borgert 
++debacle@debian.org for \fBDebian GNU/Linux\fP.  Permission is 
++granted to copy, distribute and/or modify this document under 
++the terms of the GNU Free Documentation 
++License, Version 1.1 or any later version published by the Free 
++Software Foundation; with no Invariant Sections, no Front-Cover 
++Texts and no Back-Cover Texts. 
++.SH "White space and special characters" 
++.PP 
++If you want to use tabs in your manpage you should use <programlisting>, <literal> or <screen> and invoke docbook-to-man with INSTANT_OPT set to a tab character. Be aware that multiple tabs will be collapsed into one. 
++.PP 
++When you want to collapse white space into one, you should invoke docbook-to-man with INSTANT_OPT set to a space character. 
++.PP 
++Special characters like \\, ' or . will not be interpreted if you set INSTANT_OPT to a space or tab character. 
++.SH "ENVIRONMENT" 
++.PP 
++If the variable INSTANT_OPT is not set, the 
++\fBinstant(1)\fR is called with the parameter 
++\fB\-d\fP by docbook-to-man.  If you don't want this, 
++e.g. if you want to use some special characters literally in 
++your SGML file, you can set INSTANT_OPT to just 
++a space character:  
++.PP 
++\fBINSTANT_OPT=" 
++" docbook-to-man src.sgml > 
++dst.1\fR 
++. 
++.PP 
++Note: The better way to use special characters like ^ or 
++> is to write them in the SGML way, i.e. &caret; 
++or &gt;. 
++.SH "COPYRIGHT" 
++.PP 
++Copyright (c) 1996 X Consortium 
++.PP 
++Copyright (c) 1996 Dalrymple Consulting 
++.PP 
++Permission is hereby granted, free of charge, to any person 
++obtaining a copy of this software and associated documentation 
++files (the "Software"), to deal in the Software without 
++restriction, including without limitation the rights to use, 
++copy, modify, merge, publish, distribute, sublicense, and/or 
++sell copies of the Software, and to permit persons to whom the 
++Software is furnished to do so, subject to the following 
++conditions: 
++.PP 
++The above copyright notice and this permission notice shall 
++be included in all copies or substantial portions of the 
++Software. 
++.PP 
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY 
++KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE 
++WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE 
++AND NONINFRINGEMENT.  IN NO EVENT SHALL THE X CONSORTIUM OR 
++DALRYMPLE CONSULTING BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER 
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
++ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE 
++USE OR OTHER DEALINGS IN THE SOFTWARE. 
++.PP 
++Except as contained in this notice, the names of the X 
++Consortium and Dalrymple Consulting shall not be used in 
++advertising or otherwise to promote the sale, use or other 
++dealings in this Software without prior written 
++authorization. 
++.SH "See also" 
++.PP 
++instant(1) and transpec(5) 
++.\" created by instant / docbook-to-man, Fri 10 Sep 2004, 13:13 
+diff --git a/Doc/docbook-to-man.sgml b/Doc/docbook-to-man.sgml
+new file mode 100644
+index 0000000..e4f37e5
+--- /dev/null
++++ b/Doc/docbook-to-man.sgml
+@@ -0,0 +1,125 @@
++<!doctype refentry PUBLIC "-//OASIS//DTD DocBook V4.1//EN" [
++  <!ENTITY debian  "<productname>Debian GNU/Linux</productname>">
++  <!ENTITY docbook "<productname>DocBook</productname>">
++  <!ENTITY sgml    "<abbrev>SGML</abbrev>">
++]>
++
++<!-- Manual page for docbook-to-man, DocBook source file
++     (C) 1999 W. Borgert debacle@debian.org
++
++     $Id: docbook-to-man.sgml,v 1.10 2003/08/17 19:35:54 debacle Exp $ -->
++
++<refentry>
++  <refentryinfo>
++    <address>
++      <email>debacle@debian.org</email>
++    </address>
++    <author>
++      <firstname>W.</firstname>
++      <surname>Borgert</surname>
++    </author>
++    <date>1999-06-03</date>
++  </refentryinfo>
++  <refmeta>
++    <refentrytitle>docbook-to-man</refentrytitle>
++    <manvolnum>1</manvolnum>
++  </refmeta>
++  <refnamediv>
++    <refname>docbook-to-man</refname> <refpurpose>convert &docbook;
++      &sgml; into roff \-man macros</refpurpose>
++  </refnamediv>
++  <refsynopsisdiv>
++    <cmdsynopsis>
++      <command>docbook-to-man</command>
++      <arg><replaceable>source.sgml</replaceable></arg>
++      <arg>&gt;</arg>
++      <arg><replaceable>destination.1</replaceable></arg>
++    </cmdsynopsis>
++  </refsynopsisdiv>
++  <refsect1>
++    <title>DESCRIPTION</title>
++
++    <para>The docbook-to-man tool is a batch converter that transforms
++      UNIX-style manpages from the &docbook; &sgml;
++      <abbrev>DTD</abbrev> into nroff/troff \-man macros.</para>
++
++    <para>docbook-to-man is the shell command that runs the low-level
++      components to translate a single &docbook; &sgml; document
++      instance (whose document element is &lt;RefEntry&gt;) into
++      pretty-much vanilla \-man macros, with tables rendered in
++      tbl.</para>
++
++    <para>This is not the original version by Fred Dalrymple, but one
++      with the ANS Modifications by David Bolen (db3l@ans.net).</para>
++
++    <para>This manual page and some small changes are by W. Borgert
++      <email>debacle@debian.org</email> for &debian;.  Permission is
++      granted to copy, distribute and/or modify this document under
++      the terms of the <acronym>GNU</acronym> Free Documentation
++      License, Version 1.1 or any later version published by the Free
++      Software Foundation; with no Invariant Sections, no Front-Cover
++      Texts and no Back-Cover Texts.</para>
++  </refsect1>
++  <refsect1>
++    <title>White space and special characters</title>
++      <para>If you want to use tabs in your manpage you should use &lt;programlisting&gt;, &lt;literal&gt; or &lt;screen&gt; and invoke docbook-to-man with <envar>INSTANT_OPT</envar> set to a tab character. Be aware that multiple tabs will be collapsed into one.</para>
++      <para>When you want to collapse white space into one, you should invoke docbook-to-man with <envar>INSTANT_OPT</envar> set to a space character.</para>
++      <para>Special characters like \\, ' or . will not be interpreted if you set <envar>INSTANT_OPT</envar> to a space or tab character.</para> 
++  </refsect1>
++  <refsect1>
++    <title>ENVIRONMENT</title>
++    <subtitle>INSTANT_OPT</subtitle>
++    <para>If the variable <envar>INSTANT_OPT</envar> is not set, the
++      <command>instant(1)</command> is called with the parameter
++      <option>-d</option> by docbook-to-man.  If you don't want this,
++      e.g. if you want to use some special characters literally in
++      your &sgml; file, you can set <envar>INSTANT_OPT</envar> to just
++      a space character: <cmdsynopsis><command>INSTANT_OPT=&quot;
++      &quot; docbook-to-man src.sgml &gt;
++      dst.1</command></cmdsynopsis>.</para>
++
++    <para>Note: The better way to use special characters like &caret; or
++      &gt; is to write them in the &sgml; way, i.e. &amp;caret&semi;
++      or &amp;gt&semi;.</para>
++  </refsect1>
++  <refsect1>
++    <title>COPYRIGHT</title>
++
++    <para>Copyright (c) 1996 X Consortium</para>
++    <para>Copyright (c) 1996 Dalrymple Consulting</para>
++
++    <para>Permission is hereby granted, free of charge, to any person
++      obtaining a copy of this software and associated documentation
++      files (the "Software"), to deal in the Software without
++      restriction, including without limitation the rights to use,
++      copy, modify, merge, publish, distribute, sublicense, and/or
++      sell copies of the Software, and to permit persons to whom the
++      Software is furnished to do so, subject to the following
++      conditions:</para>
++
++    <para>The above copyright notice and this permission notice shall
++      be included in all copies or substantial portions of the
++      Software.</para>
++
++    <para>THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
++      KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
++      WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE
++      AND NONINFRINGEMENT.  IN NO EVENT SHALL THE X CONSORTIUM OR
++      DALRYMPLE CONSULTING BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++      LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
++      ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
++      USE OR OTHER DEALINGS IN THE SOFTWARE.</para>
++
++    <para>Except as contained in this notice, the names of the X
++      Consortium and Dalrymple Consulting shall not be used in
++      advertising or otherwise to promote the sale, use or other
++      dealings in this Software without prior written
++      authorization.</para>
++
++  </refsect1>
++  <refsect1>
++    <title>See also</title>
++
++    <para>instant(1) and transpec(5)</para>
++  </refsect1>
++</refentry>
+diff --git a/Doc/instant.1 b/Doc/instant.1
+index 5ea640c..c198d98 100644
+--- a/Doc/instant.1
++++ b/Doc/instant.1
+@@ -1,46 +1,46 @@
+-...\"
+-...\" Copyright (c) 1994  
+-...\" Open Software Foundation, Inc. 
+-...\"  
+-...\" Permission is hereby granted to use, copy, modify and freely distribute 
+-...\" the software in this file and its documentation for any purpose without 
+-...\" fee, provided that the above copyright notice appears in all copies and 
+-...\" that both the copyright notice and this permission notice appear in 
+-...\" supporting documentation.  Further, provided that the name of Open 
+-...\" Software Foundation, Inc. ("OSF") not be used in advertising or 
+-...\" publicity pertaining to distribution of the software without prior 
+-...\" written permission from OSF.  OSF makes no representations about the 
+-...\" suitability of this software for any purpose.  It is provided "as is" 
+-...\" without express or implied warranty. 
+-...\"
+-...\" Copyright (c) 1996 X Consortium
+-...\" Copyright (c) 1996 Dalrymple Consulting
+-...\" 
+-...\" Permission is hereby granted, free of charge, to any person obtaining a copy
+-...\" of this software and associated documentation files (the "Software"), to deal
+-...\" in the Software without restriction, including without limitation the rights
+-...\" to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+-...\" copies of the Software, and to permit persons to whom the Software is
+-...\" furnished to do so, subject to the following conditions:
+-...\" 
+-...\" The above copyright notice and this permission notice shall be included in
+-...\" all copies or substantial portions of the Software.
+-...\" 
+-...\" THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+-...\" IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+-...\" FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+-...\" X CONSORTIUM OR DALRYMPLE CONSULTING BE LIABLE FOR ANY CLAIM, DAMAGES OR
+-...\" OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+-...\" ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+-...\" OTHER DEALINGS IN THE SOFTWARE.
+-...\" 
+-...\" Except as contained in this notice, the names of the X Consortium and
+-...\" Dalrymple Consulting shall not be used in advertising or otherwise to
+-...\" promote the sale, use or other dealings in this Software without prior
+-...\" written authorization.
+-...\"
+-...\" Translated with /usr/local/lib/tpt/ref-man.ts by fld on cord, Wed 07 Feb 1996, 21:59
+-.TH "instant" "user cmd"
++.\" -*- nroff -*-
++.\" Copyright (c) 1994  
++.\" Open Software Foundation, Inc. 
++.\"  
++.\" Permission is hereby granted to use, copy, modify and freely distribute 
++.\" the software in this file and its documentation for any purpose without 
++.\" fee, provided that the above copyright notice appears in all copies and 
++.\" that both the copyright notice and this permission notice appear in 
++.\" supporting documentation.  Further, provided that the name of Open 
++.\" Software Foundation, Inc. ("OSF") not be used in advertising or 
++.\" publicity pertaining to distribution of the software without prior 
++.\" written permission from OSF.  OSF makes no representations about the 
++.\" suitability of this software for any purpose.  It is provided "as is" 
++.\" without express or implied warranty. 
++.\"
++.\" Copyright (c) 1996 X Consortium
++.\" Copyright (c) 1996 Dalrymple Consulting
++.\" 
++.\" Permission is hereby granted, free of charge, to any person obtaining a copy
++.\" of this software and associated documentation files (the "Software"), to deal
++.\" in the Software without restriction, including without limitation the rights
++.\" to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++.\" copies of the Software, and to permit persons to whom the Software is
++.\" furnished to do so, subject to the following conditions:
++.\" 
++.\" The above copyright notice and this permission notice shall be included in
++.\" all copies or substantial portions of the Software.
++.\" 
++.\" THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++.\" IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++.\" FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
++.\" X CONSORTIUM OR DALRYMPLE CONSULTING BE LIABLE FOR ANY CLAIM, DAMAGES OR
++.\" OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
++.\" ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
++.\" OTHER DEALINGS IN THE SOFTWARE.
++.\" 
++.\" Except as contained in this notice, the names of the X Consortium and
++.\" Dalrymple Consulting shall not be used in advertising or otherwise to
++.\" promote the sale, use or other dealings in this Software without prior
++.\" written authorization.
++.\"
++.\" Translated with /usr/local/lib/tpt/ref-man.ts by fld on cord, Wed 07 Feb 1996, 21:59
++.TH "instant" "1" "user cmd"
+ .SH "Name"
+ instant - manipulates ESIS from parsed SGML instance
+ .SH "Synopsis"
+@@ -52,14 +52,14 @@ instant - manipulates ESIS from parsed SGML instance
+ .PP
+ The \fBinstant\fP program manipulates an SGML document instance in a variety of ways, 
+ including translating into a form suitable for a formatting application and printing information about this instance. 
+-Input to \fBinstant\fP is the output of \fBsgmls\fP, whose format is called Element Structure Information Set (ESIS).
++Input to \fBinstant\fP is the output of \fBnsgmls\fP, whose format is called Element Structure Information Set (ESIS).
+ .SH "Flags"
+ .PP
+ The following are the possible command line options to \fBinstant\fP. Output is sent to the standard output, except where otherwise noted.
+ 'br\" labeled list
+ .IP "\fB-t\fP \fIfile\fP"
+ Translate the SGML instance to another form, usually suitable for a formatting application. 
+-The \fIfile\fP is called a translation spec, which specifies how the tags are to be translated. See \fBtranspec\fP(4). 
++The \fIfile\fP is called a translation spec, which specifies how the tags are to be translated. See \fBtranspec\fP(5). 
+ By convention, names for \fIfile\fP use the suffix \fB.ts\fP, for \fItranslation spec\fP.
+ .IP "\fB-s\fP \fIfile\fP "
+ Specifies a file of mappings for SDATA entities in the instance. 
+@@ -109,7 +109,7 @@ which include moving among and examining the various nodes in the hierarchy of t
+ .IP "\fB-I\fP"
+ List the IDs of all elements in the instance that have an ID.  The format is more suitable for other programs than humans. 
+ Lines show the ID, element GI, filename, and line, separated by colons. 
+-(This depends on the \fB-l\fP option to \fBsgmls\fP which provide filenames and line numbers.)
++(This depends on the \fB-l\fP option to \fBnsgmls\fP which provide filenames and line numbers.)
+ .IP "\fB-i\fP \fIid\fP"
+ When translating the instance, begin processing at the element whose ID is \fIid\fP instead of the topmost element.
+ .IP "\fB-D\fP \fIvariable\fP\fB=\fP\fIvalue\fP"
+@@ -120,7 +120,7 @@ Do not print warning messages.
+ Print a help message briefly describing the options.
+ .IP "\fIfile\fP"
+ Read the instance from the file \fIfile\fP. 
+-This is expected to be the output of the program \fBsgmls\fP.
++This is expected to be the output of the program \fBnsgmls\fP.
+ If not specified, \fBinstant\fP reads the instance from its standard input.
+ 'br\" labeled list end
+ .PP
+@@ -193,4 +193,4 @@ Character mapping file.
+ 'br\" labeled list end
+ .SH "Related Information"
+ .PP
+-\fBtranspec\fP(4), \fBsgmls\fP(1), Standard Generalized Markup Language (SGML), ISO 8879.
++\fBtranspec\fP(5), \fBnsgmls\fP(1), Standard Generalized Markup Language (SGML), ISO 8879.
+diff --git a/Doc/transpec.1 b/Doc/transpec.1
+index 3226bbf..b98dea8 100644
+--- a/Doc/transpec.1
++++ b/Doc/transpec.1
+@@ -1,47 +1,47 @@
+-...\"
+-...\"
+-...\" Copyright (c) 1994  
+-...\" Open Software Foundation, Inc. 
+-...\"  
+-...\" Permission is hereby granted to use, copy, modify and freely distribute 
+-...\" the software in this file and its documentation for any purpose without 
+-...\" fee, provided that the above copyright notice appears in all copies and 
+-...\" that both the copyright notice and this permission notice appear in 
+-...\" supporting documentation.  Further, provided that the name of Open 
+-...\" Software Foundation, Inc. ("OSF") not be used in advertising or 
+-...\" publicity pertaining to distribution of the software without prior 
+-...\" written permission from OSF.  OSF makes no representations about the 
+-...\" suitability of this software for any purpose.  It is provided "as is" 
+-...\" without express or implied warranty. 
+-...\"
+-...\" Copyright (c) 1996 X Consortium
+-...\" Copyright (c) 1996 Dalrymple Consulting
+-...\" 
+-...\" Permission is hereby granted, free of charge, to any person obtaining a copy
+-...\" of this software and associated documentation files (the "Software"), to deal
+-...\" in the Software without restriction, including without limitation the rights
+-...\" to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+-...\" copies of the Software, and to permit persons to whom the Software is
+-...\" furnished to do so, subject to the following conditions:
+-...\" 
+-...\" The above copyright notice and this permission notice shall be included in
+-...\" all copies or substantial portions of the Software.
+-...\" 
+-...\" THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+-...\" IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+-...\" FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+-...\" X CONSORTIUM OR DALRYMPLE CONSULTING BE LIABLE FOR ANY CLAIM, DAMAGES OR
+-...\" OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+-...\" ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+-...\" OTHER DEALINGS IN THE SOFTWARE.
+-...\" 
+-...\" Except as contained in this notice, the names of the X Consortium and
+-...\" Dalrymple Consulting shall not be used in advertising or otherwise to
+-...\" promote the sale, use or other dealings in this Software without prior
+-...\" written authorization.
+-...\"
+-...\" Translated with /usr/local/lib/tpt/ref-man.ts by fld on cord, Wed 07 Feb 1996, 22:00
+-.TH "\fBtranspec\fP" "file format"
++.\" -*- nroff -*-
++.\"
++.\" Copyright (c) 1994  
++.\" Open Software Foundation, Inc. 
++.\"  
++.\" Permission is hereby granted to use, copy, modify and freely distribute 
++.\" the software in this file and its documentation for any purpose without 
++.\" fee, provided that the above copyright notice appears in all copies and 
++.\" that both the copyright notice and this permission notice appear in 
++.\" supporting documentation.  Further, provided that the name of Open 
++.\" Software Foundation, Inc. ("OSF") not be used in advertising or 
++.\" publicity pertaining to distribution of the software without prior 
++.\" written permission from OSF.  OSF makes no representations about the 
++.\" suitability of this software for any purpose.  It is provided "as is" 
++.\" without express or implied warranty. 
++.\"
++.\" Copyright (c) 1996 X Consortium
++.\" Copyright (c) 1996 Dalrymple Consulting
++.\" 
++.\" Permission is hereby granted, free of charge, to any person obtaining a copy
++.\" of this software and associated documentation files (the "Software"), to deal
++.\" in the Software without restriction, including without limitation the rights
++.\" to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++.\" copies of the Software, and to permit persons to whom the Software is
++.\" furnished to do so, subject to the following conditions:
++.\" 
++.\" The above copyright notice and this permission notice shall be included in
++.\" all copies or substantial portions of the Software.
++.\" 
++.\" THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++.\" IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++.\" FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
++.\" X CONSORTIUM OR DALRYMPLE CONSULTING BE LIABLE FOR ANY CLAIM, DAMAGES OR
++.\" OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
++.\" ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
++.\" OTHER DEALINGS IN THE SOFTWARE.
++.\" 
++.\" Except as contained in this notice, the names of the X Consortium and
++.\" Dalrymple Consulting shall not be used in advertising or otherwise to
++.\" promote the sale, use or other dealings in this Software without prior
++.\" written authorization.
++.\"
++.\" Translated with /usr/local/lib/tpt/ref-man.ts by fld on cord, Wed 07 Feb 1996, 22:00
++.TH "\fBtranspec\fP" "5" "file format"
+ .SH "Name"
+ \fBtranspec\fP - translation specification for \fBinstant\fP
+ .SH "Synopsis"
+@@ -113,7 +113,7 @@ The first is the parent of the GI.
+ This specifies that the GI is the \fInumber\fPth child element of its parent. 
+ Children are numbered starting with \fB1\fP. 
+ Negative numbers may be used to indicate order counting backwards. 
+-For example, -1 denotes the last child.
++For example, \-1 denotes the last child.
+ .IP "\fBPAttSet:\fP \fIattname\fP"
+ This specifies that the parent has this attribute, \fIattname\fP, set to any value (not IMPLIED).  A value to match may optionally
+ be specified after attname.
+@@ -174,7 +174,7 @@ There may be more than one of these lines for each transpec.
+ .IP "\fBMessage:\fP \fItext\fP"
+ This specifies a string to be printed to the standard error when the matching element is processed. 
+ It is intended for informing the user of the progress of the translation. 
+-It is also used for validation of instances (see the \fB-v\fP flag of \fBinstant\fP(1)); 
++It is also used for validation of instances (see the \fB\-v\fP flag of \fBinstant\fP(1)); 
+ a spec would be written to recognize a construct that is not allowed. 
+ This action is done immediately after \fBStartText\fP.
+ Messages are also useful for debugging spec files; one is able to easily tell when a matching spec is processed, 
+@@ -262,7 +262,7 @@ Variables may be used as attributes are, that is in any of the text strings ment
+ In fact, if an attribute name is referred to and it is not set for a given element, 
+ \fBinstant\fP looks for a variable with the same name.  This way global defaults can be set. 
+ If you want to be sure that you are accessing a local variable value, not an attribute value, you can use lower or mixed case names. 
+-Attribute names, as passed by \fBsgmls\fP, are in upper case.
++Attribute names, as passed by \fBnsgmls\fP, are in upper case.
+ .PP
+ Any number of \fBVar\fP actions may appear in the spec file.  These set the values of the variables before any translation takes place. 
+ The \fBSet\fP actions within transpecs are performed when that spec is processed when an element matches the given criteria.
+@@ -396,7 +396,7 @@ Find the element with \fIid\fP and use \fIspec-id\fP, if set.  If not set, use t
+ Insert the file \fIfilename\fP into the output stream.
+ .IP "\fB_infile\fP [\fBline\fP]"
+ Print the name of the sgml instance file to the output stream. If \fBline\fP is specified, also print the line number. 
+-This depends on \fBsgmls\fP being called with the \fB-l\fP option.
++This depends on \fBnsgmls\fP being called with the \fB\-l\fP option.
+ .IP "\fB_insertnode\fP \fBS\fP|\fBE\fP \fIspec-id\fP"
+ Do \fIspec-id\fP when the current element is traversed at a later pass. 
+ This can be considered inserting a node, without content, into the hierarchy.
+@@ -406,7 +406,7 @@ so that when the elements found by one of these actions are processed in their t
+ \fB_insertnode\fP would be specified as the action of a \fIspec-id\fP pointed to in a \fB_chasetogi\fP or \fB_followlink\fP usage.
+ .IP "\fB_location\fP"
+ The location of the current element is printed to the output stream in several ways: the path to the element (see \fB_path\fP), 
+-a position hint, which is the nearest title, the line number, if the ESIS (output from \fBsgmls\fP) contains line numbers,
++a position hint, which is the nearest title, the line number, if the ESIS (output from \fBnsgmls\fP) contains line numbers,
+ and the ID of the element, if it has one. 
+ This is especially useful when using the \fBMessage\fP action to validate an instance.
+ .IP "\fB_namelist\fP \fIspec-id\fP [\fIspec-id2\fP]"
+@@ -523,4 +523,4 @@ SpecID:         1
+ .DE
+ .SH "Related Information"
+ .PP
+-\fBinstant\fP(1), \fBsgmls\fP(1), \fBegrep\fP(1).
++\fBinstant\fP(1), \fBnsgmls\fP(1), \fBegrep\fP(1).
+diff --git a/Instant/general.h b/Instant/general.h
+index 3c432c9..4e62036 100644
+--- a/Instant/general.h
++++ b/Instant/general.h
+@@ -232,6 +232,7 @@ def int		warnings;		/* flag - show warnings? */
+ def int		interactive;		/* flag - interactive browsing? */
+ def int		slave;			/* are we slave to another process? */
+ def int		fold_case;		/* flag - fold case of GIs? */
++def int                xml_mode;               /* flag - XML-specific hacks */
+ 
+ /* ----- some macros for convenience and ease of code reading ----- */
+ 
+diff --git a/Instant/main.c b/Instant/main.c
+index db2c2be..00b9934 100644
+--- a/Instant/main.c
++++ b/Instant/main.c
+@@ -199,6 +199,7 @@ Initialize1(
+     warnings  = 1;
+     fold_case = 1;
+     this_prog = myname;
++    xml_mode  = 0;
+ 
+     /* setup global variable mapping */
+     Variables = NewMap(IMS_variables);
+@@ -258,7 +259,10 @@ CmdLineSetVariable(
+ 	if (!strcmp(tok[0], "verbose"))		verbose   = atoi(tok[1]);
+ 	else if (!strcmp(tok[0], "warnings"))	warnings  = atoi(tok[1]);
+ 	else if (!strcmp(tok[0], "foldcase"))	fold_case = atoi(tok[1]);
++       else if (!strcmp(tok[0], "xmlmode"))    xml_mode = atoi(tok[1]);
+ 	else SetMappingNV(Variables, tok[0], tok[1]);
++
++        if ( xml_mode ) fold_case = 0; /* set for lowercase if xml flag is ON */
+     }
+     else {
+ 	fprintf(stderr, "Expected an '=' in variable assignment: %s. Ignored\n",
+@@ -645,19 +649,25 @@ ReadESIS(
+ 			       *dst = ((*src-'0') << 6) +
+ 				      ((*(src+1)-'0') << 3) +
+ 				      ((*(src+2)-'0'));
++                               if ( xml_mode && *dst == 10 && *(dst-1) == '\n') {
++                                   /* nsgmls outputs \n\012 for XML line endings and we want
++                                    to ignore the \012 */
++                                   /* fprintf(stderr, "found newline!: %c\n", *dst); */
++                                   *dst--;
++                               }
+ 			       src += 3;
+ 			       break;
+ 			    case '#':  case '%':
+ 			       /* Decimal internal(#)/document(%) char */
+ 			       /* XXX: Handle better */
+-			       *dst++ = '[';
++                              *dst++ = '[';
+ 			       while (*src != ';') {
+ 				  *dst++ = *src++;
+ 			       }
+ 			       *dst++ = ']';
+ 			       src++;
+ 			       /* XXX: Whimp out - no translation */
+-			       nomap = 1;
++                              nomap = 1;
+ 			       break;
+ 			    case '|':
+ 			       /* SDATA reference */
+@@ -725,16 +735,16 @@ ReadESIS(
+ 		   /* whether or not whitespace is kept in this element     */
+ 		   cur_e = e;
+ 		   while (cur_e) {
+-		      if (pch = FindAttValByName(cur_e,"FORMAT")) {
++                     if (pch = FindAttValByName(cur_e,xml_mode ? "format" : "FORMAT")) {
+ #ifdef DEBUG
+-			 fprintf(stderr,"   D: Using FORMAT from %s element\n",
++                        fprintf(stderr,"   D: Using format from %s element\n",
+ 				 cur_e->gi);
+ #endif			 
+ 			 break;
+ 		      }
+ 		      cur_e = cur_e->parent;
+ 		   }
+-		   if (!(pch && !(strcmp(pch,"LINESPECIFIC")))) {
++                  if (!(pch && !(strcmp(pch, xml_mode ? "linespecific" : "LINESPECIFIC")))) {
+ #ifdef DEBUG
+ 		      fprintf(stderr,"   D: Compressing whitespace\n");
+ #endif
+diff --git a/Instant/tptregexp/regexp.c b/Instant/tptregexp/regexp.c
+index 66ddd87..9d41267 100644
+--- a/Instant/tptregexp/regexp.c
++++ b/Instant/tptregexp/regexp.c
+@@ -196,7 +196,6 @@ char *exp;
+ 	register char *longest;
+ 	register int len;
+ 	int flags;
+-	extern char *malloc();
+ 
+ 	if (exp == NULL)
+ 		FAIL("NULL argument");
+@@ -705,7 +704,6 @@ register regexp *prog;
+ register char *string;
+ {
+ 	register char *s;
+-	extern char *strchr();
+ 
+ 	/* Be paranoid... */
+ 	if (prog == NULL || string == NULL) {
+@@ -804,7 +802,6 @@ char *prog;
+ {
+ 	register char *scan;	/* Current node. */
+ 	char *next;		/* Next node. */
+-	extern char *strchr();
+ 
+ 	scan = prog;
+ #ifdef DEBUG
+diff --git a/Makefile b/Makefile
+index a59b024..d7611b8 100644
+--- a/Makefile
++++ b/Makefile
+@@ -41,7 +41,7 @@ ROOT =	/usr/local
+ SHELL =	/bin/sh
+ MAKE =	make
+ 
+-PIECES =	cmd Instant Transpec
++PIECES = 	cmd Instant Transpec
+ 
+ 
+ all:
+diff --git a/Transpec/docbook-to-man.prolog b/Transpec/docbook-to-man.prolog
+index 55063c9..0829414 100644
+--- a/Transpec/docbook-to-man.prolog
++++ b/Transpec/docbook-to-man.prolog
+@@ -1,7 +1,7 @@
+-...\"
+-...\" Prolog for docbook-to-man.ts - macros to push/pop fonts.
+-...\" $Id: docbook-to-man.prolog,v 1.1 1999/02/23 21:00:18 db3l Exp $
+-...\"
++.\"
++.\" Prolog for docbook-to-man.ts - macros to push/pop fonts.
++.\" $Id: docbook-to-man.prolog,v 1.1 1999/02/23 21:00:18 db3l Exp $
++.\"
+ .de pF
+ .ie     \\*(f1 .ds f1 \\n(.f
+ .el .ie \\*(f2 .ds f2 \\n(.f
+@@ -33,6 +33,6 @@
+ .ds f2\"
+ .ds f3\"
+ .ds f4\"
+-...\"
+-...\" End of prolog
+-...\"
++.\"
++.\" End of prolog
++.\"
+diff --git a/Transpec/docbook-to-man.ts b/Transpec/docbook-to-man.ts
+index ecc17f0..8f80f7f 100644
+--- a/Transpec/docbook-to-man.ts
++++ b/Transpec/docbook-to-man.ts
+@@ -57,10 +57,10 @@ Var:	procsubstep 0
+ #   ####     #####     #####     #####     #####     #####     ####     #####     
+ #
+ GI:		REFENTRY
+-StartText:	^'\\" t^${_action 1001}
+-		^.TH "${_followrel descendant REFENTRYTITLE 1000}"
++#StartText:	^'\\" t^${_action 1001}
++StartText:	^${_action 1001}.TH "${_followrel descendant REFENTRYTITLE 1000}"
+ 		"${_followrel descendant MANVOLNUM 1000}"^
+-EndText:	^...\\" created by instant / docbook-to-man, ${date}^
++EndText:	^.\\" created by instant / docbook-to-man, ${date}^
+ -
+ #
+ GI:		DOCINFO
+@@ -71,6 +71,26 @@ GI:		TITLE
+ Context:	DOCINFO
+ #	inside DocInfo, which we're ignoring
+ -
++GI:		COPYRIGHT
++Context:	DOCINFO
++#	inside DocInfo, which we're ignoring
++-
++GI:		HOLDER
++Context:	COPYRIGHT
++#	inside DocInfo, which we're ignoring
++-
++GI:		YEAR
++Context:	COPYRIGHT
++#	inside DocInfo, which we're ignoring
++-
++#
++GI:		REFENTRYINFO
++Ignore:		all
++-
++#
++GI:		COPYRIGHT
++Context:	REFENTRYINFO
++-
+ #
+ GI:		REFMETA
+ Ignore:		all
+@@ -306,8 +326,10 @@ StartText:	^.PP^
+ -
+ #
+ GI:		PROGRAMLISTING
+-StartText:	^.PP^.nf^${_action 1001}^\\f(CW
+-EndText:	\\fR^.fi^.PP^
++#StartText:	^.PP^.nf^${_action 1001}^\\f(CW
++StartText:	^.PP^.nf^${_action 1001}^
++#EndText:	\\fR^.fi^.PP^
++EndText:	^.fi^.PP^
+ Verbatim:
+ -
+ #
+@@ -1631,6 +1653,9 @@ GI:		EMPHASIS
+ StartText:	\\fI
+ EndText:	\\fP
+ -
++GI:		ENVAR
++#	no special presentation
++-
+ #
+ GI:		FIRSTTERM
+ StartText:	\\fI
+@@ -1674,7 +1699,8 @@ EndText:	\\fP
+ #
+ GI:		COMMAND
+ StartText:	\\fB
+-EndText:	\\fP
++#EndText:	\\fP
++EndText:	\\fR
+ -
+ #
+ GI:		COMPUTEROUTPUT
+@@ -1682,6 +1708,11 @@ StartText:	\\f(CW
+ EndText:	\\fP
+ -
+ #
++GI:		CONSTANT
++StartText:	\\fB
++EndText:	\\fP
++-
++#
+ GI:		DATABASE
+ #	no special presentation
+ -
+@@ -1819,7 +1850,8 @@ EndText:	\\fP
+ #
+ GI:		REPLACEABLE
+ StartText:	\\fI
+-EndText:	\\fP
++#EndText:	\\fP
++EndText:	\\fR
+ -
+ #
+ GI:		RETURNVALUE
+@@ -1897,6 +1929,11 @@ StartText:	\\fB
+ EndText:	\\fP
+ -
+ #
++GI:		VARNAME
++StartText:	\\fB
++EndText:	\\fP
++-
++#
+ GI:		AUTHOR
+ #	no special presentation - defer to content
+ -
+@@ -2006,7 +2043,7 @@ SpecID:		1000
+ #
+ GI:		_tabset
+ SpecID:		1001
+-StartText:	.ta 8n 16n 24n 32n 40n 48n 56n 64n 72n
++#StartText:	.ta 8n 16n 24n 32n 40n 48n 56n 64n 72n
+ Ignore:		all
+ -
+ #
+diff --git a/Transpec/docbook-to-man.ts-PUSHPOP b/Transpec/docbook-to-man.ts-PUSHPOP
+index 1d6883d..f6e4cdb 100644
+--- a/Transpec/docbook-to-man.ts-PUSHPOP
++++ b/Transpec/docbook-to-man.ts-PUSHPOP
+@@ -57,10 +57,11 @@ Var:	procsubstep 0
+ #   ####     #####     #####     #####     #####     #####     ####     #####     
+ #
+ GI:		REFENTRY
+-StartText:	^'\\" t^.TH "${_followrel descendant REFENTRYTITLE 1000}"
++#StartText:	^'\\" t^.TH "${_followrel descendant REFENTRYTITLE 1000}"
++StartText:	^.TH "${_followrel descendant REFENTRYTITLE 1000}"
+ 		"${_followrel descendant MANVOLNUM 1000}" "${date}"
+ 		^${_action 1002}^${_action 1001}^
+-EndText:	^...\\" created by instant / docbook-to-man, ${date}^
++EndText:	^.\\" created by instant / docbook-to-man, ${date}^
+ -
+ #
+ GI:		DOCINFO
+@@ -2161,7 +2162,7 @@ SpecID:		1000
+ #
+ GI:		_tabset
+ SpecID:		1001
+-StartText:	.ta 8n 16n 24n 32n 40n 48n 56n 64n 72n
++#StartText:	.ta 8n 16n 24n 32n 40n 48n 56n 64n 72n
+ Ignore:		all
+ -
+ #
+diff --git a/Transpec/roff.cmap b/Transpec/roff.cmap
+index 2356888..dfd8f2e 100644
+--- a/Transpec/roff.cmap
++++ b/Transpec/roff.cmap
+@@ -48,6 +48,7 @@
+ #
+ #
+ # From		To
++\		\\
+ \\		\\e
+ ^		\^
+ .		\\&.
+diff --git a/Transpec/roff.sdata b/Transpec/roff.sdata
+index 089e6b7..c5fa3af 100644
+--- a/Transpec/roff.sdata
++++ b/Transpec/roff.sdata
+@@ -58,9 +58,9 @@
+ [frac38]		3/8
+ [frac58]		5/8
+ [frac78]		7/8
+-[sup1  ]		\\u1\\l
+-[sup2  ]		\\u2\\l
+-[sup3  ]		\\u3\\l
++[sup1  ]		\\(S1
++[sup2  ]		\\(S2
++[sup3  ]		\\(S3
+ [plus  ]		\\(pl
+ [plusmn]		\\(+-
+ [lt    ]		<
+@@ -69,10 +69,12 @@
+ [divide]		\\(di
+ [times ]		\\(ti
+ # [curren]		=general currency sign
+-[pound ]		#
++[curren]		\\(Cs
++[euro  ]		\\(Cs
++[pound ]		\\(Po
+ [dollar]		$
+ [cent  ]		\\(ct
+-[yen   ]		yen
++[yen   ]		\\(Ye
+ [num   ]		#
+ [percnt]		%
+ [amp   ]		&
+@@ -81,7 +83,7 @@
+ [lsqb  ]		[
+ [bsol  ]		\\e
+ [rsqb  ]		]
+-[lcub  ]		{	/lbrace O: =left curly bracket
++[lcub  ]		{
+ # [horbar]		horizontal bar
+ [horbar]		_
+ [verbar]		\\(or
+@@ -91,9 +93,13 @@
+ [deg   ]		\\(de
+ # [ordm  ]		=ordinal indicator, masculine
+ # [ordf  ]		=ordinal indicator, feminine
++[ordf  ]		\\(Of
++[ordm  ]		\\(Om
+ [sect  ]		\\(sc
+ # [para  ]		=pilcrow (paragraph sign)
++[para  ]		\\(ps
+ # [middot]		/centerdot B: =middle dot
++[middot]		\\(pc
+ [larr  ]		\\(<-
+ [rarr  ]		\\(->
+ [uarr  ]		\\(ua
+@@ -106,8 +112,9 @@
+ [brvbar]		|
+ [not   ]		\\(no
+ # [sung  ]		=music note (sung text sign)
+-[excl  ]		!
++[excl  ]		\!
+ # [iexcl ]		=inverted exclamation mark
++[iexcl ]		\\(r!
+ [quot  ]		"
+ [apos  ]		\\&'
+ [lpar  ]		(
+@@ -121,14 +128,15 @@
+ [semi  ]		;
+ [quest ]		?
+ # [iquest]		=inverted question mark
++[iquest]		\\(r?
+ # [laquo ]		=angle quotation mark, left
+-[laquo ]		<<
++[laquo ]		\\(Fo
+ # [raquo ]		=angle quotation mark, right
+-[raquo ]		>>
++[raquo ]		\\(Fc
+ [lsquo ]		`
+ [rsquo ]		\\&'
+-[ldquo ]		"
+-[rdquo ]		"
++[ldquo ]		\\(lq
++[rdquo ]		\\(rq
+ [nbsp  ]		\\ 
+ [shy   ]		\\%
+ #
+@@ -137,8 +145,12 @@
+ # 			trailing space here
+ [emsp  ]		\\ \\ 
+ [ensp  ]		\\ 
++# The next two entities are the only ones I can find where the SGML entity
++# doesn't match. From sgml-iso-entities-8879.1986/ISOpub.ent:
++# <!ENTITY emsp13 SDATA "[emsp3 ]"--=1/3-em space-->
+ [emsp3 ]		\\ 
+ [emsp4 ]		\\ 
++#
+ [numsp ]		\\0
+ [puncsp]		\\|
+ [thinsp]		\\!
+@@ -158,6 +170,7 @@
+ [frac16]		1/6
+ [frac56]		5/6
+ # [incare]		=in-care-of symbol
++[incare]		c/o
+ # [block ]		=full block
+ # [uhblk ]		=upper half block
+ # [lhblk ]		=lower half block
+@@ -170,7 +183,7 @@
+ # [rect  ]		=rectangle, open
+ # [utri  ]		/triangle =up triangle, open
+ # [dtri  ]		/triangledown =down triangle, open
+-[star  ]		\\(**	=star, open
++[star  ]		\\(**
+ [bull  ]		\\(bu
+ # [squf  ]		/blacksquare =sq bullet, filled
+ # [utrif ]		/blacktriangle =up tri, filled
+@@ -209,6 +222,7 @@
+ [vellip]		\\&...
+ # [hybull]		rectangle, filled (hyphen bullet)
+ # [loz   ]		/lozenge - lozenge or total mark
++[rsquor]		\\(lz
+ # [lozf  ]		/blacklozenge - lozenge, filled
+ # [ltri  ]		/triangleleft B: l triangle, open
+ # [rtri  ]		/triangleright B: r triangle, open
+@@ -224,68 +238,100 @@
+ #
+ #       Added Latin 1   ________________________________
+ #
+-[aacute]	\\(a'
+-[Aacute]	\\(A'
+-[acirc ]	\\(a^
+-[Acirc ]	\\(A^
+-[agrave]	\\(a`
+-[Agrave]	\\(A`
++[aacute]	\\('a
++[Aacute]	\\('A
++# It's not clear why, but the ^ must be escaped
++[acirc ]	\\(\^a
++[Acirc ]	\\(\^A
++[agrave]	\\(`a
++[Agrave]	\\(`A
++[aring ]	\\(oa
++[Aring ]	\\(oA
++[atilde]	\\(~a
++[Atilde]	\\(~A
+ # [aring ]	=small a, ring
+ # [Aring ]	=capital A, ring
+ # [atilde]	=small a, tilde
+ # [Atilde]	=capital A, tilde
+-[auml  ]	\\(a:
++[auml  ]	\\(:a
++[Auml  ]	\\(:A
+ # [Auml  ]	=capital A, dieresis or umlaut mark
+ [aelig ]	\\(ae
+ [AElig ]	\\(AE
+ # [ccedil]	=small c, cedilla
+ # [Ccedil]	=capital C, cedilla
++[ccedil]	\\(,c
++[Ccedil]	\\(,C
+ # [eth   ]	=small eth, Icelandic
+ # [ETH   ]	=capital Eth, Icelandic
+-[eacute]	\\(e'
+-[Eacute]	\\(E'
++[eth   ]	\\(Sd
++[ETH   ]	\\(-D
++[eacute]	\\('e
++[Eacute]	\\('E
+ # [ecirc ]	=small e, circumflex accent
+ # [Ecirc ]	=capital E, circumflex accent
+-[egrave]	\\(e`
+-[Egrave]	\\(E`
++[ecirc ]	\\(\^e
++[Ecirc ]	\\(\^E
++[egrave]	\\(`e
++[Egrave]	\\(`E
+ # [euml  ]	=small e, dieresis or umlaut mark
+ # [Euml  ]	=capital E, dieresis or umlaut mark
+-[iacute]	\\(i'
+-[Iacute]	\\(I'
++[euml  ]	\\(:e
++[Euml  ]	\\(:E
++[iacute]	\\('i
++[Iacute]	\\('I
+ # [icirc ]	=small i, circumflex accent
+ # [Icirc ]	=capital I, circumflex accent
+-[igrave]	\\(i`
+-[Igrave]	\\(I`
++[iuml  ]	\\(:i
++[Iuml  ]	\\(:I
++[icirc ]	\\(\^i
++[Icirc ]	\\(\^I
++[igrave]	\\(`i
++[Igrave]	\\(`I
+ # [iuml  ]	=small i, dieresis or umlaut mark
+ # [Iuml  ]	=capital I, dieresis or umlaut mark
+-[ntilde]	\\(n~
+-[Ntilde]	\\(N~
+-[oacute]	\\(o'
+-[Oacute]	\\(O'
++[ntilde]	\\(~n
++[Ntilde]	\\(~N
++[otilde]	\\(~o
++[Otilde]	\\(~O
++[oacute]	\\('o
++[Oacute]	\\('O
+ # [ocirc ]	=small o, circumflex accent
+ # [Ocirc ]	=capital O, circumflex accent
+-[ograve]	\\(o`
+-[Ograve]	\\(O`
+-[oslash]	\\(o/
+-[Oslash]	\\(O/
++[ocirc ]	\\(\^o
++[Ocirc ]	\\(\^O
++[ograve]	\\(`o
++[Ograve]	\\(`O
++[oslash]	\\(/o
++[Oslash]	\\(/O
+ # [otilde]	=small o, tilde
+ # [Otilde]	=capital O, tilde
+ # [ouml  ]	=small o, dieresis or umlaut mark
+ # [Ouml  ]	=capital O, dieresis or umlaut mark
+ [szlig ]	\\(ss
+-[thorn ]	\\(th
++[thorn ]	\\(Tp
+ # [THORN ]	=capital THORN, Icelandic
+-[uacute]	\\(u'
+-[Uacute]	\\(U'
++[uacute]	\\('u
++[Uacute]	\\('U
+ # [ucirc ]	=small u, circumflex accent
+ # [Ucirc ]	=capital U, circumflex accent
+-[ugrave]	\\(u`
+-[Ugrave]	\\(U`
++[ucirc ]	\\(\^u
++[Ucirc ]	\\(\^U
++[ugrave]	\\(`u
++[Ugrave]	\\(`U
+ # [uuml  ]	=small u, dieresis or umlaut mark
+ # [Uuml  ]	=capital U, dieresis or umlaut mark
++[uuml  ]	\\(:u
++[Uuml  ]	\\(:U
+ # [yacute]	=small y, acute accent
+ # [Yacute]	=capital Y, acute accent
++[yacute]	\\('y
++[Yacute]	\\('Y
+ # [yuml  ]	=small y, dieresis or umlaut mark
++[yuml  ]	\\(:y
++# The character value for Y with diaeresis seems to have been commandeered
++# for 3/4; see iso_8859_15(7) for an example
++[Yuml  ]	Y
+ #
+ #       Added Latin 2   ________________________________
+ #
+@@ -333,6 +379,7 @@
+ # [ijlig ]	=small ij ligature
+ # [IJlig ]	=capital IJ ligature
+ # [inodot]	=small i without dot
++[inodot]	\\(.i
+ # [iogon ]	=small i, ogonek
+ # [Iogon ]	=capital I, ogonek
+ # [itilde]	=small i, tilde
+@@ -351,7 +398,9 @@
+ # [lmidot]	=small l, middle dot
+ # [Lmidot]	=capital L, middle dot
+ # [lstrok]	=small l, stroke
++[lstrok]	\\(/l
+ # [Lstrok]	=capital L, stroke
++[Lstrok]	\\(/L
+ # [nacute]	=small n, acute accent
+ # [Nacute]	=capital N, acute accent
+ # [eng   ]	=small eng, Lapp
+@@ -366,7 +415,9 @@
+ # [Omacr ]	=capital O, macron
+ # [omacr ]	=small o, macron
+ # [oelig ]	=small oe ligature
++[oelig ]	\\(oe
+ # [OElig ]	=capital OE ligature
++[OElig ]	\\(OE
+ # [racute]	=small r, acute accent
+ # [Racute]	=capital R, acute accent
+ # [rcaron]	=small r, caron
+@@ -512,45 +563,71 @@
+ #	General Technical ________________________________
+ #
+ # [aleph ]		/aleph =aleph, Hebrew
++[aleph ]	\\(Ah
+ # [and   ]		/wedge /land B: =logical and
++[and   ]	\\(AN
+ # [ang90 ]		=right (90 degree) angle
+ # [angsph]		/sphericalangle =angle-spherical
+-[ap    ]		\\(ap
++[ap    ]		\\(~~
+ # [becaus]		/because R: =because
+ # [bottom]		/bot B: =perpendicular
++[bottom]		\\(pp
+ # [cap   ]		/cap B: =intersection
++[cap   ]		\\(ca
+ # [cong  ]		/cong R: =congruent with
++[cong  ]		\\(=~
+ # [conint]		/oint L: =contour integral operator
+ # [cup   ]		/cup B: =union or logical sum
++[cup   ]		\\(cu
+ [equiv ]		\\(==
+ # [exist ]		/exists =at least one exists
++[exist ]		\\(te
+ # [forall]		/forall =for all
++[forall]		\\(fa
+ # [fnof  ]		=function of (italic small f)
++[fnof  ]		\\(Fn
+ [ge    ]		\\(>=
+ # [iff   ]		/iff =if and only if
++[iff   ]		<=>
+ [infin ]		\\(if
+ # [int   ]		/int L: =integral operator
++[int   ]		\\(is
+ [isin  ]		\\(sb
+ # [lang  ]		/langle O: =left angle bracket
++[lang  ]		<
+ # [lArr  ]		/Leftarrow A: =is implied by
++[lArr  ]		\\(lA
+ [le    ]		\\(<=
+ [minus ]		\\(mi
+ # [mnplus]		/mp B: =minus-or-plus sign
+ # [nabla ]		/nabla =del, Hamilton operator
++[nabla ]		\\(gr
+ [ne    ]		\\(!=
+ # [ni    ]		/ni /owns R: =contains
++[ni    ]		\\(st
+ # [or    ]		/vee /lor B: =logical or
++[or    ]		\\(OR
+ # [par   ]		/parallel R: =parallel
++[par   ]		||
+ # [part  ]		/partial =partial differential
++[part  ]		\\(pd
+ # [permil]		=per thousand
++[permil]		\\(%0
+ # [perp  ]		/perp R: =perpendicular
++[perp  ]		\\(pp
+ # [prime ]		/prime =prime or minute
++[prime ]		\\(fm
+ # [Prime ]		=double prime or second
++[Prime ]		\\(sd
+ [prop  ]		\\(pt
+ # [radic ]		/surd =radical
++[radic ]		\\(sr
+ # [rang  ]		/rangle C: =right angle bracket
++[rang  ]		>
+ # [rArr  ]		/Rightarrow A: =implies
++[rArr  ]		\\(rA
+ # [sim   ]		/sim R: =similar
++[sim   ]		\\(ti
+ # [sime  ]		/simeq R: =similar, equals
+ [square]		\\(sq
+ [sub   ]		\\(sb
+@@ -558,16 +635,24 @@
+ [sup   ]		\\(sp
+ [supe  ]		\\(ip
+ # [there4]		/therefore R: =therefore
++[there4]		\\(tf
+ # [Verbar]		/Vert =dbl vertical bar
++[Verbar]		||
+ # [angst ]		Angstrom =capital A, ring
++[angst ]	\\(\^A
+ # [bernou]		Bernoulli function (script capital B)
++# A less than desirable solution
++[angst ]	B
+ # [compfn]		B: composite function (small circle)
+ # [Dot   ]		=dieresis or umlaut mark
++[Dot   ]	\\(ad
+ # [DotDot]		four dots above
+ # [hamilt]		Hamiltonian (script capital H)
+ # [lagran]		Lagrangian (script capital L)
+ # [lowast]		low asterisk
++[lowast]	\\(**
+ # [notin ]		N: negated set membership
++[notin ]	\\(nm
+ # [order ]		order of (script small o)
+ # [phmmat]		physics M-matrix (script capital M)
+ # [tdot  ]		three dots above
+@@ -576,18 +661,33 @@
+ #
+ #	Diacritical Marks ________________________________
+ #
+-[acute ]		\\&'
+-[breve ]		\\(be
+-[caron ]		\\(hc
+-[cedil ]		\\(cd
++[acute ]		\\aa
++[breve ]		\\(ab
++[caron ]		\\(ah
++[cedil ]		\\(ac
+ # [circ  ]		=circumflex accent
++[circ  ]		\\(a\^
+ # [dblac ]		=double acute accent
++[dblac ]		\\(a"
+ # [die   ]		=dieresis
+-[dot   ]		\\(dt
++[die   ]		\\(ad
++[dot   ]		\\(a.
+ [grave ]		`
+-[macr  ]		\\(ma
+-[ogon  ]		\\(og
+-[ring  ]		\\(ri
++[macr  ]		\\(a-
++[ogon  ]		\\(ho
++[ring  ]		\\(ao
+ [tilde ]		~
+-[uml   ]		\\(..
++[uml   ]		\\(ad
++#
++#       Added Math Symbols: Delimiters
++#
++[rceil ]		\\(rc
++[lceil ]		\\(lc
++[rfloor]		\\(rf
++[lfloor]		\\(lf
++# [rpargt]		??
++# [urcorn]		Top right corner
++# [drcorn]		Bottom right corner
++# [ulcorn]		Top left corner
++# [dlcorn]		Bottom left corner
+ #
+diff --git a/ans.patch b/ans.patch
+index c887f64..aa8f3f4 100644
+--- a/ans.patch
++++ b/ans.patch
+@@ -1116,7 +1116,7 @@ diff -c sgml/docbook-to-man/Transpec/docbook-to-man.ts:1.1.1.1 sgml/docbook-to-m
+ ! StartText:	^.ta 8n 16n 24n 32n 40n 48n 56n 64n 72n
+   		^.TH "${_followrel descendant REFENTRYTITLE 1000}"
+   		"${_followrel descendant MANVOLNUM 1000}"^
+-  EndText:	^...\\" created by instant / docbook-to-man, ${date}^
++  EndText:	^.\\" created by instant / docbook-to-man, ${date}^
+ --- 57,63 ----
+   #   ####     #####     #####     #####     #####     #####     ####     #####     
+   #
+@@ -1124,7 +1124,7 @@ diff -c sgml/docbook-to-man/Transpec/docbook-to-man.ts:1.1.1.1 sgml/docbook-to-m
+ ! StartText:	^'\\" t^${_action 1001}
+   		^.TH "${_followrel descendant REFENTRYTITLE 1000}"
+   		"${_followrel descendant MANVOLNUM 1000}"^
+-  EndText:	^...\\" created by instant / docbook-to-man, ${date}^
++  EndText:	^.\\" created by instant / docbook-to-man, ${date}^
+ ***************
+ *** 133,138 ****
+ --- 137,147 ----
+@@ -1356,7 +1356,7 @@ diff -c sgml/docbook-to-man/Transpec/docbook-to-man.ts-PUSHPOP:1.1.1.1 sgml/docb
+ ! StartText:	^.ta 8n 16n 24n 32n 40n 48n 56n 64n 72n
+ ! 		^.TH "${_followrel descendant REFENTRYTITLE 1000}"
+ ! 		"${_followrel descendant MANVOLNUM 1000}"^
+-! EndText:	^...\\" created by instant / docbook-to-man, ${date}
++! EndText:	^.\\" created by instant / docbook-to-man, ${date}
+   -
+   #
+   GI:		DOCINFO
+@@ -1367,7 +1367,7 @@ diff -c sgml/docbook-to-man/Transpec/docbook-to-man.ts-PUSHPOP:1.1.1.1 sgml/docb
+ ! StartText:	^'\\" t^.TH "${_followrel descendant REFENTRYTITLE 1000}"
+ ! 		"${_followrel descendant MANVOLNUM 1000}" "${date}"
+ ! 		^${_action 1002}^${_action 1001}^
+-! EndText:	^...\\" created by instant / docbook-to-man, ${date}^
++! EndText:	^.\\" created by instant / docbook-to-man, ${date}^
+   -
+   #
+   GI:		DOCINFO
+diff --git a/cmd/docbook-to-man.sh b/cmd/docbook-to-man.sh
+index 2f2dd5d..a559ea5 100644
+--- a/cmd/docbook-to-man.sh
++++ b/cmd/docbook-to-man.sh
+@@ -37,33 +37,22 @@
+ #
+ #############################################################################
+ 
+-# ***** change the following paths if your installation of nsgmls and / or
+-# ***** DocBook isn't into the default places.
+-
+-ROOT=/usr/local
+-SGMLS=$ROOT/lib/sgml
+-DOCBOOK=$SGMLS/Davenport/dtd
+-
+-
+-# ***** modify the following line (to "=false") if you're not using the
+-# ***** Elan Documentor's Workbench
+-
+-doElanPSInclude=true
+-
+-
+-
+-# Everything below this line should be pretty standard and not require
+-# modification.
+-
+-#ulimit -c unlimited
+-
+-PARSER=nsgmls
+-INSTANT=instant
+-INSTANT_OPT=-d
++ROOT=/usr
++SGMLS=$ROOT/share/sgml
++DOCBOOK=$SGMLS/docbook/dtd/4.1
++
++if test -x /usr/bin/nsgmls; then
++    PARSER=/usr/bin/nsgmls
++elif test -x /usr/bin/onsgmls; then
++    PARSER=/usr/bin/onsgmls
++else
++    echo "error: SGML parser not found" 1>&2
++fi
++INSTANT=/usr/bin/instant
++INSTANT_OPT=${INSTANT_OPT:-"-d"}
+ 
+ CATALOG=$DOCBOOK/docbook.cat
+ DECL=$DOCBOOK/docbook.dcl
+-#PROLOG=$DOCBOOK/docbook.prolog
+ 
+ error=false
+ 
+@@ -72,104 +61,13 @@ then	INSTANCE=$1
+ else	error=true
+ fi
+ 
+-if `$error`
+-then	echo "usage:  docbook-to-man docbook-instance"
+-	exit 1
+-fi
+-
+-if `$doElanPSInclude`
+-then	cat > /tmp/dtm.$$.psinc <<\!
+-...\" $Header: /aolnet/dev/src/CVS/sgml/docbook-to-man/cmd/docbook-to-man.sh,v 1.1.1.1 1998/11/13 21:31:59 db3l Exp $
+-...\"
+-...\"	transcript compatibility for postscript use.
+-...\"
+-...\"	synopsis:  .P! <file.ps>
+-...\"
+-.de P!
+-\\&.
+-.fl			\" force out current output buffer
+-\\!%PB
+-\\!/showpage{}def
+-...\" the following is from Ken Flowers -- it prevents dictionary overflows
+-\\!/tempdict 200 dict def tempdict begin
+-.fl			\" prolog
+-.sy cat \\$1\" bring in postscript file
+-...\" the following line matches the tempdict above
+-\\!end % tempdict %
+-\\!PE
+-\\!.
+-.sp \\$2u	\" move below the image
+-..
+-!
+-else	cat > /tmp/dtm.$$.psinc <<\!
+-...\" $Header: /aolnet/dev/src/CVS/sgml/docbook-to-man/cmd/docbook-to-man.sh,v 1.1.1.1 1998/11/13 21:31:59 db3l Exp $
+-...\"
+-...\"	transcript compatibility for postscript use.
+-...\"
+-...\"	synopsis:  .P! <file.ps>
+-...\"
+-.de P!
+-.fl
+-\!!1 setgray
+-.fl
+-\\&.\"
+-.fl
+-\!!0 setgray
+-.fl			\" force out current output buffer
+-\!!save /psv exch def currentpoint translate 0 0 moveto
+-\!!/showpage{}def
+-.fl			\" prolog
+-.sy sed -e 's/^/!/' \\$1\" bring in postscript file
+-\!!psv restore
+-.
+-!
+-fi
+-
+-cat >> /tmp/dtm.$$.psinc <<\!
+-.de pF
+-.ie     \\*(f1 .ds f1 \\n(.f
+-.el .ie \\*(f2 .ds f2 \\n(.f
+-.el .ie \\*(f3 .ds f3 \\n(.f
+-.el .ie \\*(f4 .ds f4 \\n(.f
+-.el .tm ? font overflow
+-.ft \\$1
+-..
+-.de fP
+-.ie     !\\*(f4 \{\
+-.	ft \\*(f4
+-.	ds f4\"
+-'	br \}
+-.el .ie !\\*(f3 \{\
+-.	ft \\*(f3
+-.	ds f3\"
+-'	br \}
+-.el .ie !\\*(f2 \{\
+-.	ft \\*(f2
+-.	ds f2\"
+-'	br \}
+-.el .ie !\\*(f1 \{\
+-.	ft \\*(f1
+-.	ds f1\"
+-'	br \}
+-.el .tm ? font underflow
+-..
+-.ds f1\"
+-.ds f2\"
+-.ds f3\"
+-.ds f4\"
+-!
+-
++$error && echo "usage:  docbook-to-man docbook-instance" 1>&2 && exit 1
+ 
+-#if [ ! -f $PROLOG ]
+-#then	cat > $PROLOG <<!
+-#<!DOCTYPE RefEntry PUBLIC "-//Davenport//DTD DocBook V2.4.1//EN" [
+-#<!ENTITY npzwc "">
+-#]>
+-#!
+-#fi
+-
+-(cat /tmp/dtm.$$.psinc;
++(#cat /tmp/dtm.$$.psinc;
+  $PARSER -gl -m$CATALOG $DECL $INSTANCE |
+-	$INSTANT $INSTANT_OPT -croff.cmap -sroff.sdata -tdocbook-to-man.ts)
+-
+-rm -f /tmp/dtm.$$.psinc    
++	$INSTANT -croff.cmap -sroff.sdata -tdocbook-to-man.ts $INSTANT_OPT |
++	gsed 's/^[	 ]*//
++	     s/$/ /
++	     s/--/\\-\\-/g
++	     s/^-/\\-/
++	     s/\([^A-Za-z0-9\-]\)-/\1\\-/g' )

@@ -1,0 +1,56 @@
+--- a/Instant/tptregexp/regexp.c	1704532726.295905570
++++ b/Instant/tptregexp/regexp.c	1704532815.325338408
+@@ -23,6 +23,7 @@
+  * regular-expression syntax might require a total rethink.
+  */
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <tptregexp.h>
+ #include "regmagic.h"
+--- a/Instant/tptregexp/regerror.c	931006704.000000000
++++ b/Instant/tptregexp/regerror.c	1704532951.931882182
+@@ -1,4 +1,5 @@
+ #include <stdio.h>
++#include <stdlib.h>
+ 
+ void
+ tpt_regerror(s)
+--- a/Instant/main.c	1704532731.576097697
++++ b/Instant/main.c	1704533035.892249661
+@@ -80,6 +80,7 @@ static char *RCSid =
+ 
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <unistd.h>
+ #include <ctype.h>
+ #include <string.h>
+ #include <memory.h>
+@@ -190,7 +191,6 @@ Initialize1(
+     time_t	tnow;
+     struct tm	*nowtm;
+     char	*cp, buf[100];
+-    extern	int gethostname(char *, int);	/* not in a system .h file... */
+ 
+     /* where we try to find data/library files */
+     if (!(tpt_lib=getenv(TPT_LIB))) tpt_lib = DEF_TPT_LIB;
+--- a/Instant/traninit.c	931006703.000000000
++++ b/Instant/traninit.c	1704533148.336091887
+@@ -82,6 +82,7 @@ static char *RCSid =
+ 
+ /* forward references */
+ void	RememberTransSpec(Trans_t *, int);
++void	ExpandVariables(char *, char *, Element_t *);
+ 
+ /* ______________________________________________________________________ */
+ /*  Read the translation specs from the input file, storing in memory.
+--- a/Instant/tranvar.c	931006703.000000000
++++ b/Instant/tranvar.c	1704533282.427444481
+@@ -76,6 +76,7 @@ static char	*each_A = 0;	/* last seen _e
+ static char	*each_C = 0;	/* last seen _eachcon */
+ 
+ /* forward references */
++void	CALStable(Element_t *, FILE *, char **, int);
+ void	ChaseIDRefs(Element_t *, char *, char *, FILE *);
+ void	Find(Element_t *, int, char **, FILE *);
+ void	GetIDREFnames();

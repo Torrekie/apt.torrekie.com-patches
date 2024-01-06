@@ -1,0 +1,25 @@
+From: Philipp Benner <mail@philipp-benner.de>
+Date: Fri, 12 May 2017 10:49:00 +0200
+Subject: userinput-font
+
+\fB' and `\fP' are not appropriate for the userinput environment.
+Instead, `.ft' is used as a replacement.
+---
+ Transpec/docbook-to-man.ts | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Transpec/docbook-to-man.ts b/Transpec/docbook-to-man.ts
+index 1a3d70e..c466a8f 100644
+--- a/Transpec/docbook-to-man.ts
++++ b/Transpec/docbook-to-man.ts
+@@ -1930,8 +1930,8 @@ EndText:	\\fP
+ -
+ #
+ GI:		USERINPUT
+-StartText:	\\fB
+-EndText:	\\fP
++StartText:	^.ft\sB^
++EndText:	^.ft
+ -
+ #
+ GI:		VARNAME

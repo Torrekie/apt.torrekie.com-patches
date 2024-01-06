@@ -1,0 +1,39 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Mon, 24 Aug 2020 12:22:39 +0100
+Subject: Ensure build failures in subdirectories cause entire build failure.
+
+---
+ Makefile | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index d7611b8..5e628bf 100644
+--- a/Makefile
++++ b/Makefile
+@@ -45,22 +45,22 @@ PIECES = 	cmd Instant Transpec
+ 
+ 
+ all:
+-	for dir in $(PIECES); \
++	set -e; for dir in $(PIECES); \
+ 	do (cd $$dir; $(MAKE) all); \
+ 	done
+ 
+ install:
+-	for dir in $(PIECES); \
++	set -e; for dir in $(PIECES); \
+ 	do (cd $$dir; $(MAKE) ROOT=$(ROOT) install); \
+ 	done
+ 
+ 
+ clean:
+-	for dir in $(PIECES); \
++	set -e; for dir in $(PIECES); \
+ 	do (cd $$dir; $(MAKE) clean); \
+ 	done
+ 
+ clobber:    
+-	for dir in $(PIECES); \
++	set -e; for dir in $(PIECES); \
+ 	do (cd $$dir; $(MAKE) clobber); \
+ 	done

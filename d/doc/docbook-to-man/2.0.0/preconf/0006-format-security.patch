@@ -1,0 +1,24 @@
+From: Philipp Benner <philipp@debian.org>
+Date: Fri, 12 May 2017 10:49:00 +0200
+Subject: format-security
+
+Fix format string security flaw.
+
+===================================================================
+---
+ Instant/browse.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Instant/browse.c b/Instant/browse.c
+index 1dd1233..d20c77c 100644
+--- a/Instant/browse.c
++++ b/Instant/browse.c
+@@ -168,7 +168,7 @@ Browse()
+ 	    if (av[1] && isdigit(*av[1])) {
+ 		n = atoi(av[1]);
+ 		if (n < ce->ndcont) {
+-		    printf(ce->dcont[n]);
++                    printf("%s", ce->dcont[n]);
+ 		    fputs("\n", stdout);
+ 		}
+ 		else if (ce->ndcont == 0)

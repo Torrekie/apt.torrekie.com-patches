@@ -1,0 +1,22 @@
+From: Philipp Benner <philipp@debian.org>
+Date: Fri, 12 May 2017 10:49:00 +0200
+Subject: instant-man
+
+Fixes errors in the instant manpage.
+---
+ Doc/instant.1 | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Doc/instant.1 b/Doc/instant.1
+index c198d98..bc99c69 100644
+--- a/Doc/instant.1
++++ b/Doc/instant.1
+@@ -78,7 +78,7 @@ The first is the character to map, the second is the string that the character i
+ The mappings are specific to the formatting application used. 
+ Lines beginning with a \fB#\fP are comments, and are ignored. Empty lines are also ignored.
+ .IP "\fB-d\fP"
+-"Data hack" \*EM strip newline at the beginning of data records
++strip newline at the beginning of data records
+ .IP "\fB-f \fIlength\fR"
+ Set the threshold for the length, in characters,
+ of an <Entry>, over which it is called a block of filled text, to \fIlength\fR.

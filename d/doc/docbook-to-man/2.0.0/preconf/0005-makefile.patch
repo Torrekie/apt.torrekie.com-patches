@@ -1,0 +1,58 @@
+From: Philipp Benner <philipp@debian.org>
+Date: Fri, 12 May 2017 10:49:00 +0200
+Subject: makefile
+
+Fix bad use of CFLAGS in Makefiles
+
+===================================================================
+---
+ Instant/Makefile           | 5 +++--
+ Instant/tptregexp/Makefile | 5 ++++-
+ 2 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/Instant/Makefile b/Instant/Makefile
+index 47e230b..02c691c 100644
+--- a/Instant/Makefile
++++ b/Instant/Makefile
+@@ -76,8 +76,6 @@ DEFINES		= -DDEF_TPT_LIB=\"$(TPTLIB)\" $(XDEFINES)
+ CC	= gcc
+ 
+ OPT	= -g
+-CFLAGS	= $(OPT) $(REGEX_INC) $(DEFINES)
+-LDFLAGS	= $(OPT)
+ REGEX	= -L$(REGEX_LIB) -ltptregexp
+ 
+ CFILES	= main.c util.c info.c translate.c traninit.c tranvar.c tables.c \
+@@ -89,6 +87,9 @@ PROGS	= instant
+ 
+ all:	dotptregexp $(PROGS)
+ 
++%.o : %.c
++	$(CC) -c $(CFLAGS) $(OPT) $(REGEX_INC) $(DEFINES) $< -o $@
++
+ dotptregexp:
+ 	cd tptregexp; $(MAKE) all
+ 
+diff --git a/Instant/tptregexp/Makefile b/Instant/tptregexp/Makefile
+index 77f9c16..3d1cfa1 100644
+--- a/Instant/tptregexp/Makefile
++++ b/Instant/tptregexp/Makefile
+@@ -50,7 +50,7 @@ TEST=	-I.
+ # -p			profiler
+ PROF=
+ 
+-CFLAGS=-O $(ENV) $(TEST) $(PROF)
++CFLAGS=-O $(ENV)
+ LINTFLAGS=$(LENV) $(TEST) -ha
+ LDFLAGS=
+ 
+@@ -67,6 +67,9 @@ install: libtptregexp.a
+ try:	try.o $(OBJ)
+ 	$(CC) $(LDFLAGS) try.o $(OBJ) -o try
+ 
++%.o : %.c
++	$(CC) -c $(CFLAGS) $(TEST) $(PROF) $< -o $@
++
+ # Making timer will probably require putting stuff in $(PROF) and then
+ # recompiling everything; the following is just the final stage.
+ timer:	timer.o $(OBJ)

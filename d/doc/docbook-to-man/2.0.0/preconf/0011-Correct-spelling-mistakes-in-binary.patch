@@ -1,0 +1,35 @@
+From: Chris Lamb <lamby@debian.org>
+Date: Mon, 30 Oct 2017 09:51:04 +0000
+Subject: Correct spelling mistakes in binary.
+
+---
+ Instant/browse.c | 2 +-
+ Instant/info.c   | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/Instant/browse.c b/Instant/browse.c
+index a1dde52..503c6cb 100644
+--- a/Instant/browse.c
++++ b/Instant/browse.c
+@@ -275,7 +275,7 @@ Browse()
+ 	else if (!strcmp(cmd, "quit")) break;
+ 
+ 	else
+-	    fprintf(stderr, "Unknown command '%s' - ingored.\n", cmd);
++	    fprintf(stderr, "Unknown command '%s' - ignored.\n", cmd);
+     }
+     putc(NL, stdout);
+ }
+diff --git a/Instant/info.c b/Instant/info.c
+index 7d9c494..a8abc55 100644
+--- a/Instant/info.c
++++ b/Instant/info.c
+@@ -253,7 +253,7 @@ PrintStats(
+     int		dif_el=0, tot_el=0, tot_data=0, nchars, max_depth=0;
+     float	pct;
+ 
+-    fprintf(outfp, "%-22s %s   %s\n", "Element name",    "Occurrances", "Character Content");
++    fprintf(outfp, "%-22s %s   %s\n", "Element name",    "Occurrences", "Character Content");
+     fprintf(outfp, "%-22s %s   %s\n", "---------------", "-----------", "-----------------");
+ 
+     acc_tots(top, &tot_el, &tot_data, &max_depth);

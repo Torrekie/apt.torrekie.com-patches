@@ -1,0 +1,25 @@
+From: Philipp Benner <mail@philipp-benner.de>
+Date: Fri, 12 May 2017 10:49:00 +0200
+Subject: arg-req-space
+
+Inserts missing space after required arguments in section synopsis.
+---
+ Transpec/docbook-to-man.ts | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/Transpec/docbook-to-man.ts b/Transpec/docbook-to-man.ts
+index 8f80f7f..1a3d70e 100644
+--- a/Transpec/docbook-to-man.ts
++++ b/Transpec/docbook-to-man.ts
+@@ -1218,6 +1218,11 @@ StartText:	\s[
+ EndText:	${_attval REP REPEAT 505}]\s
+ -
+ #
++GI:             ARG
++AttValue:       CHOICE REQ
++StartText:      \s
++-
++#
+ GI:		ARG
+ #	no special attrs -- just pass content through
+ EndText:	${_attval REP REPEAT 505}\s

@@ -1,0 +1,4 @@
+# need gnu getopt, specify librecompat getopt
+CFLAGS="-I/usr/include/librecompat -Wall -fcommon"
+LDFLAGS="-Wl,-dead_strip_dylibs"
+ROOT=/usr
