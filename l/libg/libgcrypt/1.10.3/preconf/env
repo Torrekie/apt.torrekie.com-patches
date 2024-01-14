@@ -1,0 +1,5 @@
+CFLAGS="-fheinous-gnu-extensions -std=gnu89"
+# for enabling NEON/Crypto Asm codes
+gcry_cv_gcc_inline_asm_aarch64_neon=yes
+gcry_cv_gcc_inline_asm_aarch64_crypto=yes
+gcry_cv_gcc_aarch64_platform_as_ok=yes

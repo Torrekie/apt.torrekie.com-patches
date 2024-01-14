@@ -1,0 +1,25 @@
+--- a/autogen.sh	1540327711.000000000
++++ b/autogen.sh	1705138016.416704991
+@@ -265,8 +265,8 @@ if [ "$myhost" = "find-version" ]; then
+       rvd=$((0x$(echo ${rev} | dd bs=1 count=4 2>/dev/null)))
+     else
+       ingit=no
+-      beta=yes
+-      tmp="-unknown"
++      beta=no
++      tmp=""
+       rev="0000000"
+       rvd="0"
+     fi
+--- a/src/libgcrypt-config.in	1540367145.000000000
++++ b/src/libgcrypt-config.in	1705138015.353222247
+@@ -171,7 +171,8 @@ if test "$echo_libs" = "yes"; then
+     fi
+ 
+     # Set up `libs_final'.
+-    libs_final="$libs_final $gpg_error_libs"
++    #libs_final="$libs_final $gpg_error_libs"
++    libs_final="-lgcrypt"
+ 
+     tmp=""
+     for i in $libdirs $libs_final; do
