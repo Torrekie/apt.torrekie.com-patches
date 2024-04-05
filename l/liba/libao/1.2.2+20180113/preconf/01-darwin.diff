@@ -1,0 +1,104 @@
+--- a/configure.ac	1515836960.000000000
++++ b/configure.ac	1710235892.081419341
+@@ -327,7 +327,7 @@ AM_CONDITIONAL(HAVE_SNDIO_AUDIO,test "${
+ dnl Check for roaraudio
+ 
+ have_roar="no";
+-AC_CHECK_HEADERS(libroar/config.h, have_roar=yes)
++dnl AC_CHECK_HEADERS(libroar/config.h, have_roar=yes)
+ if test "x$have_roar" = "xyes"; then
+    AC_MSG_CHECKING([if SLP lookup can be disabled in libroar])
+    AC_COMPILE_IFELSE([AC_LANG_SOURCE([
+--- a/libao.conf.5	1515836960.000000000
++++ b/libao.conf.5	1710235892.086737773
+@@ -48,7 +48,7 @@ may be used as well as those keys.
+ .IP default_driver
+ The short name of the driver libao should use by default.  Valid values
+ include (not all are available on every platform): pulse, oss, esd, arts, alsa,
+-nas, irix, sun, roar and sndio.  Note that "sun" is used on many BSD
++nas, irix, sun, and sndio.  Note that "sun" is used on many BSD
+ systems as well as Solaris.
+ .IP "debug (Value optional/ignored)"
+ Sets all the drivers as well as AO itself into debugging output mode.
+--- a/src/plugins/Makefile.am	1515836960.000000000
++++ b/src/plugins/Makefile.am	1710235892.087188184
+@@ -1,4 +1,4 @@
+ ## Process this file with automake to produce Makefile.in
+ 
+ AUTOMAKE_OPTIONS = foreign
+-SUBDIRS = oss esd arts alsa sun irix macosx nas pulse sndio roar
++SUBDIRS = oss esd arts alsa sun irix macosx nas pulse sndio
+--- a/src/plugins/macosx/Makefile.am	1515836960.000000000
++++ b/src/plugins/macosx/Makefile.am	1710236504.877696035
+@@ -19,7 +19,7 @@ AM_CPPFLAGS = -I$(top_builddir)/include/
+ libdir = $(plugindir)
+ lib_LTLIBRARIES = $(macosxltlibs)
+ 
+-libmacosx_la_LDFLAGS = @PLUGIN_LDFLAGS@ -framework AudioUnit -framework CoreAudio -framework CoreServices
++libmacosx_la_LDFLAGS = @PLUGIN_LDFLAGS@ -framework CoreAudio -framework CoreServices
+ libmacosx_la_SOURCES = $(macosxsources)
+ 
+ EXTRA_DIST = ao_macosx.c
+--- a/src/plugins/macosx/ao_macosx.c	1515836960.000000000
++++ b/src/plugins/macosx/ao_macosx.c	1710237243.904254755
+@@ -57,7 +57,11 @@ static char *ao_macosx_options[] = {"mat
+ static ao_info ao_macosx_info =
+ {
+ 	AO_TYPE_LIVE,
+-	"MacOS X AUHAL output",
++#if TARGET_OS_EMBEDDED
++	"iOS RemoteIO output",
++#else
++	"Mac OS X AUHAL output",
++#endif
+ 	"macosx",
+ 	"Monty <monty@xiph.org>",
+ 	"",
+@@ -74,7 +78,7 @@ typedef struct ao_macosx_internal
+ {
+   /* Stuff describing the CoreAudio device */
+   AudioDeviceID                outputDevice;
+-  ComponentInstance            outputAudioUnit;
++  AudioComponentInstance       outputAudioUnit;
+   int                          output_p;
+ 
+   /* Keep track of whether the output stream has actually been
+@@ -418,7 +422,11 @@ int ao_plugin_open(ao_device *device, ao
+ 
+   /* Locate the default output audio unit */
+   desc.componentType = kAudioUnitType_Output;
++#if TARGET_OS_EMBEDDED
++  desc.componentSubType = kAudioUnitSubType_RemoteIO;
++#else
+   desc.componentSubType = kAudioUnitSubType_HALOutput;
++#endif
+   desc.componentManufacturer = kAudioUnitManufacturer_Apple;
+   desc.componentFlags = 0;
+   desc.componentFlagsMask = 0;
+@@ -444,9 +452,13 @@ int ao_plugin_open(ao_device *device, ao
+                                    &internal->outputDevice,
+                                    sizeof(internal->outputDevice));
+     if (result) {
++#if TARGET_OS_EMBEDDED
++      awarn("AudioComponentSetDevice() error => %d\n",(int)result);
++#else
+       aerror("AudioComponentSetDevice() error => %d\n",(int)result);
+       AudioComponentInstanceDispose(internal->outputAudioUnit);
+       return 0;
++#endif
+     }
+   }
+   internal->output_p=1;
+@@ -581,8 +593,12 @@ int ao_plugin_open(ao_device *device, ao
+ 
+   result = AudioUnitInitialize (internal->outputAudioUnit);
+   if (result) {
++#if TARGET_OS_EMBEDDED
++    awarn("AudioUnitInitialize() error => %d\n",(int)result);
++#else
+     aerror("AudioUnitInitialize() error => %d\n",(int)result);
+     return 0;
++#endif
+   }
+ 
+   /* Since we don't know how big to make the buffer until we open the device

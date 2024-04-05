@@ -1,0 +1,2038 @@
+--- openssl-3.2.1/CHANGES.md	1706620496.000000000
++++ ./CHANGES.md	1711446911.735432308
+@@ -25,6 +25,19 @@ OpenSSL Releases
+ OpenSSL 3.2
+ -----------
+ 
++### Changes between 3.2.1 and 3.2.2 [xx XXX xxxx]
++
++ * New atexit configuration switch, which controls whether the OPENSSL_cleanup
++   is registered when libcrypto is unloaded. This can be used on platforms
++   where using atexit() from shared libraries causes crashes on exit.
++
++   *Randall S. Becker*
++
++ * Fixed bug where SSL_export_keying_material() could not be used with QUIC
++   connections. (#23560)
++
++   *Hugo Landau*
++
+ ### Changes between 3.2.0 and 3.2.1 [30 Jan 2024]
+ 
+  * A file in PKCS12 format can contain certificates and keys and may come from
+@@ -95,6 +108,13 @@ OpenSSL 3.2
+ 
+    *Rohan McLure*
+ 
++ * Disable building QUIC server utility when OpenSSL is configured with
++   `no-apps`.
++
++   *Vitalii Koshura*
++
++### Changes between 3.1 and 3.2.0 [23 Nov 2023]
++
+  * Fix excessive time spent in DH check / generation with large Q parameter
+    value.
+ 
+@@ -109,13 +129,6 @@ OpenSSL 3.2
+ 
+    *Richard Levitte*
+ 
+- * Disable building QUIC server utility when OpenSSL is configured with
+-   `no-apps`.
+-
+-   *Vitalii Koshura*
+-
+-### Changes between 3.1 and 3.2.0 [23 Nov 2023]
+-
+  * The BLAKE2b hash algorithm supports a configurable output length
+    by setting the "size" parameter.
+ 
+@@ -434,7 +447,7 @@ OpenSSL 3.2
+    *Paul Dale*
+ 
+  * Subject or issuer names in X.509 objects are now displayed as UTF-8 strings
+-   by default.
++   by default. Also spaces surrounding `=` in DN output are removed.
+ 
+    *Dmitry Belyavskiy*
+ 
+--- openssl-3.2.1/CONTRIBUTING.md	1706620496.000000000
++++ ./CONTRIBUTING.md	1711446911.736586885
+@@ -98,5 +98,5 @@ guidelines:
+     with a specific release without having to sift through the higher
+     noise ratio in git-log.
+ 
+- 8. Guidelines how to integrate error output of new crypto library modules
++ 8. Guidelines on how to integrate error output of new crypto library modules
+     can be found in [crypto/err/README.md](crypto/err/README.md).
+--- openssl-3.2.1/Configurations/10-main.conf	1706620496.000000000
++++ ./Configurations/10-main.conf	1711446909.261923086
+@@ -693,7 +693,7 @@ my %targets = (
+         shared_target    => "linux-shared",
+         shared_cflag     => "-fPIC",
+         shared_ldflag    => sub { $disabled{pinshared} ? () : "-Wl,-znodelete" },
+-        enable           => [ "afalgeng" ],
++        enable           => [ "afalgeng", "ktls" ],
+     },
+     "linux-latomic" => {
+         inherit_from     => [ "linux-generic32" ],
+--- openssl-3.2.1/Configurations/shared-info.pl	1706620496.000000000
++++ ./Configurations/shared-info.pl	1711446908.038875330
+@@ -25,7 +25,7 @@ sub detect_gnu_cc {
+ my %shared_info;
+ %shared_info = (
+     'gnu-shared' => {
+-        shared_ldflag         => '-shared -Wl,-Bsymbolic',
++        shared_ldflag         => '-shared',
+         shared_sonameflag     => '-Wl,-soname=',
+     },
+     'linux-shared' => sub {
+--- openssl-3.2.1/Configurations/unix-Makefile.tmpl	1706620496.000000000
++++ ./Configurations/unix-Makefile.tmpl	1711446907.387548252
+@@ -327,7 +327,8 @@ HTMLDIR=$(DOCDIR)/html
+ # MANSUFFIX is for the benefit of anyone who may want to have a suffix
+ # appended after the manpage file section number.  "ssl" is popular,
+ # resulting in files such as config.5ssl rather than config.5.
+-MANSUFFIX=ossl
++MANSUFFIX=ssl
++MANSECTION=SSL
+ HTMLSUFFIX=html
+ 
+ # For "optional" echo messages, to get "real" silence
+@@ -1583,7 +1584,7 @@ EOF
+           my $pod = $gen0;
+           return <<"EOF";
+ $args{src}: $pod
+-	pod2man --name=$name --section=$section\$(MANSUFFIX) --center=OpenSSL \\
++	pod2man --name=$name --section=$section\$(MANSECTION) --center=OpenSSL \\
+ 		--release=\$(VERSION) $pod >\$\@
+ EOF
+       } elsif (platform->isdef($args{src})) {
+--- openssl-3.2.1/Configure	1706620496.000000000
++++ ./Configure	1711446911.737939377
+@@ -414,6 +414,7 @@ my @disablables = (
+     "asan",
+     "asm",
+     "async",
++    "atexit",
+     "autoalginit",
+     "autoerrinit",
+     "autoload-config",
+@@ -1765,7 +1766,7 @@ unless ($disabled{devcryptoeng}) {
+ unless ($disabled{ktls}) {
+     $config{ktls}="";
+     my $cc = $config{CROSS_COMPILE}.$config{CC};
+-    if ($target =~ m/^linux/) {
++    if (grep { $_ eq 'afalgeng' } @{$target{enable}}) {
+         system("printf '#include <sys/types.h>\n#include <linux/tls.h>' | $cc -E - >/dev/null 2>&1");
+         if ($? != 0) {
+             disable('too-old-kernel', 'ktls');
+@@ -2473,10 +2474,11 @@ EOF
+                     && $f =~ m/^(.*?)\|(.*)$/) {
+                     $i = $1;
+                     $m = $2;
+-                    $i = cleanfile($sourced, $i, $blddir, 1);
+-                    $i2 = cleanfile($buildd, $i, $blddir);
++                    # We must be very careful to modify $i last
+                     $d = cleanfile($sourced, "$i/$m", $blddir, 1);
+                     $d2 = cleanfile($buildd, "$i/$m", $blddir);
++                    $i2 = cleandir($buildd, $i, $blddir);
++                    $i = cleandir($sourced, $i, $blddir, 1);
+                 } else {
+                     $d = cleanfile($sourced, $f, $blddir, 1);
+                     $d2 = cleanfile($buildd, $f, $blddir);
+--- openssl-3.2.1/INSTALL.md	1706620496.000000000
++++ ./INSTALL.md	1711446911.738836746
+@@ -600,6 +600,13 @@ be used even with this option.
+ 
+ Do not build support for async operations.
+ 
++### no-atexit
++
++Do not use `atexit()` in libcrypto builds.
++
++`atexit()` has varied semantics between platforms and can cause SIGSEGV in some
++circumstances. This option disables the atexit registration of OPENSSL_cleanup.
++
+ ### no-autoalginit
+ 
+ Don't automatically load all supported ciphers and digests.
+--- openssl-3.2.1/NEWS.md	1706620496.000000000
++++ ./NEWS.md	1711446911.739692366
+@@ -20,6 +20,10 @@ OpenSSL Releases
+ OpenSSL 3.2
+ -----------
+ 
++### Major changes between OpenSSL 3.2.1 and OpenSSL 3.2.2 [under development]
++
++  * none
++
+ ### Major changes between OpenSSL 3.2.0 and OpenSSL 3.2.1 [30 Jan 2024]
+ 
+ OpenSSL 3.2.1 is a security patch release. The most severe CVE fixed in this
+@@ -34,9 +38,6 @@ This release incorporates the following
+   * Fixed POLY1305 MAC implementation corrupting vector registers on PowerPC
+     CPUs which support PowerISA 2.07
+     ([CVE-2023-6129])
+-  * Fixed excessive time spent in DH check / generation with large Q parameter
+-    value
+-    [(CVE-2023-5678)]
+ 
+ ### Major changes between OpenSSL 3.1 and OpenSSL 3.2.0 [23 Nov 2023]
+ 
+@@ -51,7 +52,7 @@ changes:
+   * The `x509`, `ca`, and `req` apps now always produce X.509v3 certificates.
+ 
+   * Subject or issuer names in X.509 objects are now displayed as UTF-8 strings
+-    by default.
++    by default. Also spaces surrounding `=` in DN output are removed.
+ 
+ This release adds the following new features:
+ 
+@@ -112,6 +113,12 @@ This release incorporates the following
+ 
+     See [OpenSSL Guide].
+ 
++This release incorporates the following bug fixes and mitigations:
++
++  * Fixed excessive time spent in DH check / generation with large Q parameter
++    value
++    ([CVE-2023-5678])
++
+ A more detailed list of changes in this release can be found in the
+ [CHANGES.md] file.
+ 
+--- openssl-3.2.1/NOTES-NONSTOP.md	1706620496.000000000
++++ ./NOTES-NONSTOP.md	1711446911.740085531
+@@ -57,7 +57,10 @@ relating to `atexit()` processing when a
+ the program terminates. This limitation applies to all OpenSSL shared library
+ components.
+ 
+-A resolution to this situation is under investigation.
++It is possible to configure the build with `no-atexit` to avoid the SIGSEGV.
++Preferably, you can explicitly call `OPENSSL_cleanup()` from your application.
++It is not mandatory as it just deallocates various global data structures
++OpenSSL allocated.
+ 
+ About Prefix and OpenSSLDir
+ ---------------------------
+--- openssl-3.2.1/VERSION.dat	1706620496.000000000
++++ ./VERSION.dat	1711446911.741302607
+@@ -1,7 +1,7 @@
+ MAJOR=3
+ MINOR=2
+-PATCH=1
+-PRE_RELEASE_TAG=
++PATCH=2
++PRE_RELEASE_TAG=dev
+ BUILD_METADATA=
+-RELEASE_DATE="30 Jan 2024"
++RELEASE_DATE=""
+ SHLIB_VERSION=3
+--- openssl-3.2.1/apps/lib/s_cb.c	1706620496.000000000
++++ ./apps/lib/s_cb.c	1711446911.741990811
+@@ -1383,7 +1383,8 @@ int ssl_load_stores(SSL_CTX *ctx,
+         if (vfyCAstore != NULL && !X509_STORE_load_store(vfy, vfyCAstore))
+             goto err;
+         add_crls_store(vfy, crls);
+-        SSL_CTX_set1_verify_cert_store(ctx, vfy);
++        if (SSL_CTX_set1_verify_cert_store(ctx, vfy) == 0)
++            goto err;
+         if (crl_download)
+             store_setup_crl_download(vfy);
+     }
+@@ -1397,7 +1398,8 @@ int ssl_load_stores(SSL_CTX *ctx,
+             goto err;
+         if (chCAstore != NULL && !X509_STORE_load_store(ch, chCAstore))
+             goto err;
+-        SSL_CTX_set1_chain_cert_store(ctx, ch);
++        if (SSL_CTX_set1_chain_cert_store(ctx, ch) == 0)
++            goto err;
+     }
+     rv = 1;
+  err:
+--- openssl-3.2.1/apps/openssl.c	1706620496.000000000
++++ ./apps/openssl.c	1711446911.112163521
+@@ -317,6 +317,7 @@ int main(int argc, char *argv[])
+     BIO_free_all(bio_out);
+     apps_shutdown();
+     BIO_free_all(bio_err);
++    OPENSSL_cleanup();
+     EXIT(ret);
+ }
+ 
+--- openssl-3.2.1/apps/openssl.cnf	1706620496.000000000
++++ ./apps/openssl.cnf	1711446909.888000606
+@@ -51,11 +51,11 @@ tsa_policy3 = 1.2.3.4.5.7
+ # .include fipsmodule.cnf
+ 
+ [openssl_init]
+-providers = provider_sect
++# providers = provider_sect
+ 
+ # List of providers to load
+-[provider_sect]
+-default = default_sect
++# [provider_sect]
++# default = default_sect
+ # The fips section name should match the section name inside the
+ # included fipsmodule.cnf.
+ # fips = fips_sect
+@@ -68,7 +68,7 @@ default = default_sect
+ # becomes unavailable in openssl.  As a consequence applications depending on
+ # OpenSSL may not work correctly which could lead to significant system
+ # problems including inability to remotely access the system.
+-[default_sect]
++# [default_sect]
+ # activate = 1
+ 
+ 
+--- openssl-3.2.1/crypto/aes/build.info	1706620496.000000000
++++ ./crypto/aes/build.info	1711446911.742342059
+@@ -87,7 +87,7 @@ DEFINE[../../providers/libdefault.a]=$AE
+ # already gets everything that the static libcrypto.a has, and doesn't need it
+ # added again.
+ IF[{- !$disabled{module} && !$disabled{shared} -}]
+-  DEFINE[../providers/liblegacy.a]=$AESDEF
++  DEFINE[../../providers/liblegacy.a]=$AESDEF
+ ENDIF
+ 
+ GENERATE[aes-ia64.s]=asm/aes-ia64.S
+--- openssl-3.2.1/crypto/chacha/asm/chacha-loongarch64.pl	1706620496.000000000
++++ ./crypto/chacha/asm/chacha-loongarch64.pl	1711446911.742935138
+@@ -2,7 +2,7 @@
+ # Author: Min Zhou <zhoumin@loongson.cn>
+ # Copyright 2023-2024 The OpenSSL Project Authors. All Rights Reserved.
+ #
+-# Licensed under the OpenSSL license (the "License").  You may not use
++# Licensed under the Apache License 2.0 (the "License").  You may not use
+ # this file except in compliance with the License.  You can obtain a copy
+ # in the file LICENSE in the source distribution or at
+ # https://www.openssl.org/source/license.html
+--- openssl-3.2.1/crypto/chacha/asm/chachap10-ppc.pl	1706620496.000000000
++++ ./crypto/chacha/asm/chachap10-ppc.pl	1711446911.743509677
+@@ -170,7 +170,9 @@ $code.=<<___;
+ .align	5
+ .ChaCha20_ctr32_vsx_p10:
+ 	${UCMP}i $len,255
+-	bgt 	ChaCha20_ctr32_vsx_8x
++	ble	.Not_greater_than_8x
++	b	ChaCha20_ctr32_vsx_8x
++.Not_greater_than_8x:
+ 	$STU	$sp,-$FRAME($sp)
+ 	mflr	r0
+ 	li	r10,`15+$LOCALS+64`
+--- openssl-3.2.1/crypto/conf/conf_ssl.c	1706620496.000000000
++++ ./crypto/conf/conf_ssl.c	1711446910.500361833
+@@ -12,6 +12,7 @@
+ #include <openssl/conf.h>
+ #include <openssl/err.h>
+ #include "internal/sslconf.h"
++#include "internal/thread_once.h"
+ #include "conf_local.h"
+ 
+ /*
+@@ -35,12 +36,25 @@ struct ssl_conf_cmd_st {
+     char *arg;
+ };
+ 
++static CRYPTO_ONCE init_ssl_names_lock = CRYPTO_ONCE_STATIC_INIT;
++static CRYPTO_RWLOCK *ssl_names_lock;
+ static struct ssl_conf_name_st *ssl_names;
+ static size_t ssl_names_count;
+ 
+-static void ssl_module_free(CONF_IMODULE *md)
++DEFINE_RUN_ONCE_STATIC(do_init_ssl_names_lock)
++{
++	ssl_names_lock = CRYPTO_THREAD_lock_new();
++	if (ssl_names_lock == NULL) {
++		ERR_raise(ERR_LIB_CONF, ERR_R_MALLOC_FAILURE);
++		return 0;
++	}
++	return 1;
++}
++
++static void ssl_module_free_unlocked(CONF_IMODULE *md)
+ {
+     size_t i, j;
++
+     if (ssl_names == NULL)
+         return;
+     for (i = 0; i < ssl_names_count; i++) {
+@@ -58,6 +72,14 @@ static void ssl_module_free(CONF_IMODULE
+     ssl_names_count = 0;
+ }
+ 
++static void ssl_module_free(CONF_IMODULE *md)
++{
++    if (!CRYPTO_THREAD_write_lock(ssl_names_lock))
++	    return;
++    ssl_module_free_unlocked(md);
++    CRYPTO_THREAD_unlock(ssl_names_lock);
++}
++
+ static int ssl_module_init(CONF_IMODULE *md, const CONF *cnf)
+ {
+     size_t i, j, cnt;
+@@ -65,6 +87,12 @@ static int ssl_module_init(CONF_IMODULE
+     const char *ssl_conf_section;
+     STACK_OF(CONF_VALUE) *cmd_lists;
+ 
++    if (!RUN_ONCE(&init_ssl_names_lock, do_init_ssl_names_lock))
++        return 0;
++
++    if (!CRYPTO_THREAD_write_lock(ssl_names_lock))
++	    return 0;
++
+     ssl_conf_section = CONF_imodule_get_value(md);
+     cmd_lists = NCONF_get_section(cnf, ssl_conf_section);
+     if (sk_CONF_VALUE_num(cmd_lists) <= 0) {
+@@ -77,7 +105,7 @@ static int ssl_module_init(CONF_IMODULE
+         goto err;
+     }
+     cnt = sk_CONF_VALUE_num(cmd_lists);
+-    ssl_module_free(md);
++    ssl_module_free_unlocked(md);
+     ssl_names = OPENSSL_zalloc(sizeof(*ssl_names) * cnt);
+     if (ssl_names == NULL)
+         goto err;
+@@ -126,7 +154,8 @@ static int ssl_module_init(CONF_IMODULE
+     rv = 1;
+  err:
+     if (rv == 0)
+-        ssl_module_free(md);
++        ssl_module_free_unlocked(md);
++    CRYPTO_THREAD_unlock(ssl_names_lock);
+     return rv;
+ }
+ 
+--- openssl-3.2.1/crypto/ec/asm/ecp_sm2p256-armv8.pl	1706620496.000000000
++++ ./crypto/ec/asm/ecp_sm2p256-armv8.pl	1711446911.744094923
+@@ -1,7 +1,7 @@
+ #! /usr/bin/env perl
+ # Copyright 2023 The OpenSSL Project Authors. All Rights Reserved.
+ #
+-# Licensed under the OpenSSL license (the "License").  You may not use
++# Licensed under the Apache License 2.0 (the "License").  You may not use
+ # this file except in compliance with the License.  You can obtain a copy
+ # in the file LICENSE in the source distribution or at
+ # https://www.openssl.org/source/license.html
+@@ -23,7 +23,7 @@ open OUT,"| \"$^X\" $xlate $flavour \"$o
+ my ($s0,$s1,$s2,$s3,$s4,$s5,$s6,$s7)=map("x$_",(7..14));
+ my ($a8,$a10,$a12,$a14,$a9,$a11,$a13,$a15)=map("x$_",(7..14));
+ my ($t0,$t1,$t2,$t3)=map("x$_",(3..6));
+-my ($t4,$t5,$t6,$t7,$t8)=map("x$_",(15..19));
++my ($t4,$t5,$t6,$t7,$t8)=map("x$_",(15..17,19,20));
+ 
+ sub bn_mod_add() {
+ 	my $mod = shift;
+@@ -537,7 +537,7 @@ ecp_sm2p256_mul:
+ 	stp x29,x30,[sp,#-80]!
+ 	add x29,sp,#0
+ 	stp x16,x17,[sp,#16]
+-	stp x18,x19,[sp,#64]
++	stp x19,x20,[sp,#64]
+ 
+ 	// Load inputs
+ 	ldp $s0,$s1,[x1]
+@@ -678,7 +678,7 @@ ecp_sm2p256_mul:
+ 
+ 	// Restore scalar registers
+ 	ldp x16,x17,[sp,#16]
+-	ldp x18,x19,[sp,#64]
++	ldp x19,x20,[sp,#64]
+ 	ldp x29,x30,[sp],#80
+ 
+ 	AARCH64_VALIDATE_LINK_REGISTER
+@@ -696,7 +696,7 @@ ecp_sm2p256_sqr:
+ 	stp x29,x30,[sp,#-80]!
+ 	add x29,sp,#0
+ 	stp x16,x17,[sp,#16]
+-	stp x18,x19,[sp,#64]
++	stp x19,x20,[sp,#64]
+ 
+ 	// Load inputs
+ 	ldp $s4,$s5,[x1]
+@@ -806,7 +806,7 @@ ecp_sm2p256_sqr:
+ 
+ 	// Restore scalar registers
+ 	ldp x16,x17,[sp,#16]
+-	ldp x18,x19,[sp,#64]
++	ldp x19,x20,[sp,#64]
+ 	ldp x29,x30,[sp],#80
+ 
+ 	AARCH64_VALIDATE_LINK_REGISTER
+--- openssl-3.2.1/crypto/ec/build.info	1706620496.000000000
++++ ./crypto/ec/build.info	1711446911.744402796
+@@ -103,7 +103,7 @@ DEFINE[../../providers/libdefault.a]=$EC
+ # Otherwise, it already gets everything that the static libcrypto.a
+ # has, and doesn't need it added again.
+ IF[{- !$disabled{module} && !$disabled{shared} -}]
+-  DEFINE[../providers/liblegacy.a]=$ECDEF
++  DEFINE[../../providers/liblegacy.a]=$ECDEF
+ ENDIF
+ 
+ GENERATE[ecp_nistz256-x86.S]=asm/ecp_nistz256-x86.pl
+--- openssl-3.2.1/crypto/ec/curve448/arch_64/f_impl64.c	1706620496.000000000
++++ ./crypto/ec/curve448/arch_64/f_impl64.c	1711446911.744720961
+@@ -45,9 +45,9 @@ void ossl_gf_mul(gf_s * RESTRICT cs, con
+             accum0 += widemul(a[j + 4], b[i - j + 4]);
+         }
+         for (; j < 4; j++) {
+-            accum2 += widemul(a[j], b[i - j + 8]);
+-            accum1 += widemul(aa[j], bbb[i - j + 4]);
+-            accum0 += widemul(a[j + 4], bb[i - j + 4]);
++            accum2 += widemul(a[j], b[i + 8 - j]);
++            accum1 += widemul(aa[j], bbb[i + 4 - j]);
++            accum0 += widemul(a[j + 4], bb[i + 4 - j]);
+         }
+ 
+         accum1 -= accum2;
+--- openssl-3.2.1/crypto/encode_decode/encoder_lib.c	1706620496.000000000
++++ ./crypto/encode_decode/encoder_lib.c	1711446911.745190125
+@@ -59,6 +59,11 @@ int OSSL_ENCODER_to_bio(OSSL_ENCODER_CTX
+         return 0;
+     }
+ 
++    if (ctx->cleanup == NULL || ctx->construct == NULL) {
++        ERR_raise(ERR_LIB_OSSL_ENCODER, ERR_R_INIT_FAIL);
++        return 0;
++    }
++
+     return encoder_process(&data) > 0;
+ }
+ 
+--- openssl-3.2.1/crypto/engine/eng_pkey.c	1706620496.000000000
++++ ./crypto/engine/eng_pkey.c	1711446911.745539123
+@@ -79,48 +79,6 @@ EVP_PKEY *ENGINE_load_private_key(ENGINE
+         ERR_raise(ERR_LIB_ENGINE, ENGINE_R_FAILED_LOADING_PRIVATE_KEY);
+         return NULL;
+     }
+-    /* We enforce check for legacy key */
+-    switch (EVP_PKEY_get_id(pkey)) {
+-    case EVP_PKEY_RSA:
+-        {
+-        RSA *rsa = EVP_PKEY_get1_RSA(pkey);
+-        EVP_PKEY_set1_RSA(pkey, rsa);
+-        RSA_free(rsa);
+-        }
+-        break;
+-#  ifndef OPENSSL_NO_EC
+-    case EVP_PKEY_SM2:
+-    case EVP_PKEY_EC:
+-        {
+-        EC_KEY *ec = EVP_PKEY_get1_EC_KEY(pkey);
+-        EVP_PKEY_set1_EC_KEY(pkey, ec);
+-        EC_KEY_free(ec);
+-        }
+-        break;
+-#  endif
+-#  ifndef OPENSSL_NO_DSA
+-    case EVP_PKEY_DSA:
+-        {
+-        DSA *dsa = EVP_PKEY_get1_DSA(pkey);
+-        EVP_PKEY_set1_DSA(pkey, dsa);
+-        DSA_free(dsa);
+-        }
+-        break;
+-#endif
+-#  ifndef OPENSSL_NO_DH
+-    case EVP_PKEY_DH:
+-        {
+-        DH *dh = EVP_PKEY_get1_DH(pkey);
+-        EVP_PKEY_set1_DH(pkey, dh);
+-        DH_free(dh);
+-        }
+-        break;
+-#endif
+-    default:
+-        /*Do nothing */
+-        break;
+-    }
+-
+     return pkey;
+ }
+ 
+--- openssl-3.2.1/crypto/evp/signature.c	1706620496.000000000
++++ ./crypto/evp/signature.c	1711446911.746214161
+@@ -399,8 +399,8 @@ static int evp_pkey_signature_init(EVP_P
+     int iter;
+ 
+     if (ctx == NULL) {
+-        ERR_raise(ERR_LIB_EVP, EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE);
+-        return -2;
++        ERR_raise(ERR_LIB_EVP, ERR_R_PASSED_NULL_PARAMETER);
++        return -1;
+     }
+ 
+     evp_pkey_ctx_free_old_ops(ctx);
+@@ -630,8 +630,8 @@ int EVP_PKEY_sign(EVP_PKEY_CTX *ctx,
+     int ret;
+ 
+     if (ctx == NULL) {
+-        ERR_raise(ERR_LIB_EVP, EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE);
+-        return -2;
++        ERR_raise(ERR_LIB_EVP, ERR_R_PASSED_NULL_PARAMETER);
++        return -1;
+     }
+ 
+     if (ctx->operation != EVP_PKEY_OP_SIGN) {
+@@ -642,6 +642,11 @@ int EVP_PKEY_sign(EVP_PKEY_CTX *ctx,
+     if (ctx->op.sig.algctx == NULL)
+         goto legacy;
+ 
++    if (ctx->op.sig.signature->sign == NULL) {
++        ERR_raise(ERR_LIB_EVP, EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE);
++        return -2;
++    }
++
+     ret = ctx->op.sig.signature->sign(ctx->op.sig.algctx, sig, siglen,
+                                       (sig == NULL) ? 0 : *siglen, tbs, tbslen);
+ 
+@@ -674,8 +679,8 @@ int EVP_PKEY_verify(EVP_PKEY_CTX *ctx,
+     int ret;
+ 
+     if (ctx == NULL) {
+-        ERR_raise(ERR_LIB_EVP, EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE);
+-        return -2;
++        ERR_raise(ERR_LIB_EVP, ERR_R_PASSED_NULL_PARAMETER);
++        return -1;
+     }
+ 
+     if (ctx->operation != EVP_PKEY_OP_VERIFY) {
+@@ -686,6 +691,11 @@ int EVP_PKEY_verify(EVP_PKEY_CTX *ctx,
+     if (ctx->op.sig.algctx == NULL)
+         goto legacy;
+ 
++    if (ctx->op.sig.signature->verify == NULL) {
++        ERR_raise(ERR_LIB_EVP, EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE);
++        return -2;
++    }
++
+     ret = ctx->op.sig.signature->verify(ctx->op.sig.algctx, sig, siglen,
+                                         tbs, tbslen);
+ 
+@@ -717,8 +727,8 @@ int EVP_PKEY_verify_recover(EVP_PKEY_CTX
+     int ret;
+ 
+     if (ctx == NULL) {
+-        ERR_raise(ERR_LIB_EVP, EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE);
+-        return -2;
++        ERR_raise(ERR_LIB_EVP, ERR_R_PASSED_NULL_PARAMETER);
++        return -1;
+     }
+ 
+     if (ctx->operation != EVP_PKEY_OP_VERIFYRECOVER) {
+@@ -729,6 +739,11 @@ int EVP_PKEY_verify_recover(EVP_PKEY_CTX
+     if (ctx->op.sig.algctx == NULL)
+         goto legacy;
+ 
++    if (ctx->op.sig.signature->verify_recover == NULL) {
++        ERR_raise(ERR_LIB_EVP, EVP_R_OPERATION_NOT_SUPPORTED_FOR_THIS_KEYTYPE);
++        return -2;
++    }
++
+     ret = ctx->op.sig.signature->verify_recover(ctx->op.sig.algctx, rout,
+                                                 routlen,
+                                                 (rout == NULL ? 0 : *routlen),
+--- openssl-3.2.1/crypto/hpke/hpke.c	1706620496.000000000
++++ ./crypto/hpke/hpke.c	1711446911.746877907
+@@ -1,7 +1,7 @@
+ /*
+  * Copyright 2022-2023 The OpenSSL Project Authors. All Rights Reserved.
+  *
+- * Licensed under the OpenSSL license (the "License").  You may not use
++ * Licensed under the Apache License 2.0 (the "License").  You may not use
+  * this file except in compliance with the License.  You can obtain a copy
+  * in the file LICENSE in the source distribution or at
+  * https://www.openssl.org/source/license.html
+--- openssl-3.2.1/crypto/init.c	1706620496.000000000
++++ ./crypto/init.c	1711446911.747741985
+@@ -97,17 +97,19 @@ static int win32atexit(void)
+ 
+ DEFINE_RUN_ONCE_STATIC(ossl_init_register_atexit)
+ {
+-#ifdef OPENSSL_INIT_DEBUG
++#ifndef OPENSSL_NO_ATEXIT
++# ifdef OPENSSL_INIT_DEBUG
+     fprintf(stderr, "OPENSSL_INIT: ossl_init_register_atexit()\n");
+-#endif
+-#ifndef OPENSSL_SYS_UEFI
+-# if defined(_WIN32) && !defined(__BORLANDC__)
++# endif
++# ifndef OPENSSL_SYS_UEFI
++#  if defined(_WIN32) && !defined(__BORLANDC__)
+     /* We use _onexit() in preference because it gets called on DLL unload */
+     if (_onexit(win32atexit) == NULL)
+         return 0;
+-# else
++#  else
+     if (atexit(OPENSSL_cleanup) != 0)
+         return 0;
++#  endif
+ # endif
+ #endif
+ 
+--- openssl-3.2.1/crypto/property/property_parse.c	1706620496.000000000
++++ ./crypto/property/property_parse.c	1711446911.748258565
+@@ -14,6 +14,7 @@
+ #include <openssl/err.h>
+ #include "internal/propertyerr.h"
+ #include "internal/property.h"
++#include "internal/numbers.h"
+ #include "crypto/ctype.h"
+ #include "internal/nelem.h"
+ #include "property_local.h"
+--- openssl-3.2.1/crypto/sha/build.info	1706620496.000000000
++++ ./crypto/sha/build.info	1711446911.748587646
+@@ -88,7 +88,7 @@ DEFINE[../../providers/libdefault.a]=$SH
+ # linked with libcrypto.  Otherwise, it already gets everything that
+ # the static libcrypto.a has, and doesn't need it added again.
+ IF[{- !$disabled{module} && !$disabled{shared} -}]
+-  DEFINE[../providers/liblegacy.a]=$SHA1DEF $KECCAK1600DEF
++  DEFINE[../../providers/liblegacy.a]=$SHA1DEF $KECCAK1600DEF
+ ENDIF
+ 
+ GENERATE[sha1-586.S]=asm/sha1-586.pl
+--- openssl-3.2.1/crypto/sm4/asm/vpsm4-armv8.pl	1706620496.000000000
++++ ./crypto/sm4/asm/vpsm4-armv8.pl	1711446911.749577807
+@@ -1495,7 +1495,7 @@ $code.=<<___;
+ 	mov @tweak[1].16b,@tweak[0].16b
+ ___
+ 	&rev32_armeb(@tweak[1],@tweak[1]);
+-	&compute_tweak_vec(@tweak[1],@tweak[2]);
++	&compute_tweak_vec(@tweak[1],@tweak[2],$std);
+ $code.=<<___;
+ 	b .check_dec${std}
+ 
+@@ -1505,12 +1505,12 @@ $code.=<<___;
+ .check_dec${std}:
+ 	// encryption:1 decryption:0
+ 	cmp $enc,1
+-	b.eq .prcess_last_2blks${std}
++	b.eq .process_last_2blks${std}
+ 	mov @vtmp[0].16B,@tweak[1].16b
+ 	mov @tweak[1].16B,@tweak[2].16b
+ 	mov @tweak[2].16B,@vtmp[0].16b
+ 
+-.prcess_last_2blks${std}:
++.process_last_2blks${std}:
+ ___
+ 	&rev32_armeb(@tweak[1],@tweak[1]);
+ 	&rev32_armeb(@tweak[2],@tweak[2]);
+--- openssl-3.2.1/crypto/sm4/asm/vpsm4_ex-armv8.pl	1706620496.000000000
++++ ./crypto/sm4/asm/vpsm4_ex-armv8.pl	1711446911.750245178
+@@ -1469,7 +1469,7 @@ $code.=<<___;
+ 	mov @tweak[1].16b,@tweak[0].16b
+ ___
+ 	&rev32_armeb(@tweak[1],@tweak[1]);
+-	&compute_tweak_vec(@tweak[1],@tweak[2]);
++	&compute_tweak_vec(@tweak[1],@tweak[2],$std);
+ $code.=<<___;
+ 	b .check_dec${std}
+ 
+@@ -1479,12 +1479,12 @@ $code.=<<___;
+ .check_dec${std}:
+ 	// encryption:1 decryption:0
+ 	cmp $enc,1
+-	b.eq .prcess_last_2blks${std}
++	b.eq .process_last_2blks${std}
+ 	mov @vtmp[0].16B,@tweak[1].16b
+ 	mov @tweak[1].16B,@tweak[2].16b
+ 	mov @tweak[2].16B,@vtmp[0].16b
+ 
+-.prcess_last_2blks${std}:
++.process_last_2blks${std}:
+ ___
+ 	&rev32_armeb(@tweak[1],@tweak[1]);
+ 	&rev32_armeb(@tweak[2],@tweak[2]);
+--- openssl-3.2.1/crypto/sm4/build.info	1706620496.000000000
++++ ./crypto/sm4/build.info	1711446911.750546635
+@@ -25,7 +25,7 @@ DEFINE[../../providers/libdefault.a]=$SM
+ # already gets everything that the static libcrypto.a has, and doesn't need it
+ # added again.
+ IF[{- !$disabled{module} && !$disabled{shared} -}]
+-  DEFINE[../providers/liblegacy.a]=$SM4DEF
++  DEFINE[../../providers/liblegacy.a]=$SM4DEF
+ ENDIF
+ 
+ GENERATE[sm4-armv8.S]=asm/sm4-armv8.pl
+--- openssl-3.2.1/doc/internal/man3/ossl_method_construct.pod	1706620496.000000000
++++ ./doc/internal/man3/ossl_method_construct.pod	1711446911.750897466
+@@ -93,7 +93,7 @@ This default store should be stored in t
+ The method to be looked up should be identified with data found in I<data>
+ (which is the I<mcm_data> that was passed to ossl_construct_method()).
+ In other words, the ossl_method_construct() caller is entirely responsible
+-for ensuring the necesssary data is made available.
++for ensuring the necessary data is made available.
+ 
+ Optionally, I<prov> may be given as a search criterion, to narrow down the
+ search of a method belonging to just one provider.
+--- openssl-3.2.1/doc/man3/EVP_DigestInit.pod	1706620496.000000000
++++ ./doc/man3/EVP_DigestInit.pod	1711446911.751406380
+@@ -492,7 +492,7 @@ EVP_MD_CTX_get_params() can be used with
+ 
+ =over 4
+ 
+-=item "micalg" (B<OSSL_PARAM_DIGEST_KEY_MICALG>) <UTF8 string>.
++=item "micalg" (B<OSSL_DIGEST_PARAM_MICALG>) <UTF8 string>.
+ 
+ Gets the digest Message Integrity Check algorithm string. This is used when
+ creating S/MIME multipart/signed messages, as specified in RFC 3851.
+--- openssl-3.2.1/doc/man3/EVP_KDF.pod	1706620496.000000000
++++ ./doc/man3/EVP_KDF.pod	1711446911.751741794
+@@ -20,7 +20,7 @@ EVP_KDF_CTX_gettable_params, EVP_KDF_CTX
+  typedef struct evp_kdf_st EVP_KDF;
+  typedef struct evp_kdf_ctx_st EVP_KDF_CTX;
+ 
+- EVP_KDF_CTX *EVP_KDF_CTX_new(const EVP_KDF *kdf);
++ EVP_KDF_CTX *EVP_KDF_CTX_new(EVP_KDF *kdf);
+  const EVP_KDF *EVP_KDF_CTX_kdf(EVP_KDF_CTX *ctx);
+  void EVP_KDF_CTX_free(EVP_KDF_CTX *ctx);
+  EVP_KDF_CTX *EVP_KDF_CTX_dup(const EVP_KDF_CTX *src);
+--- openssl-3.2.1/doc/man3/X509_STORE_CTX_new.pod	1706620496.000000000
++++ ./doc/man3/X509_STORE_CTX_new.pod	1711446911.752106626
+@@ -83,7 +83,9 @@ is no longer valid.
+ If I<ctx> is NULL nothing is done.
+ 
+ X509_STORE_CTX_init() sets up I<ctx> for a subsequent verification operation.
+-It must be called before each call to L<X509_verify_cert(3)> or
++
++X509_STORE_CTX_init() initializes the internal state and resources of the
++X509_STORE_CTX, and must be called before each call to L<X509_verify_cert(3)> or
+ L<X509_STORE_CTX_verify(3)>, i.e., a context is only good for one verification.
+ If you want to verify a further certificate or chain with the same I<ctx>
+ then you must call X509_STORE_CTX_init() again.
+--- openssl-3.2.1/doc/man7/ossl-guide-migration.pod	1706620496.000000000
++++ ./doc/man7/ossl-guide-migration.pod	1711446911.753039703
+@@ -157,6 +157,14 @@ To ensure the future compatibility, the
+ To prefer the provider-based hardware offload, you can specify the default
+ properties to prefer your provider.
+ 
++Setting engine-based or application-based default low-level crypto method such
++as B<RSA_METHOD> or B<EC_KEY_METHOD> is still possible and keys inside the
++default provider will use the engine-based implementation for the crypto
++operations. However B<EVP_PKEY>s created by decoding by using B<OSSL_DECODER>,
++B<PEM_> or B<d2i_> APIs will be provider-based. To create a fully legacy
++B<EVP_PKEY>s L<EVP_PKEY_set1_RSA(3)>, L<EVP_PKEY_set1_EC_KEY(3)> or similar
++functions must be used.
++
+ =head3 Versioning Scheme
+ 
+ The OpenSSL versioning scheme has changed with the OpenSSL 3.0 release. The new
+--- openssl-3.2.1/engines/e_afalg.c	1706620496.000000000
++++ ./engines/e_afalg.c	1711446911.753510659
+@@ -834,8 +834,10 @@ static int bind_helper(ENGINE *e, const
+     if (!afalg_chk_platform())
+         return 0;
+ 
+-    if (!bind_afalg(e))
++    if (!bind_afalg(e)) {
++        afalg_destroy(e);
+         return 0;
++    }
+     return 1;
+ }
+ 
+--- openssl-3.2.1/fuzz/asn1.c	1706620496.000000000
++++ ./fuzz/asn1.c	1711446911.753875282
+@@ -312,10 +312,16 @@ int FuzzerTestOneInput(const uint8_t *bu
+         ASN1_VALUE *o = ASN1_item_d2i(NULL, &b, len, i);
+ 
+         if (o != NULL) {
+-            BIO *bio = BIO_new(BIO_s_null());
+-            if (bio != NULL) {
+-                ASN1_item_print(bio, o, 4, i, pctx);
+-                BIO_free(bio);
++            /*
++             * Don't print excessively long output to prevent spurious fuzzer
++             * timeouts.
++             */
++            if (b - buf < 10000) {
++                BIO *bio = BIO_new(BIO_s_null());
++                if (bio != NULL) {
++                    ASN1_item_print(bio, o, 4, i, pctx);
++                    BIO_free(bio);
++                }
+             }
+             if (ASN1_item_i2d(o, &der, i) > 0) {
+                 OPENSSL_free(der);
+--- openssl-3.2.1/include/crypto/bn.h	1706620496.000000000
++++ ./include/crypto/bn.h	1711446911.754200071
+@@ -116,7 +116,8 @@ OSSL_LIB_CTX *ossl_bn_get_libctx(BN_CTX
+ 
+ extern const BIGNUM ossl_bn_inv_sqrt_2;
+ 
+-#if defined(OPENSSL_SYS_LINUX) && !defined(FIPS_MODULE) && defined (__s390x__)
++#if defined(OPENSSL_SYS_LINUX) && !defined(FIPS_MODULE) && defined (__s390x__) \
++    && !defined (OPENSSL_NO_ASM)
+ # define S390X_MOD_EXP
+ #endif
+ 
+--- openssl-3.2.1/include/internal/quic_reactor.h	1706620496.000000000
++++ ./include/internal/quic_reactor.h	1711446911.754711402
+@@ -11,6 +11,7 @@
+ 
+ # include "internal/time.h"
+ # include "internal/sockets.h"
++# include "internal/thread_arch.h"
+ # include <openssl/bio.h>
+ 
+ # ifndef OPENSSL_NO_QUIC
+@@ -181,7 +182,7 @@ int ossl_quic_reactor_tick(QUIC_REACTOR
+ int ossl_quic_reactor_block_until_pred(QUIC_REACTOR *rtor,
+                                        int (*pred)(void *arg), void *pred_arg,
+                                        uint32_t flags,
+-                                       CRYPTO_RWLOCK *mutex);
++                                       CRYPTO_MUTEX *mutex);
+ 
+ # endif
+ 
+--- openssl-3.2.1/include/internal/refcount.h	1706620496.000000000
++++ ./include/internal/refcount.h	1711446911.755029275
+@@ -101,7 +101,7 @@ static __inline int CRYPTO_UP_REF(CRYPTO
+     return 1;
+ }
+ 
+-static __inline int CRYPTO_DOWN_REF(CRYPTO_REF_COUNT *val, int *refcnt)
++static __inline int CRYPTO_DOWN_REF(CRYPTO_REF_COUNT *refcnt, int *ret)
+ {
+     *ret = _InterlockedExchangeAdd((void *)&refcnt->val, -1) - 1;
+     return 1;
+--- openssl-3.2.1/include/internal/thread_arch.h	1706620496.000000000
++++ ./include/internal/thread_arch.h	1711446911.755300815
+@@ -37,8 +37,8 @@
+ 
+ # include <openssl/crypto.h>
+ 
+-typedef void CRYPTO_MUTEX;
+-typedef void CRYPTO_CONDVAR;
++typedef struct crypto_mutex_st CRYPTO_MUTEX;
++typedef struct crypto_condvar_st CRYPTO_CONDVAR;
+ 
+ CRYPTO_MUTEX *ossl_crypto_mutex_new(void);
+ void ossl_crypto_mutex_lock(CRYPTO_MUTEX *mutex);
+--- openssl-3.2.1/include/openssl/hpke.h	1706620496.000000000
++++ ./include/openssl/hpke.h	1711446911.755598313
+@@ -1,7 +1,7 @@
+ /*
+  * Copyright 2022-2023 The OpenSSL Project Authors. All Rights Reserved.
+  *
+- * Licensed under the OpenSSL license (the "License").  You may not use
++ * Licensed under the Apache License 2.0 (the "License").  You may not use
+  * this file except in compliance with the License.  You can obtain a copy
+  * in the file LICENSE in the source distribution or at
+  * https://www.openssl.org/source/license.html
+--- openssl-3.2.1/providers/implementations/rands/drbg.c	1706620496.000000000
++++ ./providers/implementations/rands/drbg.c	1711446911.756126227
+@@ -788,6 +788,7 @@ int ossl_drbg_enable_locking(void *vctx)
+ PROV_DRBG *ossl_rand_drbg_new
+     (void *provctx, void *parent, const OSSL_DISPATCH *p_dispatch,
+      int (*dnew)(PROV_DRBG *ctx),
++     void (*dfree)(void *vctx),
+      int (*instantiate)(PROV_DRBG *drbg,
+                         const unsigned char *entropy, size_t entropylen,
+                         const unsigned char *nonce, size_t noncelen,
+@@ -865,7 +866,7 @@ PROV_DRBG *ossl_rand_drbg_new
+     return drbg;
+ 
+  err:
+-    ossl_rand_drbg_free(drbg);
++    dfree(drbg);
+     return NULL;
+ }
+ 
+--- openssl-3.2.1/providers/implementations/rands/drbg_ctr.c	1706620496.000000000
++++ ./providers/implementations/rands/drbg_ctr.c	1711446911.756605265
+@@ -612,7 +612,7 @@ err:
+     EVP_CIPHER_CTX_free(ctr->ctx_ecb);
+     EVP_CIPHER_CTX_free(ctr->ctx_ctr);
+     ctr->ctx_ecb = ctr->ctx_ctr = NULL;
+-    return 0;    
++    return 0;
+ }
+ 
+ static int drbg_ctr_new(PROV_DRBG *drbg)
+@@ -631,7 +631,8 @@ static int drbg_ctr_new(PROV_DRBG *drbg)
+ static void *drbg_ctr_new_wrapper(void *provctx, void *parent,
+                                    const OSSL_DISPATCH *parent_dispatch)
+ {
+-    return ossl_rand_drbg_new(provctx, parent, parent_dispatch, &drbg_ctr_new,
++    return ossl_rand_drbg_new(provctx, parent, parent_dispatch,
++                              &drbg_ctr_new, &drbg_ctr_free,
+                               &drbg_ctr_instantiate, &drbg_ctr_uninstantiate,
+                               &drbg_ctr_reseed, &drbg_ctr_generate);
+ }
+--- openssl-3.2.1/providers/implementations/rands/drbg_hash.c	1706620496.000000000
++++ ./providers/implementations/rands/drbg_hash.c	1711446911.757011596
+@@ -439,7 +439,8 @@ static int drbg_hash_new(PROV_DRBG *ctx)
+ static void *drbg_hash_new_wrapper(void *provctx, void *parent,
+                                    const OSSL_DISPATCH *parent_dispatch)
+ {
+-    return ossl_rand_drbg_new(provctx, parent, parent_dispatch, &drbg_hash_new,
++    return ossl_rand_drbg_new(provctx, parent, parent_dispatch,
++                              &drbg_hash_new, &drbg_hash_free,
+                               &drbg_hash_instantiate, &drbg_hash_uninstantiate,
+                               &drbg_hash_reseed, &drbg_hash_generate);
+ }
+--- openssl-3.2.1/providers/implementations/rands/drbg_hmac.c	1706620496.000000000
++++ ./providers/implementations/rands/drbg_hmac.c	1711446911.757387052
+@@ -331,7 +331,8 @@ static int drbg_hmac_new(PROV_DRBG *drbg
+ static void *drbg_hmac_new_wrapper(void *provctx, void *parent,
+                                    const OSSL_DISPATCH *parent_dispatch)
+ {
+-    return ossl_rand_drbg_new(provctx, parent, parent_dispatch, &drbg_hmac_new,
++    return ossl_rand_drbg_new(provctx, parent, parent_dispatch,
++                              &drbg_hmac_new, &drbg_hmac_free,
+                               &drbg_hmac_instantiate, &drbg_hmac_uninstantiate,
+                               &drbg_hmac_reseed, &drbg_hmac_generate);
+ }
+--- openssl-3.2.1/providers/implementations/rands/drbg_local.h	1706620496.000000000
++++ ./providers/implementations/rands/drbg_local.h	1711446911.757708509
+@@ -176,6 +176,7 @@ struct prov_drbg_st {
+ PROV_DRBG *ossl_rand_drbg_new
+     (void *provctx, void *parent, const OSSL_DISPATCH *parent_dispatch,
+      int (*dnew)(PROV_DRBG *ctx),
++     void (*dfree)(void *vctx),
+      int (*instantiate)(PROV_DRBG *drbg,
+                         const unsigned char *entropy, size_t entropylen,
+                         const unsigned char *nonce, size_t noncelen,
+--- openssl-3.2.1/ssl/quic/quic_impl.c	1706620496.000000000
++++ ./ssl/quic/quic_impl.c	1711446911.758954501
+@@ -451,7 +451,7 @@ SSL *ossl_quic_new(SSL_CTX *ctx)
+ err:
+     if (ssl_base == NULL) {
+ #if defined(OPENSSL_THREADS)
+-        ossl_crypto_mutex_free(qc->mutex);
++        ossl_crypto_mutex_free(&qc->mutex);
+ #endif
+         OPENSSL_free(qc);
+     } else {
+@@ -542,18 +542,22 @@ void ossl_quic_free(SSL *s)
+     }
+ #endif
+ 
++    SSL_free(ctx.qc->tls);
++
+     ossl_quic_channel_free(ctx.qc->ch);
+ 
+     BIO_free_all(ctx.qc->net_rbio);
+     BIO_free_all(ctx.qc->net_wbio);
+ 
+-    /* Note: SSL_free calls OPENSSL_free(qc) for us */
+-
+-    SSL_free(ctx.qc->tls);
+     quic_unlock(ctx.qc); /* tsan doesn't like freeing locked mutexes */
+ #if defined(OPENSSL_THREADS)
+     ossl_crypto_mutex_free(&ctx.qc->mutex);
+ #endif
++
++    /*
++     * Note: SSL_free (that called this function) calls OPENSSL_free(ctx.qc) for
++     * us
++     */
+ }
+ 
+ /* SSL method init */
+--- openssl-3.2.1/ssl/quic/quic_thread_assist.c	1706620496.000000000
++++ ./ssl/quic/quic_thread_assist.c	1711446911.759450290
+@@ -91,7 +91,7 @@ int ossl_quic_thread_assist_init_start(Q
+     qta->t = ossl_crypto_thread_native_start(assist_thread_main,
+                                              qta, /*joinable=*/1);
+     if (qta->t == NULL) {
+-        ossl_crypto_condvar_free(qta->cv);
++        ossl_crypto_condvar_free(&qta->cv);
+         return 0;
+     }
+ 
+--- openssl-3.2.1/ssl/quic/quic_tserver.c	1706620496.000000000
++++ ./ssl/quic/quic_tserver.c	1711446911.759927454
+@@ -158,11 +158,11 @@ void ossl_quic_tserver_free(QUIC_TSERVER
+     if (srv == NULL)
+         return;
+ 
++    SSL_free(srv->tls);
+     ossl_quic_channel_free(srv->ch);
+     BIO_free_all(srv->args.net_rbio);
+     BIO_free_all(srv->args.net_wbio);
+     OPENSSL_free(srv->ssl);
+-    SSL_free(srv->tls);
+     SSL_CTX_free(srv->ctx);
+ #if defined(OPENSSL_THREADS)
+     ossl_crypto_mutex_free(&srv->mutex);
+--- openssl-3.2.1/ssl/record/rec_layer_s3.c	1706620496.000000000
++++ ./ssl/record/rec_layer_s3.c	1711446911.760737699
+@@ -25,8 +25,17 @@ void RECORD_LAYER_init(RECORD_LAYER *rl,
+     rl->s = s;
+ }
+ 
+-void RECORD_LAYER_clear(RECORD_LAYER *rl)
++int RECORD_LAYER_clear(RECORD_LAYER *rl)
+ {
++    int ret = 1;
++
++    /* Clear any buffered records we no longer need */
++    while (rl->curr_rec < rl->num_recs)
++        ret &= ssl_release_record(rl->s,
++                                  &(rl->tlsrecs[rl->curr_rec++]),
++                                  0);
++
++
+     rl->wnum = 0;
+     memset(rl->handshake_fragment, 0, sizeof(rl->handshake_fragment));
+     rl->handshake_fragment_len = 0;
+@@ -34,6 +43,12 @@ void RECORD_LAYER_clear(RECORD_LAYER *rl
+     rl->wpend_type = 0;
+     rl->wpend_ret = 0;
+     rl->wpend_buf = NULL;
++    rl->alert_count = 0;
++    rl->num_recs = 0;
++    rl->curr_rec = 0;
++
++    BIO_free(rl->rrlnext);
++    rl->rrlnext = NULL;
+ 
+     if (rl->rrlmethod != NULL)
+         rl->rrlmethod->free(rl->rrl); /* Ignore return value */
+@@ -48,6 +63,35 @@ void RECORD_LAYER_clear(RECORD_LAYER *rl
+ 
+     if (rl->d)
+         DTLS_RECORD_LAYER_clear(rl);
++
++    return ret;
++}
++
++int RECORD_LAYER_reset(RECORD_LAYER *rl)
++{
++    int ret;
++
++    ret = RECORD_LAYER_clear(rl);
++
++    /* We try and reset both record layers even if one fails */
++    ret &= ssl_set_new_record_layer(rl->s,
++                                    SSL_CONNECTION_IS_DTLS(rl->s)
++                                        ? DTLS_ANY_VERSION : TLS_ANY_VERSION,
++                                    OSSL_RECORD_DIRECTION_READ,
++                                    OSSL_RECORD_PROTECTION_LEVEL_NONE, NULL, 0,
++                                    NULL, 0, NULL, 0, NULL,  0, NULL, 0,
++                                    NID_undef, NULL, NULL, NULL);
++
++    ret &= ssl_set_new_record_layer(rl->s,
++                                    SSL_CONNECTION_IS_DTLS(rl->s)
++                                        ? DTLS_ANY_VERSION : TLS_ANY_VERSION,
++                                    OSSL_RECORD_DIRECTION_WRITE,
++                                    OSSL_RECORD_PROTECTION_LEVEL_NONE, NULL, 0,
++                                    NULL, 0, NULL, 0, NULL,  0, NULL, 0,
++                                    NID_undef, NULL, NULL, NULL);
++
++    /* SSLfatal already called in the event of failure */
++    return ret;
+ }
+ 
+ /* Checks if we have unprocessed read ahead data pending */
+--- openssl-3.2.1/ssl/record/record.h	1706620496.000000000
++++ ./ssl/record/record.h	1711446911.761068447
+@@ -142,7 +142,8 @@ typedef struct record_layer_st {
+ #define DTLS_RECORD_LAYER_get_w_epoch(rl)       ((rl)->d->w_epoch)
+ 
+ void RECORD_LAYER_init(RECORD_LAYER *rl, SSL_CONNECTION *s);
+-void RECORD_LAYER_clear(RECORD_LAYER *rl);
++int RECORD_LAYER_clear(RECORD_LAYER *rl);
++int RECORD_LAYER_reset(RECORD_LAYER *rl);
+ int RECORD_LAYER_read_pending(const RECORD_LAYER *rl);
+ int RECORD_LAYER_processed_read_pending(const RECORD_LAYER *rl);
+ int RECORD_LAYER_write_pending(const RECORD_LAYER *rl);
+--- openssl-3.2.1/ssl/ssl_lib.c	1706620496.000000000
++++ ./ssl/ssl_lib.c	1711446911.763443350
+@@ -558,32 +558,6 @@ static int ssl_check_allowed_versions(in
+ void OPENSSL_VPROC_FUNC(void) {}
+ #endif
+ 
+-static int clear_record_layer(SSL_CONNECTION *s)
+-{
+-    int ret;
+-
+-    /* We try and reset both record layers even if one fails */
+-
+-    ret = ssl_set_new_record_layer(s,
+-                                   SSL_CONNECTION_IS_DTLS(s) ? DTLS_ANY_VERSION
+-                                                             : TLS_ANY_VERSION,
+-                                   OSSL_RECORD_DIRECTION_READ,
+-                                   OSSL_RECORD_PROTECTION_LEVEL_NONE, NULL, 0,
+-                                   NULL, 0, NULL, 0, NULL,  0, NULL, 0,
+-                                   NID_undef, NULL, NULL, NULL);
+-
+-    ret &= ssl_set_new_record_layer(s,
+-                                    SSL_CONNECTION_IS_DTLS(s) ? DTLS_ANY_VERSION
+-                                                              : TLS_ANY_VERSION,
+-                                    OSSL_RECORD_DIRECTION_WRITE,
+-                                    OSSL_RECORD_PROTECTION_LEVEL_NONE, NULL, 0,
+-                                    NULL, 0, NULL, 0, NULL,  0, NULL, 0,
+-                                    NID_undef, NULL, NULL, NULL);
+-
+-    /* SSLfatal already called in the event of failure */
+-    return ret;
+-}
+-
+ int SSL_clear(SSL *s)
+ {
+     if (s->method == NULL) {
+@@ -669,11 +643,7 @@ int ossl_ssl_connection_reset(SSL *s)
+             return 0;
+     }
+ 
+-    RECORD_LAYER_clear(&sc->rlayer);
+-    BIO_free(sc->rlayer.rrlnext);
+-    sc->rlayer.rrlnext = NULL;
+-
+-    if (!clear_record_layer(sc))
++    if (!RECORD_LAYER_reset(&sc->rlayer))
+         return 0;
+ 
+     return 1;
+@@ -1437,6 +1407,7 @@ void ossl_ssl_connection_free(SSL *ssl)
+     /* Ignore return value */
+     ssl_free_wbio_buffer(s);
+ 
++    /* Ignore return value */
+     RECORD_LAYER_clear(&s->rlayer);
+ 
+     BUF_MEM_free(s->init_buf);
+@@ -2923,9 +2894,6 @@ long ossl_ctrl_internal(SSL *s, int cmd,
+     long l;
+     SSL_CONNECTION *sc = SSL_CONNECTION_FROM_SSL(s);
+ 
+-    if (sc == NULL)
+-        return 0;
+-
+     /*
+      * Routing of ctrl calls for QUIC is a little counterintuitive:
+      *
+@@ -2944,6 +2912,9 @@ long ossl_ctrl_internal(SSL *s, int cmd,
+     if (!no_quic && IS_QUIC(s))
+         return s->method->ssl_ctrl(s, cmd, larg, parg);
+ 
++    if (sc == NULL)
++        return 0;
++
+     switch (cmd) {
+     case SSL_CTRL_GET_READ_AHEAD:
+         return RECORD_LAYER_get_read_ahead(&sc->rlayer);
+@@ -3783,9 +3754,10 @@ int SSL_export_keying_material(SSL *s, u
+         || (sc->version < TLS1_VERSION && sc->version != DTLS1_BAD_VER))
+         return -1;
+ 
+-    return s->method->ssl3_enc->export_keying_material(sc, out, olen, label,
+-                                                       llen, context,
+-                                                       contextlen, use_context);
++    return sc->ssl.method->ssl3_enc->export_keying_material(sc, out, olen, label,
++                                                            llen, context,
++                                                            contextlen,
++                                                            use_context);
+ }
+ 
+ int SSL_export_keying_material_early(SSL *s, unsigned char *out, size_t olen,
+@@ -4765,7 +4737,7 @@ void SSL_set_accept_state(SSL *s)
+     ossl_statem_clear(sc);
+     sc->handshake_func = s->method->ssl_accept;
+     /* Ignore return value. Its a void public API function */
+-    clear_record_layer(sc);
++    RECORD_LAYER_reset(&sc->rlayer);
+ }
+ 
+ void SSL_set_connect_state(SSL *s)
+@@ -4784,7 +4756,7 @@ void SSL_set_connect_state(SSL *s)
+     ossl_statem_clear(sc);
+     sc->handshake_func = s->method->ssl_connect;
+     /* Ignore return value. Its a void public API function */
+-    clear_record_layer(sc);
++    RECORD_LAYER_reset(&sc->rlayer);
+ }
+ 
+ int ssl_undefined_function(SSL *s)
+--- openssl-3.2.1/ssl/statem/statem_lib.c	1706620496.000000000
++++ ./ssl/statem/statem_lib.c	1711446911.764582801
+@@ -1978,14 +1978,17 @@ int ssl_version_supported(const SSL_CONN
+     for (vent = table;
+          vent->version != 0 && version_cmp(s, version, vent->version) <= 0;
+          ++vent) {
+-        if (vent->cmeth != NULL
++        const SSL_METHOD *(*thismeth)(void) = s->server ? vent->smeth
++                                                        : vent->cmeth;
++
++        if (thismeth != NULL
+                 && version_cmp(s, version, vent->version) == 0
+-                && ssl_method_error(s, vent->cmeth()) == 0
++                && ssl_method_error(s, thismeth()) == 0
+                 && (!s->server
+                     || version != TLS1_3_VERSION
+                     || is_tls13_capable(s))) {
+             if (meth != NULL)
+-                *meth = vent->cmeth();
++                *meth = thismeth();
+             return 1;
+         }
+     }
+--- openssl-3.2.1/ssl/t1_lib.c	1706620496.000000000
++++ ./ssl/t1_lib.c	1711446911.765796669
+@@ -1055,7 +1055,8 @@ static int gid_cb(const char *elem, int
+         return 0;
+     if (garg->gidcnt == garg->gidmax) {
+         uint16_t *tmp =
+-            OPENSSL_realloc(garg->gid_arr, garg->gidmax + GROUPLIST_INCREMENT);
++            OPENSSL_realloc(garg->gid_arr,
++                            (garg->gidmax + GROUPLIST_INCREMENT) * sizeof(*garg->gid_arr));
+         if (tmp == NULL)
+             return 0;
+         garg->gidmax += GROUPLIST_INCREMENT;
+--- openssl-3.2.1/test/evp_extra_test.c	1706620496.000000000
++++ ./test/evp_extra_test.c	1711446911.768183113
+@@ -1164,7 +1164,7 @@ static int test_EC_priv_only_legacy(void
+         goto err;
+     eckey = NULL;
+ 
+-    while (dup_pk == NULL) {
++    for (;;) {
+         ret = 0;
+         ctx = EVP_MD_CTX_new();
+         if (!TEST_ptr(ctx))
+@@ -1180,6 +1180,9 @@ static int test_EC_priv_only_legacy(void
+         EVP_MD_CTX_free(ctx);
+         ctx = NULL;
+ 
++        if (dup_pk != NULL)
++            break;
++
+         if (!TEST_ptr(dup_pk = EVP_PKEY_dup(pkey)))
+             goto err;
+         /* EVP_PKEY_eq() returns -2 with missing public keys */
+@@ -1189,6 +1192,7 @@ static int test_EC_priv_only_legacy(void
+         if (!ret)
+             goto err;
+     }
++    ret = 1;
+ 
+  err:
+     EVP_MD_CTX_free(ctx);
+--- openssl-3.2.1/test/evp_pkey_provided_test.c	1706620496.000000000
++++ ./test/evp_pkey_provided_test.c	1711446911.769959311
+@@ -389,7 +389,7 @@ static int test_fromdata_rsa(void)
+                                           fromdata_params), 1))
+         goto err;
+ 
+-    while (dup_pk == NULL) {
++    for (;;) {
+         ret = 0;
+         if (!TEST_int_eq(EVP_PKEY_get_bits(pk), 32)
+             || !TEST_int_eq(EVP_PKEY_get_security_bits(pk), 8)
+@@ -417,7 +417,10 @@ static int test_fromdata_rsa(void)
+         ret = test_print_key_using_pem("RSA", pk)
+               && test_print_key_using_encoder("RSA", pk);
+ 
+-        if (!ret || !TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
++        if (!ret || dup_pk != NULL)
++            break;
++
++        if (!TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
+             goto err;
+         ret = ret && TEST_int_eq(EVP_PKEY_eq(pk, dup_pk), 1);
+         EVP_PKEY_free(pk);
+@@ -602,7 +605,7 @@ static int test_fromdata_dh_named_group(
+                                                       &len)))
+         goto err;
+ 
+-    while (dup_pk == NULL) {
++    for (;;) {
+         ret = 0;
+         if (!TEST_int_eq(EVP_PKEY_get_bits(pk), 2048)
+             || !TEST_int_eq(EVP_PKEY_get_security_bits(pk), 112)
+@@ -682,7 +685,10 @@ static int test_fromdata_dh_named_group(
+         ret = test_print_key_using_pem("DH", pk)
+               && test_print_key_using_encoder("DH", pk);
+ 
+-        if (!ret || !TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
++        if (!ret || dup_pk != NULL)
++            break;
++
++        if (!TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
+             goto err;
+         ret = ret && TEST_int_eq(EVP_PKEY_eq(pk, dup_pk), 1);
+         EVP_PKEY_free(pk);
+@@ -783,7 +789,7 @@ static int test_fromdata_dh_fips186_4(vo
+                                           fromdata_params), 1))
+         goto err;
+ 
+-    while (dup_pk == NULL) {
++    for (;;) {
+         ret = 0;
+         if (!TEST_int_eq(EVP_PKEY_get_bits(pk), 2048)
+             || !TEST_int_eq(EVP_PKEY_get_security_bits(pk), 112)
+@@ -857,7 +863,10 @@ static int test_fromdata_dh_fips186_4(vo
+         ret = test_print_key_using_pem("DH", pk)
+               && test_print_key_using_encoder("DH", pk);
+ 
+-        if (!ret || !TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
++        if (!ret || dup_pk != NULL)
++            break;
++
++        if (!TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
+             goto err;
+         ret = ret && TEST_int_eq(EVP_PKEY_eq(pk, dup_pk), 1);
+         EVP_PKEY_free(pk);
+@@ -1091,7 +1100,7 @@ static int test_fromdata_ecx(int tst)
+                                           fromdata_params), 1))
+         goto err;
+ 
+-    while (dup_pk == NULL) {
++    for (;;) {
+         ret = 0;
+         if (!TEST_int_eq(EVP_PKEY_get_bits(pk), bits)
+             || !TEST_int_eq(EVP_PKEY_get_security_bits(pk), security_bits)
+@@ -1146,7 +1155,10 @@ static int test_fromdata_ecx(int tst)
+             ret = test_print_key_using_pem(alg, pk)
+                   && test_print_key_using_encoder(alg, pk);
+ 
+-        if (!ret || !TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
++        if (!ret || dup_pk != NULL)
++            break;
++
++        if (!TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
+             goto err;
+         ret = ret && TEST_int_eq(EVP_PKEY_eq(pk, dup_pk), 1);
+         EVP_PKEY_free(pk);
+@@ -1264,7 +1276,7 @@ static int test_fromdata_ec(void)
+                                           fromdata_params), 1))
+         goto err;
+ 
+-    while (dup_pk == NULL) {
++    for (;;) {
+         ret = 0;
+         if (!TEST_int_eq(EVP_PKEY_get_bits(pk), 256)
+             || !TEST_int_eq(EVP_PKEY_get_security_bits(pk), 128)
+@@ -1303,6 +1315,15 @@ static int test_fromdata_ec(void)
+             || !TEST_BN_eq(group_b, b))
+             goto err;
+ 
++        EC_GROUP_free(group);
++        group = NULL;
++        BN_free(group_p);
++        group_p = NULL;
++        BN_free(group_a);
++        group_a = NULL;
++        BN_free(group_b);
++        group_b = NULL;
++
+         if (!EVP_PKEY_get_utf8_string_param(pk, OSSL_PKEY_PARAM_GROUP_NAME,
+                                             out_curve_name,
+                                             sizeof(out_curve_name),
+@@ -1331,7 +1352,10 @@ static int test_fromdata_ec(void)
+         ret = test_print_key_using_pem(alg, pk)
+               && test_print_key_using_encoder(alg, pk);
+ 
+-        if (!ret || !TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
++        if (!ret || dup_pk != NULL)
++            break;
++
++        if (!TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
+             goto err;
+         ret = ret && TEST_int_eq(EVP_PKEY_eq(pk, dup_pk), 1);
+         EVP_PKEY_free(pk);
+@@ -1577,7 +1601,7 @@ static int test_fromdata_dsa_fips186_4(v
+                                           fromdata_params), 1))
+         goto err;
+ 
+-    while (dup_pk == NULL) {
++    for (;;) {
+         ret = 0;
+         if (!TEST_int_eq(EVP_PKEY_get_bits(pk), 2048)
+             || !TEST_int_eq(EVP_PKEY_get_security_bits(pk), 112)
+@@ -1626,12 +1650,12 @@ static int test_fromdata_dsa_fips186_4(v
+                                                  &pcounter_out))
+             || !TEST_int_eq(pcounter, pcounter_out))
+             goto err;
+-        BN_free(p);
+-        p = NULL;
+-        BN_free(q);
+-        q = NULL;
+-        BN_free(g);
+-        g = NULL;
++        BN_free(p_out);
++        p_out = NULL;
++        BN_free(q_out);
++        q_out = NULL;
++        BN_free(g_out);
++        g_out = NULL;
+         BN_free(j_out);
+         j_out = NULL;
+         BN_free(pub_out);
+@@ -1659,7 +1683,10 @@ static int test_fromdata_dsa_fips186_4(v
+         ret = test_print_key_using_pem("DSA", pk)
+               && test_print_key_using_encoder("DSA", pk);
+ 
+-        if (!ret || !TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
++        if (!ret || dup_pk != NULL)
++            break;
++
++        if (!TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
+             goto err;
+         ret = ret && TEST_int_eq(EVP_PKEY_eq(pk, dup_pk), 1);
+         EVP_PKEY_free(pk);
+--- openssl-3.2.1/test/evp_test.c	1706620496.000000000
++++ ./test/evp_test.c	1711446911.771446302
+@@ -2859,7 +2859,9 @@ static int kdf_test_ctrl(EVP_TEST *t, EV
+     if (!TEST_ptr(name = OPENSSL_strdup(value)))
+         return 0;
+     p = strchr(name, ':');
+-    if (p != NULL)
++    if (p == NULL)
++        p = "";
++    else
+         *p++ = '\0';
+ 
+     if (strcmp(name, "r") == 0
+@@ -2912,30 +2914,29 @@ static int kdf_test_ctrl(EVP_TEST *t, EV
+     }
+ 
+     rv = OSSL_PARAM_allocate_from_text(kdata->p, defs, name, p,
+-                                       p != NULL ? strlen(p) : 0, NULL);
++                                       strlen(p), NULL);
+     *++kdata->p = OSSL_PARAM_construct_end();
+     if (!rv) {
+         t->err = "KDF_PARAM_ERROR";
+         OPENSSL_free(name);
+         return 0;
+     }
+-    if (p != NULL && strcmp(name, "digest") == 0) {
++    if (strcmp(name, "digest") == 0) {
+         if (is_digest_disabled(p)) {
+             TEST_info("skipping, '%s' is disabled", p);
+             t->skip = 1;
+         }
+         goto end;
+     }
+-    if (p != NULL
+-        && (strcmp(name, "cipher") == 0
+-            || strcmp(name, "cekalg") == 0)
++
++    if ((strcmp(name, "cipher") == 0
++        || strcmp(name, "cekalg") == 0)
+         && is_cipher_disabled(p)) {
+         TEST_info("skipping, '%s' is disabled", p);
+         t->skip = 1;
+         goto end;
+     }
+-    if (p != NULL
+-        && (strcmp(name, "mac") == 0)
++    if ((strcmp(name, "mac") == 0)
+         && is_mac_disabled(p)) {
+         TEST_info("skipping, '%s' is disabled", p);
+         t->skip = 1;
+--- openssl-3.2.1/test/keymgmt_internal_test.c	1706620496.000000000
++++ ./test/keymgmt_internal_test.c	1711446911.771834383
+@@ -224,7 +224,7 @@ static int test_pass_rsa(FIXTURE *fixtur
+         || !TEST_ptr_ne(km1, km2))
+         goto err;
+ 
+-    while (dup_pk == NULL) {
++    for (;;) {
+         ret = 0;
+         km = km3;
+         /* Check that we can't export an RSA key into an RSA-PSS keymanager */
+@@ -255,7 +255,11 @@ static int test_pass_rsa(FIXTURE *fixtur
+         }
+ 
+         ret = (ret == OSSL_NELEM(expected));
+-        if (!ret || !TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
++
++        if (!ret || dup_pk != NULL)
++            break;
++
++        if (!TEST_ptr(dup_pk = EVP_PKEY_dup(pk)))
+             goto err;
+ 
+         ret = TEST_int_eq(EVP_PKEY_eq(pk, dup_pk), 1);
+--- openssl-3.2.1/test/quic_multistream_test.c	1706620496.000000000
++++ ./test/quic_multistream_test.c	1711446911.773570414
+@@ -10,6 +10,7 @@
+ #include <openssl/quic.h>
+ #include <openssl/bio.h>
+ #include <openssl/lhash.h>
++#include <openssl/rand.h>
+ #include "internal/quic_tserver.h"
+ #include "internal/quic_ssl.h"
+ #include "internal/quic_error.h"
+@@ -348,6 +349,7 @@ static QUIC_TSERVER *s_lock(struct helpe
+ static void s_unlock(struct helper *h, struct helper_local *hl);
+ 
+ #define ACQUIRE_S() s_lock(h, hl)
++#define ACQUIRE_S_NOHL() s_lock(h, NULL)
+ 
+ static int check_rejected(struct helper *h, struct helper_local *hl)
+ {
+@@ -515,7 +517,7 @@ static int *s_checked_out_p(struct helpe
+ 
+ static QUIC_TSERVER *s_lock(struct helper *h, struct helper_local *hl)
+ {
+-    int *p_checked_out = s_checked_out_p(h, hl->thread_idx);
++    int *p_checked_out = s_checked_out_p(h, hl == NULL ? -1 : hl->thread_idx);
+ 
+     if (h->server_thread.m == NULL || *p_checked_out)
+         return h->s;
+@@ -5050,6 +5052,116 @@ static const struct script_op script_78[
+     OP_END
+ };
+ 
++static QUIC_STATELESS_RESET_TOKEN test_reset_token = {
++    { 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
++     0xde, 0xad, 0xbe, 0xef }};
++/*
++ * 80. stateless reset
++ * Generate a packet in the following format:
++ * https://www.rfc-editor.org/rfc/rfc9000.html#name-stateless-reset
++ * Stateless Reset {
++ *  Fixed Bits (2): 1
++ *  Unpredictable bits (38..)
++ *  Stateless reset token (128)
++ *  }
++ */
++static int script_79_send_stateless_reset(struct helper *h, QUIC_PKT_HDR *hdr,
++                                          unsigned char *buf, size_t len)
++{
++    unsigned char databuf[64];
++
++    if (h->inject_word1 == 0)
++        return 1;
++
++    h->inject_word1 = 0;
++
++    RAND_bytes(databuf, 64);
++    databuf[0] = 0x40;
++    memcpy(&databuf[48], test_reset_token.token,
++           sizeof(test_reset_token.token));
++
++    if (!SSL_inject_net_dgram(h->c_conn, databuf, sizeof(databuf),
++                             NULL, h->s_net_bio_addr))
++        return 1;
++
++    return 1;
++}
++
++static int script_79_gen_new_conn_id(struct helper *h, QUIC_PKT_HDR *hdr,
++                                     unsigned char *buf, size_t len)
++{
++    int rc = 0;
++    size_t l;
++    unsigned char frame_buf[64];
++    WPACKET wpkt;
++    QUIC_CONN_ID new_cid = {0};
++    OSSL_QUIC_FRAME_NEW_CONN_ID ncid = {0};
++    QUIC_CHANNEL *ch = ossl_quic_tserver_get_channel(ACQUIRE_S_NOHL());
++
++    if (h->inject_word0 == 0)
++        return 1;
++
++    h->inject_word0 = 0;
++
++    if (!TEST_true(WPACKET_init_static_len(&wpkt, frame_buf,
++                                           sizeof(frame_buf), 0)))
++        return 0;
++
++    ossl_quic_channel_get_diag_local_cid(ch, &new_cid);
++
++    ncid.seq_num = 2;
++    ncid.retire_prior_to = 2;
++    ncid.conn_id = new_cid;
++    memcpy(ncid.stateless_reset.token, test_reset_token.token,
++           sizeof(test_reset_token.token));
++
++    if (!TEST_true(ossl_quic_wire_encode_frame_new_conn_id(&wpkt, &ncid)))
++        goto err;
++
++    if (!TEST_true(WPACKET_get_total_written(&wpkt, &l)))
++        goto err;
++
++    if (!qtest_fault_prepend_frame(h->qtf, frame_buf, l))
++        goto err;
++
++    rc = 1;
++err:
++    if (rc)
++        WPACKET_finish(&wpkt);
++    else
++        WPACKET_cleanup(&wpkt);
++
++    return rc;
++}
++
++static int script_79_inject_pkt(struct helper *h, QUIC_PKT_HDR *hdr,
++                                unsigned char *buf, size_t len)
++{
++    if (h->inject_word1 == 1)
++        return script_79_send_stateless_reset(h, hdr, buf, len);
++    else if (h->inject_word0 == 1)
++        return script_79_gen_new_conn_id(h, hdr, buf, len);
++
++    return 1;
++}
++
++static const struct script_op script_79[] = {
++    OP_S_SET_INJECT_PLAIN       (script_79_inject_pkt)
++    OP_C_SET_ALPN               ("ossltest")
++    OP_C_CONNECT_WAIT           ()
++    OP_C_WRITE                  (DEFAULT, "apple", 5)
++    OP_C_CONCLUDE               (DEFAULT)
++    OP_S_BIND_STREAM_ID         (a, C_BIDI_ID(0))
++    OP_S_READ_EXPECT            (a, "apple", 5)
++    OP_SET_INJECT_WORD          (1, 0)
++    OP_S_WRITE                  (a, "apple", 5)
++    OP_C_READ_EXPECT            (DEFAULT, "apple", 5)
++    OP_SET_INJECT_WORD          (0, 1)
++    OP_S_WRITE                  (a, "apple", 5)
++    OP_C_EXPECT_CONN_CLOSE_INFO (0, 0, 0)
++    OP_END
++};
++
+ static const struct script_op *const scripts[] = {
+     script_1,
+     script_2,
+@@ -5128,7 +5240,8 @@ static const struct script_op *const scr
+     script_75,
+     script_76,
+     script_77,
+-    script_78
++    script_78,
++    script_79,
+ };
+ 
+ static int test_script(int idx)
+--- openssl-3.2.1/test/quicapitest.c	1706620496.000000000
++++ ./test/quicapitest.c	1711446911.774828865
+@@ -53,7 +53,7 @@ static int test_quic_write_read(int idx)
+     SSL *clientquic = NULL;
+     QUIC_TSERVER *qtserv = NULL;
+     int j, k, ret = 0;
+-    unsigned char buf[20];
++    unsigned char buf[20], scratch[64];
+     static char *msg = "A test message";
+     size_t msglen = strlen(msg);
+     size_t numbytes = 0;
+@@ -153,6 +153,12 @@ static int test_quic_write_read(int idx)
+                 goto end;
+         }
+ 
++        /* Test that exporters work. */
++        if (!TEST_true(SSL_export_keying_material(clientquic, scratch,
++                        sizeof(scratch), "test", 4, (unsigned char *)"ctx", 3,
++                        1)))
++            goto end;
++
+         if (sess == NULL) {
+             /* We didn't supply a session so we're not expecting resumption */
+             if (!TEST_false(SSL_session_reused(clientquic)))
+@@ -898,6 +904,9 @@ static int test_bio_ssl(void)
+         if (i == 1)
+             break;
+ 
++        if (!TEST_true(SSL_set_mode(clientquic, 0)))
++            goto err;
++
+         /*
+          * Now create a new stream and repeat. The bottom two bits of the stream
+          * id represents whether the stream is bidi and whether it is client
+@@ -909,6 +918,9 @@ static int test_bio_ssl(void)
+         if (!TEST_ptr(stream))
+             goto err;
+ 
++        if (!TEST_true(SSL_set_mode(stream, 0)))
++            goto err;
++
+         thisbio = strbio = BIO_new(BIO_f_ssl());
+         if (!TEST_ptr(strbio))
+             goto err;
+--- openssl-3.2.1/test/recipes/30-test_evp_data/evpciph_sm4.txt	1706620496.000000000
++++ ./test/recipes/30-test_evp_data/evpciph_sm4.txt	1711446911.775232946
+@@ -92,3 +92,9 @@ IV = F0F1F2F3F4F5F6F7F8F9FAFBFCFDFEFF
+ Plaintext = 6BC1BEE22E409F96E93D7E117393172AAE2D8A571E03AC9C9EB76FAC45AF8E5130C81C46A35CE411E5FBC1191A0A52EFF69F2445DF4F9B17
+ Ciphertext =  E9538251C71D7B80BBE4483FEF497BD1B3DB1A3E60408C575D63FF7DB39F83260869F9E2585FEC9F0B863BF8FD784B8627D16C0DB6D2CFC7
+ XTSStandard = IEEE
++
++Cipher = SM4-XTS
++Key = FFFEFDFCFBFAF9F8F7F6F5F4F3F2F1F0BFBEBDBCBBBAB9B8B7B6B5B4B3B2B1B0
++IV = 9A785634120000000000000000000000
++Plaintext = 000102030405060708090A0B0C0D0E0F10
++Ciphertext =  9E52443A35410CA0BA5637B94C0766F469
+--- openssl-3.2.1/test/recipes/80-test_cmp_http_data/Mock/test.cnf	1706620496.000000000
++++ ./test/recipes/80-test_cmp_http_data/Mock/test.cnf	1711446911.775573986
+@@ -1,6 +1,7 @@
+ [default]
+ batch = 1 # do not use stdin
+-total_timeout = 8 # prevent, e.g., infinite polling due to error
++total_timeout = 20  # is used to prevent, e.g., infinite polling due to error;
++# should hopefully be enough to cover delays caused by the underlying system
+ trusted = trusted.crt
+ newkey = new.key
+ newkeypass =
+@@ -44,7 +45,6 @@ sleep = 0
+ ############################# aspects
+ 
+ [connection]
+-msg_timeout = 5
+ total_timeout =
+ # reset any TLS options to default:
+ tls_used =
+--- openssl-3.2.1/test/recipes/90-test_shlibload.t	1706620496.000000000
++++ ./test/recipes/90-test_shlibload.t	1711446911.775868276
+@@ -23,6 +23,7 @@ plan skip_all => "Test is disabled on AI
+ plan skip_all => "Test is disabled on NonStop" if config('target') =~ m|^nonstop|;
+ plan skip_all => "Test only supported in a dso build" if disabled("dso");
+ plan skip_all => "Test is disabled in an address sanitizer build" unless disabled("asan");
++plan skip_all => "Test is disabled in no-atexit build" if disabled("atexit");
+ 
+ plan tests => 10;
+ 
+--- openssl-3.2.1/test/sslapitest.c	1706620496.000000000
++++ ./test/sslapitest.c	1711446911.779404505
+@@ -6896,22 +6896,45 @@ static int test_key_update_local_in_read
+ }
+ #endif /* OSSL_NO_USABLE_TLS1_3 */
+ 
++/*
++ * Test clearing a connection via SSL_clear(), or resetting it via
++ * SSL_set_connect_state()/SSL_set_accept_state()
++ * Test 0: SSL_set_connect_state, TLSv1.3
++ * Test 1: SSL_set_connect_state, TLSv1.2
++ * Test 2: SSL_set_accept_state, TLSv1.3
++ * Test 3: SSL_set_accept_state, TLSv1.2
++ * Test 4: SSL_clear (client), TLSv1.3
++ * Test 5: SSL_clear (client), TLSv1.2
++ * Test 6: SSL_clear (server), TLSv1.3
++ * Test 7: SSL_clear (server), TLSv1.2
++ */
+ static int test_ssl_clear(int idx)
+ {
+     SSL_CTX *cctx = NULL, *sctx = NULL;
+     SSL *clientssl = NULL, *serverssl = NULL;
++    SSL *writer, *reader;
+     int testresult = 0;
++    int tls12test, servertest, cleartest;
++    size_t written, readbytes;
++    const char *msg = "Hello World";
++    unsigned char buf[5];
++
++    tls12test = idx & 1;
++    idx >>= 1;
++    servertest = idx & 1;
++    idx >>= 1;
++    cleartest = idx & 1;
+ 
+ #ifdef OPENSSL_NO_TLS1_2
+-    if (idx == 1)
+-        return 1;
++    if (tls12test == 1)
++        return TEST_skip("No TLSv1.2 in this build");
+ #endif
+ 
+     /* Create an initial connection */
+     if (!TEST_true(create_ssl_ctx_pair(libctx, TLS_server_method(),
+                                        TLS_client_method(), TLS1_VERSION, 0,
+                                        &sctx, &cctx, cert, privkey))
+-            || (idx == 1
++            || (tls12test
+                 && !TEST_true(SSL_CTX_set_max_proto_version(cctx,
+                                                             TLS1_2_VERSION)))
+             || !TEST_true(create_ssl_objects(sctx, cctx, &serverssl,
+@@ -6920,20 +6943,68 @@ static int test_ssl_clear(int idx)
+                                                 SSL_ERROR_NONE)))
+         goto end;
+ 
++    if (servertest) {
++        writer = clientssl;
++        reader = serverssl;
++    } else {
++        writer = serverssl;
++        reader = clientssl;
++    }
++
++    /* Write some data */
++    if (!TEST_true(SSL_write_ex(writer, msg, strlen(msg), &written))
++            || written != strlen(msg))
++        goto end;
++
++    /*
++     * Read a partial record. The remaining buffered data should be cleared by
++     * the subsequent clear/reset
++     */
++    if (!TEST_true(SSL_read_ex(reader, buf, sizeof(buf), &readbytes))
++            || readbytes != sizeof(buf))
++        goto end;
++
+     SSL_shutdown(clientssl);
+     SSL_shutdown(serverssl);
+-    SSL_free(serverssl);
+-    serverssl = NULL;
+ 
+-    /* Clear clientssl - we're going to reuse the object */
+-    if (!TEST_true(SSL_clear(clientssl)))
+-        goto end;
++    /* Reset/clear one SSL object in order to reuse it. We free the other one */
++    if (servertest) {
++        if (cleartest) {
++            if (!TEST_true(SSL_clear(serverssl)))
++                goto end;
++        } else {
++            SSL_set_accept_state(serverssl);
++        }
++        /*
++         * A peculiarity of SSL_clear() is that it does not clear the session.
++         * This is intended behaviour so that a client can create a new
++         * connection and reuse the session. But this doesn't make much sense
++         * on the server side - and causes incorrect behaviour due to the
++         * handshake failing (even though the documentation does say SSL_clear()
++         * is supposed to work on the server side). We clear the session
++         * explicitly - although note that the documentation for
++         * SSL_set_session() says that its only useful for clients!
++         */
++        if (!TEST_true(SSL_set_session(serverssl, NULL)))
++            goto end;
++        SSL_free(clientssl);
++        clientssl = NULL;
++    } else {
++        if (cleartest) {
++            if (!TEST_true(SSL_clear(clientssl)))
++                goto end;
++        } else {
++            SSL_set_connect_state(clientssl);
++        }
++        SSL_free(serverssl);
++        serverssl = NULL;
++    }
+ 
+     if (!TEST_true(create_ssl_objects(sctx, cctx, &serverssl, &clientssl,
+                                              NULL, NULL))
+             || !TEST_true(create_ssl_connection(serverssl, clientssl,
+                                                 SSL_ERROR_NONE))
+-            || !TEST_true(SSL_session_reused(clientssl)))
++            || !TEST_true(servertest || SSL_session_reused(clientssl)))
+         goto end;
+ 
+     SSL_shutdown(clientssl);
+@@ -9442,20 +9513,11 @@ static int test_pluggable_group(int idx)
+     OSSL_PROVIDER *tlsprov = OSSL_PROVIDER_load(libctx, "tls-provider");
+     /* Check that we are not impacted by a provider without any groups */
+     OSSL_PROVIDER *legacyprov = OSSL_PROVIDER_load(libctx, "legacy");
+-    const char *group_name = idx == 0 ? "xorgroup" : "xorkemgroup";
++    const char *group_name = idx == 0 ? "xorkemgroup" : "xorgroup";
+ 
+     if (!TEST_ptr(tlsprov))
+         goto end;
+ 
+-    if (legacyprov == NULL) {
+-        /*
+-         * In this case we assume we've been built with "no-legacy" and skip
+-         * this test (there is no OPENSSL_NO_LEGACY)
+-         */
+-        testresult = 1;
+-        goto end;
+-    }
+-
+     if (!TEST_true(create_ssl_ctx_pair(libctx, TLS_server_method(),
+                                        TLS_client_method(),
+                                        TLS1_3_VERSION,
+@@ -9465,7 +9527,9 @@ static int test_pluggable_group(int idx)
+                                              NULL, NULL)))
+         goto end;
+ 
+-    if (!TEST_true(SSL_set1_groups_list(serverssl, group_name))
++    /* ensure GROUPLIST_INCREMENT (=40) logic triggers: */
++    if (!TEST_true(SSL_set1_groups_list(serverssl, "xorgroup:xorkemgroup:dummy1:dummy2:dummy3:dummy4:dummy5:dummy6:dummy7:dummy8:dummy9:dummy10:dummy11:dummy12:dummy13:dummy14:dummy15:dummy16:dummy17:dummy18:dummy19:dummy20:dummy21:dummy22:dummy23:dummy24:dummy25:dummy26:dummy27:dummy28:dummy29:dummy30:dummy31:dummy32:dummy33:dummy34:dummy35:dummy36:dummy37:dummy38:dummy39:dummy40:dummy41:dummy42:dummy43"))
++    /* removing a single algorithm from the list makes the test pass */
+             || !TEST_true(SSL_set1_groups_list(clientssl, group_name)))
+         goto end;
+ 
+@@ -11495,7 +11559,7 @@ int setup_tests(void)
+     ADD_ALL_TESTS(test_key_update_local_in_write, 2);
+     ADD_ALL_TESTS(test_key_update_local_in_read, 2);
+ #endif
+-    ADD_ALL_TESTS(test_ssl_clear, 2);
++    ADD_ALL_TESTS(test_ssl_clear, 8);
+     ADD_ALL_TESTS(test_max_fragment_len_ext, OSSL_NELEM(max_fragment_len_test));
+ #if !defined(OPENSSL_NO_SRP) && !defined(OPENSSL_NO_TLS1_2)
+     ADD_ALL_TESTS(test_srp, 6);
+--- openssl-3.2.1/test/tls-provider.c	1706620496.000000000
++++ ./test/tls-provider.c	1711446911.780984162
+@@ -410,6 +410,8 @@ static int tls_prov_get_capabilities(voi
+             }
+             dummygroup[0].data = dummy_group_names[i];
+             dummygroup[0].data_size = strlen(dummy_group_names[i]) + 1;
++            /* assign unique group IDs also to dummy groups for registration */
++            *((int *)(dummygroup[3].data)) = 65279 - NUM_DUMMY_GROUPS + i;
+             ret &= cb(dummygroup, arg);
+         }
+     }
+@@ -3185,9 +3187,10 @@ unsigned int randomize_tls_alg_id(OSSL_L
+         return 0;
+     /*
+      * Ensure id is within the IANA Reserved for private use range
+-     * (65024-65279)
++     * (65024-65279).
++     * Carve out NUM_DUMMY_GROUPS ids for properly registering those.
+      */
+-    id %= 65279 - 65024;
++    id %= 65279 - NUM_DUMMY_GROUPS - 65024;
+     id += 65024;
+ 
+     /* Ensure we did not already issue this id */
+--- openssl-3.2.1/tools/c_rehash.in	1706620496.000000000
++++ ./tools/c_rehash.in	1711446908.646113796
+@@ -17,8 +17,6 @@ my $prefix = {- quotify1($config{prefix}
+ my $errorcount = 0;
+ my $openssl = $ENV{OPENSSL} || "openssl";
+ my $pwd;
+-my $x509hash = "-subject_hash";
+-my $crlhash = "-hash";
+ my $verbose = 0;
+ my $symlink_exists=eval {symlink("",""); 1};
+ my $removelinks = 1;
+@@ -27,10 +25,7 @@ my $removelinks = 1;
+ while ( $ARGV[0] =~ /^-/ ) {
+     my $flag = shift @ARGV;
+     last if ( $flag eq '--');
+-    if ( $flag eq '-old') {
+-        $x509hash = "-subject_hash_old";
+-        $crlhash = "-hash_old";
+-    } elsif ( $flag eq '-h' || $flag eq '-help' ) {
++    if ( $flag eq '-h' || $flag eq '-help' ) {
+         help();
+     } elsif ( $flag eq '-n' ) {
+         $removelinks = 0;
+@@ -203,22 +198,24 @@ sub compute_hash {
+ # certificate fingerprints
+ 
+ sub link_hash_cert {
+-    link_hash($_[0], 'cert');
++    link_hash($_[0], 'cert', '-subject_hash');
++    link_hash($_[0], 'cert', '-subject_hash_old');
+ }
+ 
+ # Same as above except for a CRL. CRL links are of the form <hash>.r<n>
+ 
+ sub link_hash_crl {
+-    link_hash($_[0], 'crl');
++    link_hash($_[0], 'crl', '-hash');
++    link_hash($_[0], 'crl', '-hash_old');
+ }
+ 
+ sub link_hash {
+-    my ($fname, $type) = @_;
+-    my $is_cert = $type eq 'cert';
++    my ($fname, $type, $hash_name) = @_;
++    my $is_cert = $type eq 'cert' or $type eq 'cert_old';
+ 
+     my ($hash, $fprint) = compute_hash($openssl,
+                                        $is_cert ? "x509" : "crl",
+-                                       $is_cert ? $x509hash : $crlhash,
++                                       $hash_name,
+                                        "-fingerprint", "-noout",
+                                        "-in", $fname);
+     chomp $hash;

@@ -1,0 +1,298 @@
+--- a/gtk/gtk-launch.c	1684722128.000000000
++++ b/gtk/gtk-launch.c	1692439590.588938836
+@@ -30,7 +30,7 @@
+ #include <glib.h>
+ #include <glib/gi18n.h>
+ #include <gio/gio.h>
+-#if defined(HAVE_GIO_UNIX) && !defined(__APPLE__)
++#if defined(HAVE_GIO_UNIX)
+ #include <gio/gdesktopappinfo.h>
+ #endif
+ #include <gtk.h>
+@@ -121,7 +121,7 @@ main (int argc, char *argv[])
+   gtk_init (&argc, &argv);
+ 
+   app_name = *args;
+-#if defined(HAVE_GIO_UNIX) && !defined(__APPLE__)
++#if defined(HAVE_GIO_UNIX)
+   bus_name = g_strdup (app_name);
+   if (g_str_has_suffix (app_name, ".desktop"))
+     {
+--- a/gtk/gtkapplicationwindow.c	1684722128.000000000
++++ b/gtk/gtkapplicationwindow.c	1692439610.740367319
+@@ -30,7 +30,7 @@
+ #include "gtksettings.h"
+ #include "gtkshortcutswindowprivate.h"
+ 
+-#if defined(HAVE_GIO_UNIX) && !defined(__APPLE__)
++#if defined(HAVE_GIO_UNIX)
+ #include <gio/gdesktopappinfo.h>
+ #endif
+ 
+@@ -278,7 +278,7 @@ gtk_application_window_get_app_desktop_n
+ {
+   gchar *retval = NULL;
+ 
+-#if defined(HAVE_GIO_UNIX) && !defined(__APPLE__)
++#if defined(HAVE_GIO_UNIX)
+   GDesktopAppInfo *app_info;
+   const gchar *app_name = NULL;
+   gchar *desktop_file;
+--- a/gtk/gtkmountoperation-x11.c	1684722128.000000000
++++ b/gtk/gtkmountoperation-x11.c	1692439488.446330516
+@@ -42,6 +42,11 @@
+ 
+ #if defined(__OpenBSD__)
+ #include <sys/sysctl.h>
++#elif defined(__APPLE__)
++#include <sys/sysctl.h>
++#include <libproc.h>
++#include <unistd.h>
++#include <string.h>
+ #endif
+ 
+ #include "gtkmountoperationprivate.h"
+@@ -803,6 +808,243 @@ pid_get_command_line (GPid pid)
+     *end = '\0';
+ 
+   g_free (strs);
++  return ret;
++}
++
++/* ---------------------------------------------------------------------------------------------------- */
++
++#elif defined(__APPLE__)
++
++/* ---------------------------------------------------------------------------------------------------- */
++
++static GPid
++pid_get_parent (GPid pid)
++{
++  struct proc_bsdinfo pbsd;
++  GPid ppid = 0;
++
++  /* fail if trying to get the parent of the init process (no such thing) */
++  if (pid == 1)
++    goto out;
++
++  if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &pbsd, sizeof(pbsd)) <= 0)
++    goto out;
++
++  ppid = pbsd.pbi_ppid;
++
++out:
++  return ppid;
++}
++
++// Torrekie: Shamelessly stolen from adv_cmds/ps
++static char **
++getproclline(pid_t pid, char **command_name, int *argvlen, int *argv0len, int *envlen, int eflg)
++{
++  int mib[3], argmax, nargs, c = 0;
++  size_t size;
++  char *procargs, *sp, *np, *cp;
++  int show_args = 1;
++
++  int env_list_size, env_list_len;
++
++  /* Get the maximum process arguments size. */
++  mib[0] = CTL_KERN;
++  mib[1] = KERN_ARGMAX;
++
++  size = sizeof(argmax);
++  if (sysctl(mib, 2, &argmax, &size, NULL, 0) == -1) {
++    goto ERROR_A;
++  }
++
++  /* Allocate space for the arguments. */
++  procargs = (char *)malloc(argmax);
++  if (procargs == NULL) {
++    goto ERROR_A;
++  }
++
++  mib[0] = CTL_KERN;
++  mib[1] = KERN_PROCARGS2;
++  mib[2] = pid;
++
++  size = (size_t)argmax;
++  if (sysctl(mib, 3, procargs, &size, NULL, 0) == -1) {
++    goto ERROR_B;
++  }
++
++  memcpy(&nargs, procargs, sizeof(nargs));
++  cp = procargs + sizeof(nargs);
++
++  /* Skip the saved exec_path. */
++  for (; cp < &procargs[size]; cp++) {
++    if (*cp == '\0') {
++      /* End of exec_path reached. */
++      break;
++    }
++  }
++  if (cp == &procargs[size]) {
++    goto ERROR_B;
++  }
++
++  /* Skip trailing '\0' characters. */
++  for (; cp < &procargs[size]; cp++) {
++    if (*cp != '\0') {
++      /* Beginning of first argument reached. */
++      break;
++    }
++  }
++  if (cp == &procargs[size]) {
++    goto ERROR_B;
++  }
++  /* Save where the argv[0] string starts. */
++  sp = cp;
++
++  /*
++   * Iterate through the '\0'-terminated strings and convert '\0' to ' '
++   * until a string is found that has a '=' character in it (or there are
++   * no more strings in procargs).  There is no way to deterministically
++   * know where the command arguments end and the environment strings
++   * start, which is why the '=' character is searched for as a heuristic.
++   */
++  for (np = NULL; c < nargs && cp < &procargs[size]; cp++) {
++    if (*cp == '\0') {
++      c++;
++      if (np != NULL) {
++          /* Convert previous '\0'. */
++          *np = ' ';
++      } else {
++          *argv0len = cp - sp;
++      }
++      /* Note location of current '\0'. */
++      np = cp;
++
++      if (!show_args) {
++          /*
++           * Don't convert '\0' characters to ' '.
++           * However, we needed to know that the
++           * command name was terminated, which we
++           * now know.
++           */
++          break;
++      }
++    }
++  }
++
++  /*
++   * If eflg is non-zero, continue converting '\0' characters to ' '
++   * characters until no more strings that look like environment settings
++   * follow.
++   */
++
++  env_list_len = 0;
++  env_list_size = 1;
++  char **env_list = malloc(env_list_size * sizeof(char *));
++  if (!env_list)
++     goto ERROR_B;
++  if ( show_args && (eflg != 0) ) {
++    for (; cp < &procargs[size]; cp++) {
++      if (*cp == '\0') {
++        if (np != NULL) {
++          if (&np[1] == cp) {
++            /*
++             * Two '\0' characters in a row.
++             * This should normally only
++             * happen after all the strings
++             * have been seen, but in any
++             * case, stop parsing.
++             */
++            break;
++          }
++
++          if (env_list_len >= env_list_size) {
++            env_list_size = env_list_size * 2;
++            char **tmp_alloc = (char **)realloc(env_list, env_list_size * sizeof(char *));
++            if (!tmp_alloc)
++              goto ERROR_B;
++            env_list = tmp_alloc;
++          }
++          env_list[env_list_len] = strdup(&np[1]);
++          env_list_len++;
++        }
++        /* Note location of current '\0'. */
++        np = cp;
++      }
++    }
++  }
++
++  /*
++   * sp points to the beginning of the arguments/environment string, and
++   * np should point to the '\0' terminator for the string.
++   */
++  if (np == NULL || np == sp) {
++    /* Empty or unterminated string. */
++    goto ERROR_B;
++  }
++
++  /* Make a copy of the string. */
++  *argvlen = asprintf(command_name, "%s", sp);
++
++  /* Clean up. */
++  free(procargs);
++        *envlen = env_list_len;
++  return env_list;
++
++  ERROR_B:
++  free(procargs);
++        for (int j = 0; env_list[j] != NULL; j++) {
++    free(env_list[j]);
++  }
++  free(env_list);
++  ERROR_A:
++  return NULL;
++}
++
++static char *
++pid_get_env (GPid pid, const char *key)
++{
++  int argvlen, argv0len, envlen;
++  char **strs;
++  char *ret = NULL;
++  char *end;
++  int key_len;
++  int i;
++
++  strs = getproclline(pid, &cmd, &argvlen, &argv0len, &envlen, 1);
++
++  key_len = strlen (key);
++
++  if (strs)
++    {
++      for (i = 0; strs[i] < envlen; i++)
++	{
++	  if (g_str_has_prefix (strs[i], key) && (*(strs[i] + key_len) == '='))
++	    {
++	      ret = g_strdup (strs[i] + key_len + 1);
++
++	      /* skip invalid UTF-8 */
++	      if (!g_utf8_validate (ret, -1, (const char **) &end))
++		*end = '\0';
++	      break;
++	    }
++	}
++    }
++
++  g_free (strs);
++  return ret;
++}
++
++static char *
++pid_get_command_line (GPid pid)
++{
++  int argvlen, argv0len, envlen;
++  char **strs;
++  char *ret, *end;
++
++  strs = getproclline(pid, &ret, &argvlen, &argv0len, &envlen, 1);
++  /* skip invalid UTF-8 */
++  if (!g_utf8_validate (ret, -1, (const char **) &end))
++    *end = '\0';
++
++  g_free (strs);
+   return ret;
+ }
+ 

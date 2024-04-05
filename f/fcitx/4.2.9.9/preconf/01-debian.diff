@@ -1,0 +1,57 @@
+--- a/CMakeLists.txt	1658865722.000000000
++++ b/CMakeLists.txt	1700735083.517081096
+@@ -213,12 +213,6 @@ set(localedir ${CMAKE_INSTALL_PREFIX}/sh
+ 
+ list(FIND CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES "${LIB_INSTALL_DIR}" _isSystemPlatformLibDir)
+ list(FIND CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES "${LIB_INSTALL_DIR}" _isSystemCxxLibDir)
+-if("${_isSystemPlatformLibDir}" STREQUAL "-1" AND "${_isSystemCxxLibDir}" STREQUAL "-1")
+-    set(CMAKE_SKIP_BUILD_RPATH  FALSE)
+-    set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+-    set(CMAKE_INSTALL_RPATH "${LIB_INSTALL_DIR}")
+-    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+-endif("${_isSystemPlatformLibDir}" STREQUAL "-1" AND "${_isSystemCxxLibDir}" STREQUAL "-1")
+ 
+ # For FcitxMacro
+ set(FCITX4_ADDON_INSTALL_DIR ${addondir})
+--- a/Doxyfile.in	1658865722.000000000
++++ b/Doxyfile.in	1700735084.755167447
+@@ -281,7 +281,7 @@ TYPEDEF_HIDES_STRUCT   = NO
+ # causing a significant performance penality.
+ # If the system has enough physical memory increasing the cache will improve the
+ # performance by keeping more symbols in memory. Note that the value works on
+-# a logarithmic scale so increasing the size by one will rougly double the
++# a logarithmic scale so increasing the size by one will roughly double the
+ # memory usage. The cache size is given by this formula:
+ # 2^(16+SYMBOL_CACHE_SIZE). The valid range is 0..9, the default is 0,
+ # corresponding to a cache size of 2^16 = 65536 symbols
+--- a/src/module/dbus/dbusstuff.c	1658865722.000000000
++++ b/src/module/dbus/dbusstuff.c	1700735084.170062090
+@@ -46,7 +46,7 @@ typedef struct _FcitxDBus {
+ } FcitxDBus;
+ 
+ #define RETRY_INTERVAL 2
+-#define MAX_RETRY_TIMES 5
++#define MAX_RETRY_TIMES 20
+ 
+ static void* DBusCreate(FcitxInstance* instance);
+ static void DBusSetFD(void* arg);
+--- a/src/module/lua/luawrap.c	1658865722.000000000
++++ b/src/module/lua/luawrap.c	1700735084.755988601
+@@ -166,7 +166,7 @@ static int FcitxLog_Export(lua_State *lu
+ static int ImeRegisterCommand_Export(lua_State *lua) {
+     int c = lua_gettop(lua);
+     if (c < 2) {
+-        FcitxLog(WARNING, "register command arugment missing");
++        FcitxLog(WARNING, "register command argument missing");
+         return 0;
+     }
+     const char *command_name = lua_tostring(lua, 1);
+@@ -194,7 +194,7 @@ static int ImeRegisterTrigger_Export(lua
+     if (c >= kFunctionNameArg) {
+         function_name = lua_tostring(lua, kFunctionNameArg);
+         if (function_name == NULL || function_name[0] == 0) {
+-            FcitxLog(WARNING, "register trigger arugment function_name empty");
++            FcitxLog(WARNING, "register trigger argument function_name empty");
+             return 0;
+         }
+     }

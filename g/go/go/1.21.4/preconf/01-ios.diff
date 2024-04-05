@@ -71,7 +71,7 @@
  func lookPath(s *State, command string) (string, error) {
  	var strEqual func(string, string) bool
 -	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "ios" {
++	if runtime.GOOS == "windows" || (runtime.GOOS == "darwin" && runtime.GOOS != "ios") { // iOS is case-sensitive
  		// Using GOOS as a proxy for case-insensitive file system.
  		// TODO(bcmills): Remove this assumption.
  		strEqual = strings.EqualFold
@@ -220,32 +220,6 @@
  	}
  
  	return nil
---- a/src/cmd/vendor/golang.org/x/sys/unix/sysvshm_unix.go	2023-11-02 04:46:39.000000000 +0800
-+++ b/src/cmd/vendor/golang.org/x/sys/unix/sysvshm_unix.go	2023-11-29 00:00:05.000000000 +0800
-@@ -2,8 +2,8 @@
- // Use of this source code is governed by a BSD-style
- // license that can be found in the LICENSE file.
- 
--//go:build (darwin && !ios) || linux
--// +build darwin,!ios linux
-+//go:build darwin || linux
-+// +build darwin linux
- 
- package unix
- 
---- a/src/cmd/vendor/golang.org/x/sys/unix/sysvshm_unix_other.go	2023-11-02 04:46:39.000000000 +0800
-+++ b/src/cmd/vendor/golang.org/x/sys/unix/sysvshm_unix_other.go	2023-11-29 00:00:19.000000000 +0800
-@@ -2,8 +2,8 @@
- // Use of this source code is governed by a BSD-style
- // license that can be found in the LICENSE file.
- 
--//go:build darwin && !ios
--// +build darwin,!ios
-+//go:build darwin
-+// +build darwin
- 
- package unix
- 
 --- a/src/cmd/vendor/golang.org/x/tools/go/analysis/passes/framepointer/framepointer.go	2023-11-02 04:46:39.000000000 +0800
 +++ b/src/cmd/vendor/golang.org/x/tools/go/analysis/passes/framepointer/framepointer.go	2023-11-29 00:26:31.000000000 +0800
 @@ -35,7 +35,7 @@ func run(pass *analysis.Pass) (interface
@@ -440,7 +414,7 @@
  // license that can be found in the LICENSE file.
  
 -//go:build (darwin && !ios) || dragonfly || freebsd || solaris
-+//go:build darwin || dragonfly || freebsd || solaris
++//go:build darwin || ios || dragonfly || freebsd || solaris
  
  package net
  

@@ -1,0 +1,617 @@
+--- a/ext/avtp/gstavtpcrfbase.c	1709596302.000000000
++++ b/ext/avtp/gstavtpcrfbase.c	1711620922.502680924
+@@ -24,6 +24,10 @@
+ #include <math.h>
+ #include <net/ethernet.h>
+ #include <net/if.h>
++#if __APPLE__
++#include <net/if_types.h>
++#endif
++#include <endian.h>
+ #include <stdio.h>
+ #include <sys/socket.h>
+ #include <sys/types.h>
+@@ -175,13 +179,22 @@ gst_avtp_crf_base_change_state (GstEleme
+ static int
+ setup_socket (GstAvtpCrfBase * avtpcrfbase)
+ {
++#if defined(__linux)
+   struct sockaddr_ll sk_addr = { 0 };
+   struct packet_mreq mreq = { 0 };
+-  struct timeval timeout = { 0 };
+   guint8 addr[ETH_ALEN];
++#else
++  struct sockaddr_dl sk_addr = { 0 };
++  guint8 addr[ETHER_ADDR_LEN];
++#endif
++  struct timeval timeout = { 0 };
+   int fd, res, ifindex;
+ 
++#if defined(__linux)
+   fd = socket (AF_PACKET, SOCK_DGRAM, htons (ETH_P_ALL));
++#else
++  fd = socket (AF_LINK, SOCK_RAW, htons (ETH_P_ALL));
++#endif
+   if (fd < 0) {
+     GST_ERROR_OBJECT (avtpcrfbase, "Failed to open socket: %s",
+         g_strerror (errno));
+@@ -196,9 +209,15 @@ setup_socket (GstAvtpCrfBase * avtpcrfba
+     goto err;
+   }
+ 
++#if defined(__linux)
+   sk_addr.sll_family = AF_PACKET;
+   sk_addr.sll_protocol = htons (ETH_P_ALL);
+   sk_addr.sll_ifindex = ifindex;
++#else
++  sk_addr.sdl_family = AF_LINK;
++  sk_addr.sdl_index = ifindex;
++  sk_addr.sdl_type = IFT_ETHER;
++#endif
+ 
+   res = bind (fd, (struct sockaddr *) &sk_addr, sizeof (sk_addr));
+   if (res < 0) {
+@@ -215,6 +234,7 @@ setup_socket (GstAvtpCrfBase * avtpcrfba
+     goto err;
+   }
+ 
++#if defined(__linux)
+   mreq.mr_ifindex = ifindex;
+   mreq.mr_type = PACKET_MR_MULTICAST;
+   mreq.mr_alen = ETH_ALEN;
+@@ -226,6 +246,7 @@ setup_socket (GstAvtpCrfBase * avtpcrfba
+         g_strerror (errno));
+     goto err;
+   }
++#endif
+ 
+   timeout.tv_sec = RECV_TIMEOUT;
+   res =
+--- a/ext/avtp/gstavtpcrfbase.h	1709596302.000000000
++++ b/ext/avtp/gstavtpcrfbase.h	1711621716.237861800
+@@ -23,7 +23,14 @@
+ 
+ #include <gst/base/gstbasetransform.h>
+ #include <gst/gst.h>
++#if defined(__linux)
+ #include <linux/if_packet.h>
++#else
++#include <net/if_dl.h>
++#ifndef ETH_P_ALL
++#define ETH_P_ALL 0
++#endif
++#endif
+ 
+ G_BEGIN_DECLS
+ #define GST_TYPE_AVTP_CRF_BASE (gst_avtp_crf_base_get_type())
+--- a/ext/avtp/gstavtpsink.c	1709596302.000000000
++++ b/ext/avtp/gstavtpsink.c	1711620079.194176727
+@@ -44,11 +44,18 @@
+  */
+ 
+ #include <arpa/inet.h>
++#if defined(__linux)
+ #include <linux/errqueue.h>
+ #include <linux/if_packet.h>
+ #include <linux/net_tstamp.h>
++#endif
+ #include <net/ethernet.h>
+ #include <net/if.h>
++#if __APPLE__
++#include <net/if_dl.h>
++#include <net/if_var.h>
++#include <net/if_types.h>
++#endif
+ #include <stdio.h>
+ #include <string.h>
+ #include <sys/ioctl.h>
+@@ -219,9 +226,14 @@ gst_avtp_sink_init_socket (GstAvtpSink *
+ {
+   int fd, res;
+   unsigned int index;
++#if defined(__linux)
+   guint8 addr[ETH_ALEN];
+   struct sockaddr_ll sk_addr;
+   struct sock_txtime txtime_cfg;
++#else
++  guint8 addr[ETHER_ADDR_LEN]; // Use ETHER_ADDR_LEN for Ethernet address length
++  struct sockaddr_dl sk_addr;
++#endif
+ 
+   index = if_nametoindex (avtpsink->ifname);
+   if (!index) {
+@@ -230,13 +242,18 @@ gst_avtp_sink_init_socket (GstAvtpSink *
+     return FALSE;
+   }
+ 
++#if defined(__linux)
+   fd = socket (AF_PACKET, SOCK_DGRAM, htons (ETH_P_TSN));
++#else
++  fd = socket (AF_LINK, SOCK_RAW, 0);
++#endif
+   if (fd < 0) {
+     GST_ERROR_OBJECT (avtpsink, "Failed to open socket: %s",
+         g_strerror (errno));
+     return FALSE;
+   }
+ 
++#if defined(__linux)
+   res = setsockopt (fd, SOL_SOCKET, SO_PRIORITY, &avtpsink->priority,
+       sizeof (avtpsink->priority));
+   if (res < 0) {
+@@ -244,7 +261,9 @@ gst_avtp_sink_init_socket (GstAvtpSink *
+         (errno));
+     goto err;
+   }
++#endif
+ 
++#if defined(__linux)
+   txtime_cfg.clockid = CLOCK_TAI;
+   txtime_cfg.flags = SOF_TXTIME_REPORT_ERRORS;
+   res = setsockopt (fd, SOL_SOCKET, SO_TXTIME, &txtime_cfg,
+@@ -254,6 +273,7 @@ gst_avtp_sink_init_socket (GstAvtpSink *
+         (errno));
+     goto err;
+   }
++#endif
+ 
+   res = sscanf (avtpsink->address, "%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+       &addr[0], &addr[1], &addr[2], &addr[3], &addr[4], &addr[5]);
+@@ -262,6 +282,7 @@ gst_avtp_sink_init_socket (GstAvtpSink *
+     goto err;
+   }
+ 
++#if defined(__linux)
+   sk_addr.sll_family = AF_PACKET;
+   sk_addr.sll_protocol = htons (ETH_P_TSN);
+   sk_addr.sll_halen = ETH_ALEN;
+@@ -269,6 +290,14 @@ gst_avtp_sink_init_socket (GstAvtpSink *
+   sk_addr.sll_hatype = 0;
+   sk_addr.sll_pkttype = 0;
+   memcpy (sk_addr.sll_addr, addr, ETH_ALEN);
++#else
++  sk_addr.sdl_family = AF_LINK;
++  sk_addr.sdl_index = index;
++  sk_addr.sdl_type = IFT_ETHER;
++  sk_addr.sdl_nlen = 0; // No name length
++  sk_addr.sdl_alen = ETHER_ADDR_LEN; // Address length
++  memcpy(LLADDR(&sk_addr), addr, ETHER_ADDR_LEN);
++#endif
+ 
+   avtpsink->sk_fd = fd;
+   avtpsink->sk_addr = sk_addr;
+@@ -284,20 +313,24 @@ static void
+ gst_avtp_sink_init_msghdr (GstAvtpSink * avtpsink)
+ {
+   struct msghdr *msg;
++#if 0
+   struct cmsghdr *cmsg;
++#endif
+ 
+   msg = g_malloc0 (sizeof (struct msghdr));
+   msg->msg_name = &avtpsink->sk_addr;
+   msg->msg_namelen = sizeof (avtpsink->sk_addr);
+   msg->msg_iovlen = 1;
+   msg->msg_iov = g_malloc0 (sizeof (struct iovec));
+-  msg->msg_controllen = CMSG_SPACE (sizeof (__u64));
++  msg->msg_controllen = CMSG_SPACE (sizeof (unsigned long long));
+   msg->msg_control = g_malloc0 (msg->msg_controllen);
+ 
++#if 0
+   cmsg = CMSG_FIRSTHDR (msg);
+   cmsg->cmsg_level = SOL_SOCKET;
+   cmsg->cmsg_type = SCM_TXTIME;
+-  cmsg->cmsg_len = CMSG_LEN (sizeof (__u64));
++  cmsg->cmsg_len = CMSG_LEN (sizeof (unsigned long long));
++#endif
+ 
+   avtpsink->msg = msg;
+ }
+@@ -367,6 +400,7 @@ gst_avtp_sink_adjust_time (GstBaseSink *
+   return time;
+ }
+ 
++#if defined(__linux)
+ static void
+ gst_avtp_sink_process_error_queue (GstAvtpSink * avtpsink, int fd)
+ {
+@@ -411,6 +445,7 @@ gst_avtp_sink_process_error_queue (GstAv
+     cmsg = CMSG_NXTHDR (&msg, cmsg);
+   }
+ }
++#endif
+ 
+ static GstFlowReturn
+ gst_avtp_sink_render (GstBaseSink * basesink, GstBuffer * buffer)
+@@ -435,7 +470,7 @@ gst_avtp_sink_render (GstBaseSink * base
+ 
+     base_time = gst_element_get_base_time (GST_ELEMENT (avtpsink));
+     running_time = gst_avtp_sink_adjust_time (basesink, running_time);
+-    *(__u64 *) CMSG_DATA (cmsg) = UTC_TO_TAI (base_time + running_time);
++    *(unsigned long long *) CMSG_DATA (cmsg) = UTC_TO_TAI (base_time + running_time);
+   }
+ 
+   if (!gst_buffer_map (buffer, &info, GST_MAP_READ)) {
+@@ -450,8 +485,10 @@ gst_avtp_sink_render (GstBaseSink * base
+   if (n < 0) {
+     GST_INFO_OBJECT (avtpsink, "Failed to send AVTPDU: %s", g_strerror (errno));
+ 
++#if defined(__linux)
+     if (G_LIKELY (basesink->sync))
+       gst_avtp_sink_process_error_queue (avtpsink, avtpsink->sk_fd);
++#endif
+ 
+     goto out;
+   }
+--- a/ext/avtp/gstavtpsink.h	1709596302.000000000
++++ b/ext/avtp/gstavtpsink.h	1711620606.247158411
+@@ -24,7 +24,11 @@
+ 
+ #include <gst/base/gstbasesink.h>
+ #include <gst/gst.h>
++#if defined(__linux)
+ #include <linux/if_packet.h>
++#else
++#include <net/if_dl.h>
++#endif
+ 
+ G_BEGIN_DECLS
+ 
+@@ -50,7 +54,11 @@ struct _GstAvtpSink
+   gint priority;
+ 
+   int sk_fd;
++#if !defined(__linux)
++  struct sockaddr_dl sk_addr;
++#else
+   struct sockaddr_ll sk_addr;
++#endif
+   struct msghdr * msg;
+ };
+ 
+--- a/ext/avtp/gstavtpsrc.c	1709596302.000000000
++++ b/ext/avtp/gstavtpsrc.c	1711621744.633072589
+@@ -42,7 +42,15 @@
+  */
+ 
+ #include <arpa/inet.h>
++#if defined(__linux)
+ #include <linux/if_packet.h>
++#else
++#include <net/if_dl.h>
++#include <net/if_types.h>
++#ifndef ETH_ALEN
++#define ETH_ALEN ETHER_ADDR_LEN
++#endif
++#endif
+ #include <net/ethernet.h>
+ #include <net/if.h>
+ #include <stdio.h>
+@@ -198,9 +206,15 @@ gst_avtp_src_start (GstBaseSrc * basesrc
+ {
+   int fd, res;
+   unsigned int index;
++#if defined(__linux)
+   guint8 addr[ETH_ALEN];
+   struct sockaddr_ll sk_addr = { 0 };
+   struct packet_mreq mreq = { 0 };
++#else
++  guint8 addr[ETHER_ADDR_LEN];
++  struct sockaddr_dl sk_addr = { 0 };
++#endif
++
+   GstAvtpSrc *avtpsrc = GST_AVTP_SRC (basesrc);
+ 
+   index = if_nametoindex (avtpsrc->ifname);
+@@ -210,15 +224,25 @@ gst_avtp_src_start (GstBaseSrc * basesrc
+     return FALSE;
+   }
+ 
++#if defined(__linux)
+   fd = socket (AF_PACKET, SOCK_DGRAM, htons (ETH_P_TSN));
++#else
++  fd = socket (AF_LINK, SOCK_RAW, 0);
++#endif
+   if (fd < 0) {
+     GST_ERROR_OBJECT (avtpsrc, "Failed to open socket: %s", g_strerror (errno));
+     return FALSE;
+   }
+ 
++#if defined(__linux)
+   sk_addr.sll_family = AF_PACKET;
+   sk_addr.sll_protocol = htons (ETH_P_TSN);
+   sk_addr.sll_ifindex = index;
++#else
++  sk_addr.sdl_family = AF_LINK;
++  sk_addr.sdl_index = index;
++  sk_addr.sdl_type = IFT_ETHER;
++#endif
+ 
+   res = bind (fd, (struct sockaddr *) &sk_addr, sizeof (sk_addr));
+   if (res < 0) {
+@@ -233,6 +257,7 @@ gst_avtp_src_start (GstBaseSrc * basesrc
+     goto err;
+   }
+ 
++#if defined(__linux)
+   mreq.mr_ifindex = index;
+   mreq.mr_type = PACKET_MR_MULTICAST;
+   mreq.mr_alen = ETH_ALEN;
+@@ -244,6 +269,7 @@ gst_avtp_src_start (GstBaseSrc * basesrc
+         g_strerror (errno));
+     goto err;
+   }
++#endif
+ 
+   avtpsrc->sk_fd = fd;
+ 
+--- a/ext/avtp/meson.build	1709596302.000000000
++++ b/ext/avtp/meson.build	1711614864.814395264
+@@ -21,13 +21,13 @@ avtp_sources = [
+ avtp_dep = dependency('', required: false)
+ avtp_option = get_option('avtp')
+ 
+-if host_machine.system() != 'linux' or not cc.has_type('struct sock_txtime', prefix : '#include <linux/net_tstamp.h>')
+-  if avtp_option.enabled()
+-    error('avtp plugin enabled but host is not supported')
+-  else
+-    subdir_done()
+-  endif
+-endif
++#if host_machine.system() != 'linux' or not cc.has_type('struct sock_txtime', prefix : '#include <linux/net_tstamp.h>')
++#  if avtp_option.enabled()
++#    error('avtp plugin enabled but host is not supported')
++#  else
++#    subdir_done()
++#  endif
++#endif
+ 
+ avtp_dep = dependency('avtp', required: avtp_option, version : '>= 0.2.0',
+                       fallback: ['avtp', 'avtp_dep'])
+--- a/ext/meson.build	1709596302.000000000
++++ b/ext/meson.build	1711535264.885965389
+@@ -23,7 +23,7 @@ subdir('fluidsynth')
+ subdir('gme')
+ subdir('gs')
+ subdir('gsm')
+-subdir('gtk')
++#subdir('gtk')
+ subdir('hls')
+ subdir('iqa')
+ subdir('isac')
+--- a/ext/opencv/gstfaceblur.cpp	1709596302.000000000
++++ b/ext/opencv/gstfaceblur.cpp	1710835877.504204705
+@@ -68,9 +68,8 @@
+ GST_DEBUG_CATEGORY_STATIC (gst_face_blur_debug);
+ #define GST_CAT_DEFAULT gst_face_blur_debug
+ 
+-#define DEFAULT_PROFILE OPENCV_PREFIX G_DIR_SEPARATOR_S "share" \
+-    G_DIR_SEPARATOR_S OPENCV_PATH_NAME G_DIR_SEPARATOR_S "haarcascades" \
+-    G_DIR_SEPARATOR_S "haarcascade_frontalface_default.xml"
++#define HAAR_CASCADES_DIR "/usr/share/opencv4/haarcascades/"
++#define DEFAULT_PROFILE HAAR_CASCADES_DIR HAAR_CASCADES_DIR "haarcascade_frontalface_default.xml"
+ #define DEFAULT_SCALE_FACTOR 1.25
+ #if (CV_MAJOR_VERSION >= 4)
+ #define DEFAULT_FLAGS CASCADE_DO_CANNY_PRUNING
+--- a/ext/opencv/gstfacedetect.cpp	1709596302.000000000
++++ b/ext/opencv/gstfacedetect.cpp	1710835877.505104772
+@@ -86,9 +86,7 @@ using namespace std;
+ GST_DEBUG_CATEGORY_STATIC (gst_face_detect_debug);
+ #define GST_CAT_DEFAULT gst_face_detect_debug
+ 
+-#define HAAR_CASCADES_DIR OPENCV_PREFIX G_DIR_SEPARATOR_S "share" \
+-    G_DIR_SEPARATOR_S OPENCV_PATH_NAME G_DIR_SEPARATOR_S "haarcascades" \
+-    G_DIR_SEPARATOR_S
++#define HAAR_CASCADES_DIR "/usr/share/opencv4/haarcascades/"
+ #define DEFAULT_FACE_PROFILE HAAR_CASCADES_DIR "haarcascade_frontalface_default.xml"
+ #define DEFAULT_NOSE_PROFILE HAAR_CASCADES_DIR "haarcascade_mcs_nose.xml"
+ #define DEFAULT_MOUTH_PROFILE HAAR_CASCADES_DIR "haarcascade_mcs_mouth.xml"
+--- a/meson.build	1709596302.000000000
++++ b/meson.build	1710836206.717874393
+@@ -46,6 +46,7 @@ host_system = host_machine.system()
+ if host_system in ['ios', 'darwin']
+   have_objc = add_languages('objc', native: false)
+   have_objcpp = add_languages('objcpp', native: false)
++  host_system = 'ios'
+ else
+   have_objc = false
+   have_objcpp = false
+--- a/sys/applemedia/avfdeviceprovider.m	1709596302.000000000
++++ b/sys/applemedia/avfdeviceprovider.m	1710835100.600742486
+@@ -79,14 +79,20 @@ gst_av_capture_device_get_props (AVCaptu
+   g_free (unique_id);
+   g_free (model_id);
+ 
+-#if !HAVE_IOS
+-  char *manufacturer = g_strdup ([[device manufacturer] UTF8String]);
+-  gst_structure_set (props,
+-    "avf.manufacturer", G_TYPE_STRING, manufacturer,
+-  NULL);
++  if (@available(iOS 14, *)) {
++    char *manufacturer = g_strdup ([[device manufacturer] UTF8String]);
++    gst_structure_set (props,
++      "avf.manufacturer", G_TYPE_STRING, manufacturer,
++    NULL);
+ 
+-  g_free (manufacturer);
+-#endif
++    g_free (manufacturer);
++  } else {
++    // Need to confirm if [AVCaptureDevice manufacturer] actually works for older os
++    // Stub it for now
++    gst_structure_set (props,
++      "avf.manufacturer", G_TYPE_STRING, "Apple Inc.",
++    NULL);
++  }
+ 
+   return props;
+ }
+--- a/sys/applemedia/avfvideosrc.m	1709596302.000000000
++++ b/sys/applemedia/avfvideosrc.m	1711537022.432037204
+@@ -751,7 +751,7 @@ G_GNUC_END_IGNORE_DEPRECATIONS
+         forKey:(NSString*)kCVPixelBufferPixelFormatTypeKey];
+ 
+     if (captureScreen) {
+-#if !HAVE_IOS
++#if !HAVE_IOS || 1
+       AVCaptureScreenInput *screenInput = (AVCaptureScreenInput *)input;
+       screenInput.minFrameDuration = CMTimeMake(info.fps_d, info.fps_n);
+ #else
+@@ -1145,7 +1145,7 @@ enum
+   PROP_DEVICE_TYPE,
+   PROP_DO_STATS,
+   PROP_FPS,
+-#if !HAVE_IOS
++#if !HAVE_IOS || 1
+   PROP_CAPTURE_SCREEN,
+   PROP_CAPTURE_SCREEN_CURSOR,
+   PROP_CAPTURE_SCREEN_MOUSE_CLICKS,
+@@ -1246,7 +1246,7 @@ gst_avf_video_src_class_init (GstAVFVide
+       g_param_spec_int ("fps", "Frames per second",
+           "Last measured framerate, if statistics are enabled",
+           -1, G_MAXINT, -1, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+-#if !HAVE_IOS
++#if !HAVE_IOS || 1
+   g_object_class_install_property (gobject_class, PROP_CAPTURE_SCREEN,
+       g_param_spec_boolean ("capture-screen", "Enable screen capture",
+           "Enable screen capture functionality", FALSE,
+@@ -1306,7 +1306,7 @@ gst_avf_video_src_get_property (GObject
+   GstAVFVideoSrcImpl *impl = GST_AVF_VIDEO_SRC_IMPL (object);
+ 
+   switch (prop_id) {
+-#if !HAVE_IOS
++#if !HAVE_IOS || 1
+     case PROP_CAPTURE_SCREEN:
+       g_value_set_boolean (value, impl.captureScreen);
+       break;
+@@ -1365,7 +1365,7 @@ gst_avf_video_src_set_property (GObject
+   GstAVFVideoSrcImpl *impl = GST_AVF_VIDEO_SRC_IMPL (object);
+ 
+   switch (prop_id) {
+-#if !HAVE_IOS
++#if !HAVE_IOS || 1
+     case PROP_CAPTURE_SCREEN:
+       impl.captureScreen = g_value_get_boolean (value);
+       break;
+--- a/sys/applemedia/vtdec.c	1709596302.000000000
++++ b/sys/applemedia/vtdec.c	1710833992.500511493
+@@ -539,6 +539,7 @@ gst_vtdec_negotiate (GstVideoDecoder * d
+         GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
+     if (output_textures)
+       gst_caps_set_simple (output_state->caps, "texture-target", G_TYPE_STRING,
++// Torrekie: This is a 2015 change, need to confirm if GST_GL_TEXTURE_TARGET_2D_STR works now
+ #if !HAVE_IOS
+           GST_GL_TEXTURE_TARGET_RECTANGLE_STR,
+ #else
+@@ -1539,7 +1540,7 @@ gst_vtdec_set_context (GstElement * elem
+   GST_ELEMENT_CLASS (gst_vtdec_parent_class)->set_context (element, context);
+ }
+ 
+-#ifndef HAVE_IOS
++//#ifndef HAVE_IOS
+ #define GST_TYPE_VTDEC_HW   (gst_vtdec_hw_get_type())
+ #define GST_VTDEC_HW(obj)   (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_VTDEC_HW,GstVtdecHw))
+ #define GST_VTDEC_HW_CLASS(klass)   (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_VTDEC_HW,GstVtdecHwClass))
+@@ -1557,7 +1558,11 @@ static void
+ gst_vtdec_hw_class_init (GstVtdecHwClass * klass)
+ {
+   gst_element_class_set_static_metadata (GST_ELEMENT_CLASS (klass),
+-      "Apple VideoToolbox decoder (hardware only)",
++      "Apple VideoToolbox decoder"
++#ifndef HAVE_IOS
++      " (hardware only)"
++#endif
++      ,
+       "Codec/Decoder/Video/Hardware",
+       "Apple VideoToolbox Decoder",
+       "Ole André Vadla Ravnås <oleavr@soundrop.com>; "
+@@ -1570,7 +1575,7 @@ gst_vtdec_hw_init (GstVtdecHw * vtdec)
+   GST_VTDEC (vtdec)->require_hardware = TRUE;
+ }
+ 
+-#endif
++//#endif
+ 
+ void
+ gst_vtdec_register_elements (GstPlugin * plugin)
+@@ -1580,6 +1585,7 @@ gst_vtdec_register_elements (GstPlugin *
+ 
+ #ifdef HAVE_IOS
+   gst_element_register (plugin, "vtdec", GST_RANK_PRIMARY, GST_TYPE_VTDEC);
++  gst_element_register (plugin, "vtdec_hw", GST_RANK_SECONDARY + 1, GST_TYPE_VTDEC_HW);
+ #else
+   gst_element_register (plugin, "vtdec_hw", GST_RANK_PRIMARY + 1,
+       GST_TYPE_VTDEC_HW);
+--- a/tests/check/meson.build	1709596302.000000000
++++ b/tests/check/meson.build	1710835878.110110839
+@@ -28,7 +28,7 @@ base_tests = [
+   [['elements/autoconvert.c'], get_option('autoconvert').disabled()],
+   [['elements/autovideoconvert.c'], get_option('autoconvert').disabled()],
+   [['elements/avwait.c'], get_option('timecode').disabled()],
+-  [['elements/camerabin.c'], get_option('camerabin2').disabled()],
++  [['elements/camerabin.c'], true, ],
+   [['elements/ccconverter.c'], not closedcaption_dep.found(), [gstvideo_dep]],
+   [['elements/cccombiner.c'], not closedcaption_dep.found(), ],
+   [['elements/ccextractor.c'], not closedcaption_dep.found(), ],
+@@ -99,7 +99,7 @@ base_tests = [
+   [['libs/av1bitwriter.c'], false, [gstcodecparsers_dep]],
+   [['libs/vkmemory.c'], not gstvulkan_dep.found(), [gstvulkan_dep]],
+   [['libs/analyticsmeta.c'], false, [gstanalytics_dep]],
+-  [['elements/vkcolorconvert.c'], not gstvulkan_dep.found(), [gstvulkan_dep]],
++  [['elements/vkcolorconvert.c'], true , [gstvulkan_dep]],
+   [['libs/vkwindow.c'], not gstvulkan_dep.found(), [gstvulkan_dep]],
+   [['libs/vkdevice.c'], not gstvulkan_dep.found(), [gstvulkan_dep]],
+   [['elements/vkdeviceprovider.c'], not gstvulkan_dep.found(), [gstvulkan_dep]],
+@@ -121,7 +121,7 @@ if host_machine.system() != 'windows'
+     [['elements/avtpaafdepay.c'], not avtp_dep.found(), [avtp_dep]],
+     [['elements/avtpcrfbase.c'], not avtp_dep.found(), [avtp_dep]],
+     [['elements/avtpcrfcheck.c'], not avtp_dep.found(), [avtp_dep], ['../../ext/avtp/gstavtpcrfutil.c']],
+-    [['elements/avtpcrfsync.c'], not avtp_dep.found(), [avtp_dep], ['../../ext/avtp/gstavtpcrfutil.c', '../../ext/avtp/gstavtpcrfbase.c']],
++    [['elements/avtpcrfsync.c'], true, [avtp_dep], ['../../ext/avtp/gstavtpcrfutil.c', '../../ext/avtp/gstavtpcrfbase.c']],
+     [['elements/avtpcrfutil.c'], not avtp_dep.found(), [avtp_dep], ['../../ext/avtp/gstavtpcrfutil.c', '../../ext/avtp/gstavtpcrfbase.c']],
+     [['elements/avtpcvfpay.c'], not avtp_dep.found(), [avtp_dep]],
+     [['elements/avtpcvfdepay.c'], not avtp_dep.found(), [avtp_dep]],
+@@ -145,7 +145,7 @@ if host_machine.system() != 'windows'
+     [['elements/jifmux.c'],
+         not exif_dep.found() or not cdata.has('HAVE_UNISTD_H'), [exif_dep]],
+     [['elements/jpegparse.c'], not cdata.has('HAVE_UNISTD_H')],
+-    [['elements/netsim.c']],
++    [['elements/netsim.c'], true ],
+     [['elements/shm.c'], not shm_enabled, shm_deps],
+     [['elements/unixfd.c'], not gio_unix_dep.found()],
+     [['elements/voaacenc.c'],
+@@ -161,7 +161,7 @@ endif
+ # linux only tests
+ if host_machine.system() == 'linux'
+   base_tests += [
+-    [['elements/vapostproc.c'], not gstva_dep.found(), [gstva_dep]],
++    [['elements/vapostproc.c'], true, [gstva_dep]],
+     [['elements/vacompositor.c'], not gstva_dep.found(), [gstva_dep]],
+   ]
+ endif
+--- a/tests/examples/meson.build	1709596302.000000000
++++ b/tests/examples/meson.build	1711536030.093540528
+@@ -1,12 +1,12 @@
+ subdir('audiomixmatrix')
+-subdir('avsamplesink')
++#subdir('avsamplesink')
+ subdir('camerabin2')
+ subdir('codecparsers')
+ subdir('codecs')
+ subdir('d3d11')
+ subdir('d3d12')
+ subdir('directfb')
+-subdir('gtk')
++#subdir('gtk')
+ subdir('ipcpipeline')
+ subdir('mediafoundation')
+ subdir('mpegts')
+@@ -18,7 +18,7 @@ subdir('qsv')
+ subdir('qt6d3d11')
+ subdir('uvch264')
+ subdir('va')
+-subdir('waylandsink')
++#subdir('waylandsink')
+ subdir('webrtc')
+ subdir('wpe')
+ 

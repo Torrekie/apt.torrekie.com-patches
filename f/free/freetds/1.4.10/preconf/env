@@ -1,0 +1,2 @@
+# export symbols that not yet implemented
+CFLAGS="-DDBLIB_UNIMPLEMENTED"

@@ -1,0 +1,99 @@
+--- a/gst-libs/gst/gl/egl/gstglcontext_egl.c	1709596302.000000000
++++ b/gst-libs/gst/gl/egl/gstglcontext_egl.c	1710062080.833408814
+@@ -1331,9 +1331,10 @@ load_egl_module (gpointer user_data)
+ #else
+   /* On Linux the .so is only in -dev packages, try with a real soname
+    * Proper compilers will optimize away the strcmp */
++#ifndef __APPLE__
+   if (g_strcmp0 (G_MODULE_SUFFIX, "so") == 0)
+     module_egl = g_module_open ("libEGL.so.1", G_MODULE_BIND_LAZY);
+-
++#endif
+   /* This automatically handles the suffix and even .la files */
+   if (!module_egl)
+     module_egl = g_module_open ("libEGL", G_MODULE_BIND_LAZY);
+--- a/gst-libs/gst/gl/gstglcontext.c	1709596302.000000000
++++ b/gst-libs/gst/gl/gstglcontext.c	1710061976.153205592
+@@ -107,11 +107,12 @@ load_opengl_module (gpointer user_data)
+ #else
+   /* On Linux the .so is only in -dev packages, try with a real soname
+    * Proper compilers will optimize away the strcmp */
++#ifndef __APPLE__
+   if (g_strcmp0 (G_MODULE_SUFFIX, "so") == 0)
+     module_opengl = g_module_open ("libGL.so.1", G_MODULE_BIND_LAZY);
+   else if (g_strcmp0 (G_MODULE_SUFFIX, "dll") == 0)
+     module_opengl = g_module_open ("opengl32.dll", G_MODULE_BIND_LAZY);
+-
++#endif
+   /* This automatically handles the suffix and even .la files */
+   if (!module_opengl)
+     module_opengl = g_module_open ("libGL", G_MODULE_BIND_LAZY);
+@@ -134,9 +135,10 @@ load_gles2_module (gpointer user_data)
+ #else
+   /* On Linux the .so is only in -dev packages, try with a real soname
+    * Proper compilers will optimize away the strcmp */
++#ifndef __APPLE__
+   if (g_strcmp0 (G_MODULE_SUFFIX, "so") == 0)
+     module_gles2 = g_module_open ("libGLESv2.so.2", G_MODULE_BIND_LAZY);
+-
++#endif
+   /* This automatically handles the suffix and even .la files */
+   if (!module_gles2)
+     module_gles2 = g_module_open ("libGLESv2", G_MODULE_BIND_LAZY);
+--- a/gst-libs/gst/gl/gstglfuncs.h	1709596302.000000000
++++ b/gst-libs/gst/gl/gstglfuncs.h	1709982442.583387523
+@@ -54,7 +54,7 @@
+ 
+ /* OpenGL for desktop systems */
+ #if GST_GL_HAVE_OPENGL
+-# ifdef __APPLE__
++# if defined(__APPLE__) && !defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
+ #  if !defined(MAC_OS_X_VERSION_MAX_ALLOWED) || MAC_OS_X_VERSION_MAX_ALLOWED >= 1014
+ #   define GL_SILENCE_DEPRECATION
+ #  endif
+--- a/gst-libs/gst/gl/meson.build	1709596302.000000000
++++ b/gst-libs/gst/gl/meson.build	1709982109.271688777
+@@ -421,16 +421,16 @@ gles2_dep = unneeded_dep
+ gles3_h = false
+ gles3ext3_h = false
+ if need_api_gles2 != 'no'
+-  if host_system == 'ios'
++#  if host_system == 'ios'
+     gles2_dep = dependency('appleframeworks', modules : ['OpenGLES'], required : false)
+-  else
++#  else
+     if bcm_host_dep.found()
+       gles2_dep = dependency('brcmglesv2', required : false)
+     endif
+     if not gles2_dep.found()
+       gles2_dep = dependency('glesv2', required : false)
+     endif
+-  endif
++#  endif
+ 
+   if not gles2_dep.found()
+ #    if host_system == 'windows'
+--- a/gst-libs/gst/gl/wgl/gstglcontext_wgl.c	1709596302.000000000
++++ b/gst-libs/gst/gl/wgl/gstglcontext_wgl.c	1710062109.619011681
+@@ -479,9 +479,10 @@ load_opengl_dll_module (gpointer user_da
+   module_opengl_dll =
+       g_module_open (GST_GL_LIBGL_MODULE_NAME, G_MODULE_BIND_LAZY);
+ #else
++#ifndef __APPLE__
+   if (g_strcmp0 (G_MODULE_SUFFIX, "dll") == 0)
+     module_opengl_dll = g_module_open ("opengl32.dll", G_MODULE_BIND_LAZY);
+-
++#endif
+   /* This automatically handles the suffix and even .la files */
+   if (!module_opengl_dll)
+     module_opengl_dll = g_module_open ("opengl32", G_MODULE_BIND_LAZY);
+--- a/meson.build	1709596302.000000000
++++ b/meson.build	1709982880.500786856
+@@ -23,6 +23,7 @@ have_cxx = add_languages('cpp', native:
+ 
+ if host_system in ['ios', 'darwin']
+   have_objc = add_languages('objc', native: false)
++  host_system = 'ios'
+ else
+   have_objc = false
+ endif

@@ -1,0 +1,257 @@
+--- a/CMakeLists.txt	1700984831.202992088
++++ b/CMakeLists.txt	1700735505.650463173
+@@ -269,8 +269,8 @@ endif()
+ 
+ set(CMAKE_C_FLAGS "-Wall -Wextra -Wno-sign-compare -Wno-unused-parameter -fvisibility=hidden ${CMAKE_C_FLAGS}")
+ set(CMAKE_CXX_FLAGS "-Wall -Wextra -Wno-sign-compare -Wno-unused-parameter -fvisibility=hidden ${CMAKE_CXX_FLAGS}")
+-set(CMAKE_SHARED_LINKER_FLAGS "-Wl,--as-needed ${CMAKE_SHARED_LINKER_FLAGS}")
+-set(CMAKE_MODULE_LINKER_FLAGS "-Wl,--as-needed ${CMAKE_MODULE_LINKER_FLAGS}")
++set(CMAKE_SHARED_LINKER_FLAGS "-Wl,-dead_strip_dylibs ${CMAKE_SHARED_LINKER_FLAGS}")
++set(CMAKE_MODULE_LINKER_FLAGS "-Wl,-dead_strip_dylibs ${CMAKE_MODULE_LINKER_FLAGS}")
+ add_definitions("-D_GNU_SOURCE -DFCITX_HAVE_CONFIG_H")
+ 
+ configure_file(${PROJECT_SOURCE_DIR}/config.h.in ${PROJECT_BINARY_DIR}/config.h)
+--- a/cmake/FindLua.cmake	1658865722.000000000
++++ b/cmake/FindLua.cmake	1700897152.058267883
+@@ -42,11 +42,6 @@ if("${LUA_MODULE_NAME}" STREQUAL "")
+     unset(__pkg_config_checked_LUA CACHE)
+     pkg_check_modules(LUA lua)
+   endif()
+-  # Too lazy to increase indentation...
+-  if(NOT LUA_FOUND)
+-    unset(__pkg_config_checked_LUA CACHE)
+-    pkg_check_modules(LUA lua5.1)
+-  endif()
+ else()
+   pkg_check_modules(LUA "${LUA_MODULE_NAME}")
+ endif()
+--- a/src/core/fcitx.c	1658865722.000000000
++++ b/src/core/fcitx.c	1700901480.153045820
+@@ -28,7 +28,12 @@
+ 
+ #include <locale.h>
+ #include <libintl.h>
++#ifndef __APPLE__
+ #include <semaphore.h>
++#else
++#define sem_t semaphore_t
++#include <mach/semaphore.h>
++#endif
+ #include <fcntl.h>
+ 
+ #ifdef HAVE_UNISTD_H
+--- a/src/frontend/gtk2/CMakeLists.txt	1658865722.000000000
++++ b/src/frontend/gtk2/CMakeLists.txt	1700898191.584289876
+@@ -29,7 +29,7 @@ set(FCITX_GTK2_IM_MODULE_SOURCES ${FCITX
+ 
+ add_library(im-fcitx MODULE ${FCITX_GTK2_IM_MODULE_SOURCES})
+ set_target_properties( im-fcitx PROPERTIES PREFIX ""
+-  COMPILE_FLAGS "-fvisibility=hidden" LINK_FLAGS "-Wl,--no-undefined")
++  COMPILE_FLAGS "-fvisibility=hidden" LINK_FLAGS "-Wl,-undefined,error")
+ target_link_libraries(im-fcitx XKBCommon::XKBCommon ${GTK2_LIBRARIES} ${GIO2_LIBRARIES}
+     fcitx-gclient fcitx-utils)
+ install(TARGETS im-fcitx DESTINATION "${GTK2_IM_MODULEDIR}")
+--- a/src/frontend/gtk3/CMakeLists.txt	1658865722.000000000
++++ b/src/frontend/gtk3/CMakeLists.txt	1700898191.523194118
+@@ -24,7 +24,7 @@ set(FCITX_GTK3_IM_MODULE_SOURCES
+ add_library(im-fcitx-gtk3 MODULE ${FCITX_GTK3_IM_MODULE_SOURCES})
+ set_target_properties( im-fcitx-gtk3 PROPERTIES PREFIX ""
+   COMPILE_FLAGS "-fvisibility=hidden" OUTPUT_NAME "im-fcitx"
+-  LINK_FLAGS "-Wl,--no-undefined")
++  LINK_FLAGS "-Wl,-undefined,error")
+ 
+ target_link_libraries(im-fcitx-gtk3 XKBCommon::XKBCommon ${GTK3_LIBRARIES} ${GIO2_LIBRARIES}
+     fcitx-gclient fcitx-utils)
+--- a/src/frontend/qt/CMakeLists.txt	1658865722.000000000
++++ b/src/frontend/qt/CMakeLists.txt	1700898191.409198106
+@@ -51,7 +51,7 @@ add_library(
+ set_target_properties(qtim-fcitx PROPERTIES
+   PREFIX ""
+   COMPILE_FLAGS "-fvisibility=hidden"
+-  LINK_FLAGS "-Wl,--no-undefined"
++  LINK_FLAGS "-Wl,-undefined,error"
+   CXX_STANDARD 11
+   AUTOMOC TRUE)
+ 
+--- a/src/lib/fcitx/CMakeLists.txt	1658865722.000000000
++++ b/src/lib/fcitx/CMakeLists.txt	1700898193.186333732
+@@ -50,7 +50,7 @@ set_target_properties(fcitx-core
+   PROPERTIES VERSION 0.3
+   SOVERSION 0
+   COMPILE_FLAGS "-fvisibility=hidden"
+-  LINK_FLAGS "-Wl,--no-undefined")
++  LINK_FLAGS "-Wl,-undefined,error")
+ 
+ configure_file(fcitx.pc.in ${CMAKE_CURRENT_BINARY_DIR}/fcitx.pc)
+ 
+--- a/src/lib/fcitx/instance-internal.h	1658865722.000000000
++++ b/src/lib/fcitx/instance-internal.h	1700901443.804968737
+@@ -27,8 +27,12 @@
+ 
+ #include <sys/stat.h>
+ #include <pthread.h>
++#ifndef __APPLE__
+ #include <semaphore.h>
+-
++#else
++#define sem_t semaphore_t
++#include <mach/semaphore.h>
++#endif
+ #include "fcitx-utils/utarray.h"
+ #include "fcitx-utils/utils.h"
+ #include "ui-internal.h"
+--- a/src/lib/fcitx/instance.c	1658865722.000000000
++++ b/src/lib/fcitx/instance.c	1700900899.212331542
+@@ -25,7 +25,9 @@
+ #include <limits.h>
+ #include <libintl.h>
+ #include <pthread.h>
++#ifndef __APPLE__
+ #include <semaphore.h>
++#endif
+ #include <getopt.h>
+ #include <sys/time.h>
+ #include <signal.h>
+@@ -48,6 +50,42 @@
+ #include "addon-internal.h"
+ #include "setjmp.h"
+ 
++#ifdef __APPLE__
++#include <mach/mach_init.h>
++#include <mach/mach_error.h>
++#include <mach/semaphore.h>
++#include <mach/task.h>
++#include <err.h>
++#define sem_t semaphore_t
++#define sem_init fcitx_sem_init
++#define sem_destroy fcitx_sem_destroy
++#define	sem_wait(sp)	semaphore_wait(*(sp))
++#define	sem_post(sp)	semaphore_signal(*(sp))
++int
++sem_init(semaphore_t *sem, int pshared __unused, unsigned int value)
++{
++	mach_port_t self;
++	kern_return_t ret;
++
++	self = mach_task_self();
++	ret = semaphore_create(self, sem, SYNC_POLICY_FIFO, value);
++	if (ret != KERN_SUCCESS)
++		err(2, NULL);
++	return (0);
++}
++
++int
++sem_destroy(semaphore_t *sem)
++{
++	mach_port_t self;
++	kern_return_t ret;
++
++	self = mach_task_self();
++	ret = semaphore_destroy(self, *sem);
++	return (ret == KERN_SUCCESS ? 0 : 1);
++}
++#endif
++
+ #define CHECK_ENV(env, value, icase) (!getenv(env) \
+                                       || (icase ? \
+                                               (0 != strcmp(getenv(env), (value))) \
+--- a/src/lib/fcitx/instance.h	1658865722.000000000
++++ b/src/lib/fcitx/instance.h	1700901058.504349279
+@@ -27,7 +27,12 @@
+ #define __FCITX_INSTANCE_H__
+ 
+ #include <pthread.h>
++#ifndef __APPLE__
+ #include <semaphore.h>
++#else
++#include <mach/semaphore.h>
++#define sem_t semaphore_t
++#endif
+ #include <sys/select.h>
+ #include <fcitx/ui.h>
+ #include <fcitx-utils/utarray.h>
+--- a/src/lib/fcitx-config/CMakeLists.txt	1658865722.000000000
++++ b/src/lib/fcitx-config/CMakeLists.txt	1700898193.244920594
+@@ -22,7 +22,7 @@ set_target_properties(fcitx-config
+   PROPERTIES VERSION 4.1
+   SOVERSION 4
+   COMPILE_FLAGS "-fvisibility=hidden"
+-  LINK_FLAGS "-Wl,--no-undefined"
++  LINK_FLAGS "-Wl,-undefined,error"
+   )
+ 
+ configure_file(fcitx-config.pc.in ${CMAKE_CURRENT_BINARY_DIR}/fcitx-config.pc)
+--- a/src/lib/fcitx-gclient/CMakeLists.txt	1658865722.000000000
++++ b/src/lib/fcitx-gclient/CMakeLists.txt	1700898193.421764112
+@@ -52,7 +52,7 @@ set_target_properties(fcitx-gclient
+   PROPERTIES VERSION 0.2
+   SOVERSION 1
+   COMPILE_FLAGS "-fvisibility=hidden"
+-  LINK_FLAGS "-Wl,--no-undefined")
++  LINK_FLAGS "-Wl,-undefined,error")
+ target_link_libraries(fcitx-gclient ${GIO2_LIBRARIES}
+   ${DBUS_LIBRARIES} fcitx-utils)
+ configure_file(fcitx-gclient.pc.in ${CMAKE_CURRENT_BINARY_DIR}/fcitx-gclient.pc)
+--- a/src/lib/fcitx-qt/CMakeLists.txt	1658865722.000000000
++++ b/src/lib/fcitx-qt/CMakeLists.txt	1700898193.127892157
+@@ -57,7 +57,7 @@ set_target_properties(fcitx-qt
+                       PROPERTIES VERSION 0.1
+                       SOVERSION 0
+                       COMPILE_FLAGS "-fvisibility=hidden"
+-                      LINK_FLAGS "-Wl,--no-undefined"
++                      LINK_FLAGS "-Wl,-undefined,error"
+                       AUTOMOC TRUE
+ )
+ 
+--- a/src/lib/fcitx-utils/CMakeLists.txt	1658865722.000000000
++++ b/src/lib/fcitx-utils/CMakeLists.txt	1700898193.304039609
+@@ -38,7 +38,7 @@ set_target_properties(fcitx-utils
+   PROPERTIES VERSION 0.1
+   SOVERSION 0
+   COMPILE_FLAGS "-fvisibility=hidden"
+-  LINK_FLAGS "-Wl,--no-undefined"
++  LINK_FLAGS "-Wl,-undefined,error"
+   )
+ target_link_libraries(fcitx-utils ${LIBINTL_LIBRARIES}
+   ${LIBICONV_LIBRARIES} ${LIBEXECINFO_LIBRARIES})
+--- a/src/lib/fcitx-utils/utils.c	1658865722.000000000
++++ b/src/lib/fcitx-utils/utils.c	1700735976.555657367
+@@ -547,7 +547,9 @@ char* fcitx_utils_get_process_name()
+         result = strdup("");
+     return result;
+ #else
+-    return strdup("");
++    /* Torrekie: Things can be simpler, isn't it? */
++    extern char *__progname;
++    return strdup(__progname);
+ #endif
+ }
+ 
+--- a/src/lib/fcitx-utils/utils.h	1658865722.000000000
++++ b/src/lib/fcitx-utils/utils.h	1700899849.727321168
+@@ -66,12 +66,15 @@
+ #include <fcitx-utils/utarray.h>
+ #include <fcitx-utils/uthash.h>
+ #include <sys/stat.h>
++#ifdef __APPLE__
++#include <stdbool.h>
++#endif
+ 
+ /**
+  * fcitx boolean
+  **/
+ typedef int32_t boolean;
+-#if !defined(__cplusplus) && !defined(FCITX_DONOT_DEFINE_TRUE_FALSE)
++#if !defined(__cplusplus) && !defined(FCITX_DONOT_DEFINE_TRUE_FALSE) && !defined(__APPLE__)
+ /**
+  * fcitx true
+  */
+--- a/src/module/lua/CMakeLists.txt	1658865722.000000000
++++ b/src/module/lua/CMakeLists.txt	1700898192.299527874
+@@ -1,5 +1,5 @@
+ if(ENABLE_LUA)
+-  find_package(Lua 5.1 REQUIRED)
++  find_package(Lua 5.2)
+   include_directories(${LUA_INCLUDE_DIRS})
+   set(lua_noinstall)
+ else()

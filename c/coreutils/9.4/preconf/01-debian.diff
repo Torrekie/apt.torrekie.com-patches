@@ -1,0 +1,38 @@
+--- a/src/id.c
++++ b/src/id.c
+@@ -416,6 +416,10 @@ print_full_info (const char *username)
+         ok &= false;
+         return;
+       }
++    else if (sysconf(_SC_NGROUPS_MAX) > 0 && n_groups > sysconf(_SC_NGROUPS_MAX))
++      {
++        fprintf (stderr, _("Warning: user %s is in more groups than system's configured maximum.\n"), (username != NULL)?username:"");
++      }
+ 
+     if (n_groups > 0)
+       fputs (_(" groups="), stdout);
+--- a/src/cp.c	2024-01-02 08:48:03.483257638 -0500
++++ b/src/cp.c	2024-01-02 08:49:03.994219898 -0500
+@@ -192,8 +192,9 @@
+   -L, --dereference            always follow symbolic links in SOURCE\n\
+ "), stdout);
+       fputs (_("\
+-  -n, --no-clobber             do not overwrite an existing file (overrides a\n\
+-                                 -u or previous -i option). See also --update\n\
++  -n, --no-clobber             do not overwrite an existing file and do not fail\n\
++                                 (overrides a -u or previous -i option). See also\n\
++                                 --update; equivalent to --update=none.\n\
+ "), stdout);
+       fputs (_("\
+   -P, --no-dereference         never follow symbolic links in SOURCE\n\
+@@ -1067,7 +1068,9 @@
+           break;
+ 
+         case 'n':
+-          x.interactive = I_ALWAYS_NO;
++          x.interactive = I_ALWAYS_SKIP;
++          x.update = false;
++          error (0, 0, _("warning: behavior of -n is non-portable and may change in future; use --update=none instead"));
+           break;
+ 
+         case 'P':

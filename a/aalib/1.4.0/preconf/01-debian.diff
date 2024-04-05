@@ -1,0 +1,328 @@
+--- a/Makefile.am	988295872.000000000
++++ b/Makefile.am	1709797977.438508965
+@@ -1,5 +1,7 @@
+ #AUTOMAKE_OPTIONS = foreign #include-deps
+-SUBDIRS=src man doc
++# Debian mod: don't autorecurse to doc directory; debian/rules runs its
++# targets seperatly.
++SUBDIRS=src man
+ EXTRA_DIST = README.OS2 ANNOUNCE aalib.lsm acconfig.h aalib.m4
+ bin_SCRIPTS = aalib-config
+ m4datadir = $(datadir)/aclocal
+--- a/aalib-config.in	988295851.000000000
++++ b/aalib-config.in	1709797977.439404527
+@@ -5,7 +5,7 @@ exec_prefix=@exec_prefix@
+ exec_prefix_set=no
+ 
+ usage="\
+-Usage: aalib-config [--prefix[=DIR]] [--exec-prefix[=DIR]] [--version] [--libs] [--cflags]"
++Usage: aalib-config [--prefix[=DIR]] [--exec-prefix[=DIR]] [--version] [--libs] [--static-libs] [--cflags]"
+ 
+ if test $# -eq 0; then
+       echo "${usage}" 1>&2
+@@ -49,11 +49,14 @@ while test $# -gt 0; do
+       ;;
+ @ENABLE_SHARED_TRUE@    --libs)
+ @ENABLE_SHARED_TRUE@      libdirs="-L@libdir@ @AALIB_RLD_FLAGS@"
+-@ENABLE_SHARED_TRUE@      echo $libdirs @AALIB_LIBS@
++@ENABLE_SHARED_TRUE@      echo $libdirs -laa
+ @ENABLE_SHARED_TRUE@      ;;
+ @ENABLE_STATIC_TRUE@@ENABLE_SHARED_TRUE@    --static-libs)
+ @ENABLE_STATIC_TRUE@@ENABLE_SHARED_FALSE@    --libs|--static-libs)
+ @ENABLE_STATIC_TRUE@      libdirs="-L@libdir@ @AALIB_RLD_FLAGS@"
++@ENABLE_STATIC_TRUE@      if [ "`uname -s`" = Linux ]; then
++@ENABLE_STATIC_TRUE@          printf "%s" "-lgpm "
++@ENABLE_STATIC_TRUE@      fi
+ @ENABLE_STATIC_TRUE@      echo $libdirs @AALIB_LIBS@ 
+ @ENABLE_STATIC_TRUE@      ;;
+     *)
+--- a/aalib.m4	988295851.000000000
++++ b/aalib.m4	1709797977.439779268
+@@ -9,7 +9,7 @@
+ dnl AM_PATH_AALIB([MINIMUM-VERSION, [ACTION-IF-FOUND [, ACTION-IF-NOT-FOUND]]])
+ dnl Test for AALIB, and define AALIB_CFLAGS and AALIB_LIBS
+ dnl
+-AC_DEFUN(AM_PATH_AALIB,
++AC_DEFUN([AM_PATH_AALIB],
+ [dnl 
+ dnl Get the cflags and libraries from the aalib-config script
+ dnl
+--- a/configure.in	988295873.000000000
++++ b/configure.in	1709797977.440497417
+@@ -1,8 +1,7 @@
+-include(aclocal.m4)
+ AC_INIT(src/aalib.c)
+-AM_INIT_AUTOMAKE(aalib,1.4.0)
+ AC_CANONICAL_HOST
+ AC_CANONICAL_TARGET
++AM_INIT_AUTOMAKE(aalib,1.4.0)
+ 
+ AM_CONFIG_HEADER(src/config.h)
+ 
+@@ -92,7 +91,8 @@ AC_ARG_WITH(gpm-mouse,
+                 AC_DEFINE(GPM_MOUSEDRIVER)
+ 	        gpm_mousedriver=true
+ 		CFLAGS="$CFLAGS -I$withval/include"
+-	        AALIB_LIBS="$AALIB_LIBS -L$withval/lib -lgpm"
++dnl See Debian hack below for explination.
++dnl	        AALIB_LIBS="$AALIB_LIBS -L$withval/lib -lgpm"
+ 		AC_MSG_RESULT(defining use_gpm)
+ 	fi
+ )
+@@ -113,7 +113,13 @@ if test  "$gpm_mousedriver_test" = yes;
+   AC_CHECK_LIB(gpm, Gpm_Repeat,[
+           AC_DEFINE(GPM_MOUSEDRIVER)
+ 	  gpm_mousedriver=true
+-	  AALIB_LIBS="$AALIB_LIBS -lgpm"
++dnl Debian hack: Don't bother putting gpm on the libs list, so aalib-config
++dnl will not require programs link with gpm. Since aalib itself links to
++dnl gpm, gpm support is still pulled in for client programs, but they need
++dnl not build-depend on it. This means that the -dev package need not
++dnl depend on libgpm1g-dev, which is a good thing since gpm support is not
++dnl available at all on some platforms like the hurd.
++dnl	  AALIB_LIBS="$AALIB_LIBS -lgpm"
+           LIBS="$LIBS -lgpm"])
+ fi
+ 
+@@ -373,9 +379,9 @@ esac
+ 
+ # Set runtime shared library paths as needed
+ 
+-if test $ARCH = linux -o $ARCH = freebsd -o $ARCH = bsdi; then
+-  AALIB_RLD_FLAGS="-Wl,-rpath,\${exec_prefix}/lib"
+-fi
++#if test $ARCH = linux -o $ARCH = freebsd -o $ARCH = bsdi; then
++#  AALIB_RLD_FLAGS="-Wl,-rpath,\${exec_prefix}/lib"
++#fi
+ 
+ if test $ARCH = solaris; then
+   AALIB_RLD_FLAGS="-R\${exec_prefix}/lib"
+--- a/doc/aalib.texinfo	988295851.000000000
++++ b/doc/aalib.texinfo	1709797978.650617789
+@@ -8,7 +8,7 @@
+ @settitle An ascii-art library
+ @dircategory Libraries
+ @direntry
+- * AA-lib: (aalib).              An ASCII-art graphics library
++* AA-lib: (aalib).              An ASCII-art graphics library
+ @end direntry
+ 
+ 
+@@ -29,11 +29,11 @@ this permission notice are preserved on
+ 
+ @titlepage
+ 
+-@title{AA-lib @value{VERSION}}
+-@subtitle{An ascii-art library}
+-@subtitle{API-DESCRIPTION}
++@title AA-lib @value{VERSION}
++@subtitle An ascii-art library
++@subtitle API-DESCRIPTION
+ 
+-@author{Jan Hubi@v cka & Kamil Toman}
++@author Jan Hubi@v cka & Kamil Toman
+ @tex
+ Dukelsk\'ych bojovn\'\i ku 1944 
+ @end tex
+@@ -1318,7 +1318,7 @@ To write new driver is quite easy. You n
+ functions (like initialization, drawing to screen etc...) and register it in
+ the driver registry. There is separate drivers for screen, mouse and keyboard.
+ 
+-@subsection Display driver
++@section Display driver
+ Display driver is the most significant driver (of course) so it is recomended
+ to implement it first. Its structure is as follows:
+ 
+--- a/man/aafire.1	988295851.000000000
++++ b/man/aafire.1	1709797973.804758055
+@@ -23,10 +23,10 @@ and
+ programs.
+ .PP
+ All of these programs exist to demonstrate the capabilities of the aalib
+-library, an ascii art library.
++library, an ASCII art library.
+ .PP
+ .B aafire
+-displays burning ascii art flames.
++displays burning ASCII art flames.
+ .PP
+ .B aainfo
+ displays information about what drivers aalib will use for the display,
+@@ -38,6 +38,24 @@ saves a font to a file.
+ .PP
+ .B aatest
+ tests the capabilities of aalib.
++.SH BUGS
++Please report any bugs you find to Jan Hubicka <hubicka@freesoft.cz>.
++.SH LICENSE
++.BR aafire ,
++.BR aainfo ,
++.BR aasavefont ,
++and 
++.BR aatest
++are all covered by the GNU Lesser General Public License (LGPL).
+ .SH AUTHOR
++Jan Hubicka <hubicka@freesoft.cz>
++.PP
+ This manual page was written by Joey Hess,
+ for the Debian GNU/Linux system.
++.SH SEE ALSO
++.BR bb (1),
++.BR aatv (1),
++.BR aview (1),
++.BR asciiview (1),
++.BR aaflip (1),
++.BR xaos (6).
+--- a/src/aacurkbd.c	988297432.000000000
++++ b/src/aacurkbd.c	1709797973.198545605
+@@ -112,7 +112,7 @@ static int curses_getchar(aa_context * c
+ 	return (AA_UP);
+     case KEY_DOWN:
+ 	return (AA_DOWN);
+-#ifdef KEY_MOUDE
++#ifdef KEY_MOUSE
+     case KEY_MOUSE:
+ #ifdef GPM_MOUSEDRIVER
+ 	if (!__curses_usegpm)
+--- a/src/aacurses.c	988295851.000000000
++++ b/src/aacurses.c	1709797981.098483254
+@@ -36,8 +36,14 @@ static int curses_init(__AA_CONST struct
+     dest->supported=AA_NORMAL_MASK;
+ #ifdef HAVE_TERMATTRS
+     a = termattrs();
+-    if (a & A_DIM)
++    if (has_colors()) {
++	start_color();
++	init_pair(1, COLOR_BLACK, COLOR_BLACK);
+ 	dest->supported |= AA_DIM_MASK;
++    } else {
++	if (a & A_DIM)
++	    dest->supported |= AA_DIM_MASK;
++    }
+     if (a & A_BOLD)
+ 	dest->supported |= AA_BOLD_MASK;
+     if (a & A_BOLD)
+@@ -71,8 +77,7 @@ static void curses_getsize(aa_context *
+ {
+     if (__resized_curses)
+ 	curses_uninit(c), curses_init(&c->params, NULL,&c->driverparams, NULL), __resized_curses = 0;
+-    *width = stdscr->_maxx + 1;
+-    *height = stdscr->_maxy + 1;
++    getmaxyx(stdscr, *width, *height);
+ #ifdef GPM_MOUSEDRIVER
+     gpm_mx = *width;
+     gpm_my = *height;
+@@ -86,7 +91,12 @@ static void curses_setattr(aa_context *
+ 	attrset(A_NORMAL);
+ 	break;
+     case AA_DIM:
+-	attrset(A_DIM);
++	if (has_colors()) {
++	    attrset(A_BOLD);
++	    attron(COLOR_PAIR(1));
++	} else {
++	    attrset(A_DIM);
++	}
+ 	break;
+     case AA_BOLD:
+ 	attrset(A_BOLD);
+--- a/src/aahelp.c	988295851.000000000
++++ b/src/aahelp.c	1709797979.878982729
+@@ -98,9 +98,9 @@ __AA_CONST char * __AA_CONST aa_help =
+ "Monitor parameters:\n"
+ "  -dimmul <val>  multiply factor for dim color (5.3)\n"
+ "  -boldmul <val> multiply factor for dim color (2.7)\n"
+-"  The default parameters are set to fit my monitor (15\" goldstar)\n"
+-"  With contrast set to maximum and bright set to make black black\n"
+-"  This values depends at quality of your monitor (and setting of controls\n"
+-"  Defaultd settings should be OK for most PC monitors. But ideal monitor\n"
+-"  Needs dimmul=1.71 boldmul=1.43. For example monitor used by SGI is very\n"
+-"  close to this values. Also old 14\" vga monitors needs higher values.\n";
++"  The default parameters are based on my 15\" Goldstar monitor,)\n"
++"  With contrast set to maximum, and brightness to the minimum.\n"
++"  This values depend on your particular monitor and how the controls are set.\n"
++"  Default settings should be OK for most PC monitors, but an ideal monitor\n"
++"  needs dimmul=1.71 boldmul=1.43. SGI monitors, for example, are very\n"
++"  close to this values. Old 14\" VGA monitors need higher values.\n";
+--- a/src/aalinux.c	988296236.000000000
++++ b/src/aalinux.c	1709797974.409836116
+@@ -91,7 +91,7 @@ linux_init (__AA_CONST struct aa_hardwar
+       sprintf (fname, "/dev/vcsa%i", vt);
+       vc[0] = fopen (fname, "w+");
+       if (vc[0] == NULL)
+-	vc[0] = fopen (tmp, "w"), readonly = 1;
++	vc[0] = fopen (fname, "w"), readonly = 1;
+       nvcs = 1;
+     }
+   if (vc[0] == NULL)
+--- a/src/aalinuxkbd.c	988295851.000000000
++++ b/src/aalinuxkbd.c	1709797979.271602973
+@@ -200,7 +200,7 @@ static void vt_to_here(int num)
+ static int rawmode_init(void)
+ {
+     if (!closed)
+-	return;
++       return (1);
+     mypid = getpid();
+     if (tty_fd == -1) {
+ 	tty_fd = fileno(stdin);
+--- a/src/aasave.c	988295874.000000000
++++ b/src/aasave.c	1709797980.483534510
+@@ -28,7 +28,7 @@ __AA_CONST struct aa_format aa_nhtml_for
+     0,
+     AA_NORMAL_MASK | AA_BOLD_MASK | AA_BOLDFONT_MASK | AA_DIM_MASK,
+     &aa_fontcourier,
+-    "Nestcapeized html",
++    "Netscapeized html",
+     ".html",
+     "<HTML>\n<HEAD><TITLE>Ascii arted image done using aalib</TITLE>\n</HEAD>\n<BODY BGCOLOR=\"#000000\" TEXT=\"#b2b2b2\" LINK=\"#FFFFFF\">\n<FONT COLOR=#b2b2b2 SIZE=2><PRE>\n",
+     "</PRE></FONT></BODY>\n</HTML>\n",
+@@ -270,13 +270,13 @@ __AA_CONST struct aa_format aa_roff_form
+     NORMALPRINTS,
+     {"",
+      "",
+-     "\n.B ",
++     "\\fB",
+      "",
+      ""
+     },
+     {"",
+      "",
+-     "\n",
++     "\\fP",
+      "",
+      ""
+     },
+--- a/src/aaslnkbd.c	988297424.000000000
++++ b/src/aaslnkbd.c	1709797978.043401030
+@@ -76,6 +76,7 @@ static int slang_getchar(aa_context * c1
+ #endif
+     struct timeval tv;
+     fd_set readfds;
++    int evflag;
+ 
+     if (wait) {
+ 	setjmp(buf);
+@@ -124,7 +125,10 @@ static int slang_getchar(aa_context * c1
+ 	    return (AA_NONE);
+ 	}
+ 	if ((gpm_fd > -1) && (FD_ISSET(gpm_fd, &readfds))) {
+-	    if (Gpm_GetEvent(&ev) && gpm_handler
++	    evflag = Gpm_GetEvent(&ev);
++	    if ( evflag < 0 )
++		return AA_NONE;
++	    if ( evflag == 1 && gpm_handler
+ 		&& ((*gpm_handler) (&ev, gpm_data))) {
+ 		gpm_hflag = 1;
+ 		return AA_MOUSE;
+--- a/src/aastdin.c	988295851.000000000
++++ b/src/aastdin.c	1709797973.198952804
+@@ -88,7 +88,7 @@ static int stdin_getchar(aa_context * c1
+     if (c > 0 && c < 127 && c != 127)
+ 	return (c);
+     switch (c) {
+-#ifdef KEY_MOUDE
++#ifdef KEY_MOUSE
+     case KEY_MOUSE:
+ 	return AA_MOUSE
+ #endif

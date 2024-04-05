@@ -1,0 +1,84 @@
+--- a/src/Makefile	1631263846.000000000
++++ b/src/Makefile	1709456924.344039729
+@@ -15,8 +15,8 @@ INSTALL_BINARY_DIR	=	/usr/bin/
+ 
+ INCLUDES	=	-I.
+ LIBRARIES	=	-ldl -lm -lsndfile
+-CFLAGS		=	$(INCLUDES) -Wall -Werror -O2 -fPIC 		\
+-			-DDEFAULT_LADSPA_PATH=$(INSTALL_PLUGINS_DIR)
++MANDATORY	=	$(INCLUDES) -fPIC -DDEFAULT_LADSPA_PATH=$(INSTALL_PLUGINS_DIR)
++CFLAGS		?=	-Wall -Werror -O2
+ BINFLAGS	=	-fPIE -pie
+ CXXFLAGS	=	$(CFLAGS)
+ PLUGINS		=	../plugins/amp.so				\
+@@ -27,8 +27,8 @@ PLUGINS		=	../plugins/amp.so				\
+ PROGRAMS	=	../bin/analyseplugin				\
+ 			../bin/applyplugin 				\
+ 			../bin/listplugins
+-CC		=	cc
+-CPP		=	c++
++CC		?=	cc
++CXX		?=	c++
+ 
+ ###############################################################################
+ #
+@@ -36,26 +36,20 @@ CPP		=	c++
+ #
+ 
+ ../plugins/%.so:	plugins/%.c ladspa.h gcc_exports.map
+-	$(CC) $(CFLAGS) -o plugins/$*.o -c plugins/$*.c
++	$(CC) $(MANDATORY) $(CPPFLAGS) $(CFLAGS) -o plugins/$*.o -c plugins/$*.c
+ 	$(CC)	-o ../plugins/$*.so					\
+ 		plugins/$*.o						\
+ 		-shared							\
+-		$(CFLAGS)						\
+-		-fvisibility=hidden					\
+-		-fvisibility-inlines-hidden				\
+-		-s							\
+-		-Wl,--version-script=gcc_exports.map			
++		$(CFLAGS)
+ 
+ ../plugins/%.so:	plugins/%.cpp ladspa.h gcc_exports.map
+-	$(CPP) $(CXXFLAGS) -o plugins/$*.o -c plugins/$*.cpp
+-	$(CPP)	-o ../plugins/$*.so					\
++	$(CXX) $(MANDATORY) $(CPPFLAGS) $(CXXFLAGS) -o plugins/$*.o -c plugins/$*.cpp
++	$(CXX)	-o ../plugins/$*.so					\
+ 		plugins/$*.o						\
+ 		-shared							\
+-		$(CXXFLAGS)						\
+-		-fvisibility=hidden					\
+-		-fvisibility-inlines-hidden				\
+-		-s							\
+-		-Wl,--version-script=gcc_exports.map			
++		$(MANDATORY)						\
++		$(LDFLAGS)						\
++		$(LIBRARIES)
+ 
+ ###############################################################################
+ #
+@@ -109,19 +103,22 @@ targets:	$(PLUGINS) $(PROGRAMS)
+ 	$(CC) $(CFLAGS) $(BINFLAGS)					\
+ 		-o ../bin/applyplugin					\
+ 		applyplugin.o load.o default.o				\
+-		$(LIBRARIES)
++		$(LIBRARIES)						\
++		$(LDFLAGS)
+ 
+ ../bin/analyseplugin:	analyseplugin.o load.o default.o
+ 	$(CC) $(CFLAGS) $(BINFLAGS)					\
+ 		-o ../bin/analyseplugin 				\
+ 		analyseplugin.o load.o default.o			\
+-		$(LIBRARIES)
++		$(LIBRARIES)						\
++		$(LDFLAGS)
+ 
+ ../bin/listplugins:	listplugins.o search.o
+ 	$(CC) $(CFLAGS) $(BINFLAGS)					\
+ 		-o ../bin/listplugins	 				\
+ 		listplugins.o search.o					\
+-		$(LIBRARIES)
++		$(LIBRARIES)						\
++		$(LDFLAGS)
+ 
+ ###############################################################################
+ #

@@ -1,0 +1,3 @@
+LDFLAGS="-Wl,-dead_strip_dylibs"
+# I'm lazy to patch this now
+CFLAGS="-Wno-implicit-function-declaration"

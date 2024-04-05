@@ -1,0 +1,460 @@
+--- a/configure	1703981246.000000000
++++ b/configure	1711355331.421997564
+@@ -3936,8 +3936,8 @@ host_cc_default="gcc"
+ doxygen_default="doxygen"
+ install="install"
+ ln_s_default="ln -s -f"
+-metalcc_default="xcrun -sdk macosx metal"
+-metallib_default="xcrun -sdk macosx metallib"
++metalcc_default="metal"
++metallib_default="metallib"
+ nm_default="nm -g"
+ pkg_config_default=pkg-config
+ ranlib_default="ranlib"
+@@ -6705,11 +6705,11 @@ enabled libfreetype       && require_pkg
+ enabled libfribidi        && require_pkg_config libfribidi fribidi fribidi.h fribidi_version_info
+ enabled libharfbuzz       && require_pkg_config libharfbuzz harfbuzz hb.h hb_buffer_create
+ enabled libglslang && { check_lib spirv_compiler glslang/Include/glslang_c_interface.h glslang_initialize_process \
+-                            -lglslang -lMachineIndependent -lOSDependent -lHLSL -lOGLCompiler -lGenericCodeGen \
++                            -lglslang -lMachineIndependent -lGenericCodeGen \
+                             -lSPVRemapper -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lpthread -lstdc++ -lm ||
+                         require spirv_compiler glslang/Include/glslang_c_interface.h glslang_initialize_process \
+-                            -lglslang -lOSDependent -lHLSL -lOGLCompiler \
+-                            -lSPVRemapper -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lpthread -lstdc++ -lm; }
++                            -lglslang -lMachineIndependent -lOSDependent -lHLSL -lOGLCompiler -lGenericCodeGen \
++                            -lSPVRemapper -lSPIRV -lSPIRV-Tools-opt -lSPIRV-Tools -lpthread -lstdc++ -lm ; }
+ enabled libgme            && { check_pkg_config libgme libgme gme/gme.h gme_new_emu ||
+                                require libgme gme/gme.h gme_new_emu -lgme -lstdc++; }
+ enabled libgsm            && { for gsm_hdr in "gsm.h" "gsm/gsm.h"; do
+@@ -6868,11 +6868,13 @@ enabled mmal              && { check_lib
+                                  check_lib mmal interface/mmal/mmal.h mmal_port_connect -lmmal_core -lmmal_util -lmmal_vc_client -lbcm_host; } ||
+                                die "ERROR: mmal not found" &&
+                                check_func_headers interface/mmal/mmal.h "MMAL_PARAMETER_VIDEO_MAX_NUM_CALLBACKS"; }
+-enabled openal            && { check_pkg_config openal "openal >= 1.1" "AL/al.h" alGetError ||
++enabled openal            && { check_lib openal OpenAL/al.h alGetError -Wl,-framework,OpenAL ||
++                               check_pkg_config openal "openal >= 1.1" "AL/al.h" alGetError ||
+                                { for al_extralibs in "${OPENAL_LIBS}" "-lopenal" "-lOpenAL32"; do
+                                check_lib openal 'AL/al.h' alGetError "${al_extralibs}" && break; done } ||
+                                die "ERROR: openal not found"; } &&
+-                             { test_cpp_condition "AL/al.h" "defined(AL_VERSION_1_1)" ||
++                             { test_cpp_condition "OpenAL/al.h" "defined(AL_VERSION_1_1)" ||
++                               test_cpp_condition "AL/al.h" "defined(AL_VERSION_1_1)" ||
+                                die "ERROR: openal must be installed and version must be 1.1 or compatible"; }
+ enabled opencl            && { check_pkg_config opencl OpenCL CL/cl.h clEnqueueNDRangeKernel ||
+                                check_lib opencl OpenCL/cl.h clEnqueueNDRangeKernel -Wl,-framework,OpenCL ||
+--- a/libavcodec/audiotoolboxdec.c	1699662317.000000000
++++ b/libavcodec/audiotoolboxdec.c	1711185509.694826695
+@@ -35,10 +35,6 @@
+ #include "libavutil/opt.h"
+ #include "libavutil/log.h"
+ 
+-#if __MAC_OS_X_VERSION_MIN_REQUIRED < 101100
+-#define kAudioFormatEnhancedAC3 'ec-3'
+-#endif
+-
+ typedef struct ATDecodeContext {
+     AVClass *av_class;
+ 
+@@ -71,12 +67,10 @@ static UInt32 ffat_get_format_id(enum AV
+         return kAudioFormatAMR;
+     case AV_CODEC_ID_EAC3:
+         return kAudioFormatEnhancedAC3;
+-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+     case AV_CODEC_ID_GSM_MS:
+         return kAudioFormatMicrosoftGSM;
+     case AV_CODEC_ID_ILBC:
+         return kAudioFormatiLBC;
+-#endif
+     case AV_CODEC_ID_MP1:
+         return kAudioFormatMPEGLayer1;
+     case AV_CODEC_ID_MP2:
+--- a/libavcodec/audiotoolboxenc.c	1699662317.000000000
++++ b/libavcodec/audiotoolboxenc.c	1711185471.190787541
+@@ -38,6 +38,9 @@
+ #include "libavutil/opt.h"
+ #include "libavutil/log.h"
+ 
++// Torrekie: Hack to test if those working on iOS
++#define IOS_DISABLE_RC 0
++
+ typedef struct ATDecodeContext {
+     AVClass *av_class;
+     int mode;
+@@ -69,19 +72,15 @@ static UInt32 ffat_get_format_id(enum AV
+             return kAudioFormatMPEG4AAC_HE_V2;
+         case AV_PROFILE_AAC_LD:
+             return kAudioFormatMPEG4AAC_LD;
+-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+         case AV_PROFILE_AAC_ELD:
+             return kAudioFormatMPEG4AAC_ELD;
+-#endif
+         }
+     case AV_CODEC_ID_ADPCM_IMA_QT:
+         return kAudioFormatAppleIMA4;
+     case AV_CODEC_ID_ALAC:
+         return kAudioFormatAppleLossless;
+-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1060
+     case AV_CODEC_ID_ILBC:
+         return kAudioFormatiLBC;
+-#endif
+     case AV_CODEC_ID_PCM_ALAW:
+         return kAudioFormatALaw;
+     case AV_CODEC_ID_PCM_MULAW:
+@@ -313,7 +312,7 @@ static av_cold int ffat_init_encoder(AVC
+                                   sizeof(avctx->bits_per_raw_sample),
+                                   &avctx->bits_per_raw_sample);
+ 
+-#if !TARGET_OS_IPHONE
++#if !IOS_DISABLE_RC
+     if (at->mode == -1)
+         at->mode = (avctx->flags & AV_CODEC_FLAG_QSCALE) ?
+                    kAudioCodecBitRateControlMode_Variable :
+@@ -434,7 +433,7 @@ static av_cold int ffat_init_encoder(AVC
+ 
+     ffat_update_ctx(avctx);
+ 
+-#if !TARGET_OS_IPHONE && defined(__MAC_10_9)
++#if !IOS_DISABLE_RC && defined(__MAC_10_9)
+     if (at->mode == kAudioCodecBitRateControlMode_Variable && avctx->rc_max_rate) {
+         UInt32 max_size = avctx->rc_max_rate * avctx->frame_size / avctx->sample_rate;
+         if (max_size)
+@@ -595,7 +594,7 @@ static const AVProfile aac_profiles[] =
+ 
+ #define AE AV_OPT_FLAG_AUDIO_PARAM | AV_OPT_FLAG_ENCODING_PARAM
+ static const AVOption options[] = {
+-#if !TARGET_OS_IPHONE
++#if !IOS_DISABLE_RC
+     {"aac_at_mode", "ratecontrol mode", offsetof(ATDecodeContext, mode), AV_OPT_TYPE_INT, {.i64 = -1}, -1, kAudioCodecBitRateControlMode_Variable, AE, "mode"},
+         {"auto", "VBR if global quality is given; CBR otherwise", 0, AV_OPT_TYPE_CONST, {.i64 = -1}, INT_MIN, INT_MAX, AE, "mode"},
+         {"cbr",  "constant bitrate", 0, AV_OPT_TYPE_CONST, {.i64 = kAudioCodecBitRateControlMode_Constant}, INT_MIN, INT_MAX, AE, "mode"},
+--- a/libavcodec/videotoolbox.c	1699662317.000000000
++++ b/libavcodec/videotoolbox.c	1711360676.128755436
+@@ -783,7 +783,7 @@ static CFDictionaryRef videotoolbox_buff
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferIOSurfacePropertiesKey, io_surface_properties);
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferWidthKey, w);
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferHeightKey, h);
+-#if TARGET_OS_IPHONE
++#if TARGET_OS_EMBEDDED
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferOpenGLESCompatibilityKey, kCFBooleanTrue);
+ #else
+     CFDictionarySetValue(buffer_attributes, kCVPixelBufferIOSurfaceOpenGLTextureCompatibilityKey, kCFBooleanTrue);
+@@ -912,16 +912,16 @@ static int videotoolbox_start(AVCodecCon
+         break;
+     }
+ 
+-#if defined(MAC_OS_X_VERSION_10_9) && !TARGET_OS_IPHONE && (MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_9) && AV_HAS_BUILTIN(__builtin_available)
++#if !TARGET_OS_EMBEDDED && AV_HAS_BUILTIN(__builtin_available)
+     if (avctx->codec_id == AV_CODEC_ID_PRORES) {
+-        if (__builtin_available(macOS 10.9, *)) {
++        if (__builtin_available(macOS 10.9, iOS 7.0, *)) {
+             VTRegisterProfessionalVideoWorkflowVideoDecoders();
+         }
+     }
+ #endif
+ 
+-#if defined(MAC_OS_VERSION_11_0) && !TARGET_OS_IPHONE && (MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_VERSION_11_0) && AV_HAS_BUILTIN(__builtin_available)
+-    if (__builtin_available(macOS 11.0, *)) {
++#if !TARGET_OS_EMBEDDED && AV_HAS_BUILTIN(__builtin_available)
++    if (__builtin_available(macOS 11.0, iOS 14.0, *)) {
+         VTRegisterSupplementalVideoDecoderIfAvailable(videotoolbox->cm_codec_type);
+     }
+ #endif
+--- a/libavcodec/videotoolboxenc.c	1699662317.000000000
++++ b/libavcodec/videotoolboxenc.c	1711360767.169284265
+@@ -57,6 +57,9 @@ enum { kCVPixelFormatType_420YpCbCr10BiP
+ #   define TARGET_CPU_ARM64 0
+ #endif
+ 
++// Torrekie: Hack to check if hw working
++#define IOS_DISABLE_HW 0
++
+ typedef OSStatus (*getParameterSetAtIndex)(CMFormatDescriptionRef videoDesc,
+                                            size_t parameterSetIndex,
+                                            const uint8_t **parameterSetPointerOut,
+@@ -1069,7 +1072,7 @@ static int get_cv_gamma(AVCodecContext *
+ // constant quality only on Macs with Apple Silicon
+ static bool vtenc_qscale_enabled(void)
+ {
+-    return !TARGET_OS_IPHONE && TARGET_CPU_ARM64;
++    return !IOS_DISABLE_HW && TARGET_CPU_ARM64;
+ }
+ 
+ static void set_encoder_property_or_log(AVCodecContext *avctx,
+@@ -1149,7 +1152,7 @@ static int vtenc_create_encoder(AVCodecC
+     if (status || !vtctx->session) {
+         av_log(avctx, AV_LOG_ERROR, "Error: cannot create compression session: %d\n", status);
+ 
+-#if !TARGET_OS_IPHONE
++#if !IOS_DISABLE_HW
+         if (!vtctx->allow_sw) {
+             av_log(avctx, AV_LOG_ERROR, "Try -allow_sw 1. The hardware encoder may be busy, or not supported.\n");
+         }
+@@ -1158,8 +1161,7 @@ static int vtenc_create_encoder(AVCodecC
+         return AVERROR_EXTERNAL;
+     }
+ 
+-#if defined (MAC_OS_X_VERSION_10_13) && (MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_13)
+-    if (__builtin_available(macOS 10.13, *)) {
++    if (__builtin_available(macOS 10.13, iOS 11.0, *)) {
+         status = VTCopySupportedPropertyDictionaryForEncoder(avctx->width,
+                                                              avctx->height,
+                                                              codec_type,
+@@ -1172,7 +1174,6 @@ static int vtenc_create_encoder(AVCodecC
+             return AVERROR_EXTERNAL;
+         }
+     }
+-#endif
+ 
+     // Dump the init encoder
+     {
+@@ -1599,7 +1600,7 @@ static int vtenc_configure_encoder(AVCod
+         return AVERROR(EINVAL);
+     }
+ 
+-#if defined(MAC_OS_X_VERSION_10_9) && !TARGET_OS_IPHONE && (MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_9)
++#if !TARGET_OS_EMBEDDED
+     if (avctx->codec_id == AV_CODEC_ID_PRORES) {
+         if (__builtin_available(macOS 10.10, *)) {
+             VTRegisterProfessionalVideoWorkflowVideoEncoders();
+@@ -1643,7 +1644,7 @@ static int vtenc_configure_encoder(AVCod
+ 
+     if (!enc_info) return AVERROR(ENOMEM);
+ 
+-#if !TARGET_OS_IPHONE
++#if !IOS_DISABLE_HW
+     if(vtctx->require_sw) {
+         CFDictionarySetValue(enc_info,
+                              compat_keys.kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
+--- a/libavdevice/audiotoolbox.m	1699576216.000000000
++++ b/libavdevice/audiotoolbox.m	1711356910.855229065
+@@ -25,6 +25,7 @@
+  * @author Thilo Borgmann <thilo.borgmann@mail.de>
+  */
+ 
++#import <CoreAudio/CoreAudio.h>
+ #import <AudioToolbox/AudioToolbox.h>
+ #include <pthread.h>
+ 
+--- a/libavdevice/avfoundation.m	1699576216.000000000
++++ b/libavdevice/avfoundation.m	1711357957.930249717
+@@ -39,6 +39,10 @@
+ #include "libavutil/imgutils.h"
+ #include "avdevice.h"
+ 
++
++// Torrekie: Hack to check if screen capture working
++#define IOS_DISABLE_SC 0
++
+ static const int avf_time_base = 1000000;
+ 
+ static const AVRational avf_time_base_q = {
+@@ -74,7 +78,7 @@ static const struct AVFPixelFormatSpec a
+     { AV_PIX_FMT_YUV420P,      kCVPixelFormatType_420YpCbCr8Planar },
+     { AV_PIX_FMT_NV12,         kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange },
+     { AV_PIX_FMT_YUYV422,      kCVPixelFormatType_422YpCbCr8_yuvs },
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
++#if !IOS_DISABLE_SC
+     { AV_PIX_FMT_GRAY8,        kCVPixelFormatType_OneComponent8 },
+ #endif
+     { AV_PIX_FMT_NONE, 0 }
+@@ -132,7 +136,7 @@ typedef struct
+     CMSampleBufferRef         current_audio_frame;
+ 
+     AVCaptureDevice          *observed_device;
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
++#if !IOS_DISABLE_SC
+     AVCaptureDeviceTransportControlsPlaybackMode observed_mode;
+ #endif
+     int                      observed_quit;
+@@ -171,7 +175,7 @@ static void unlock_frames(AVFContext* ct
+         _context = context;
+ 
+         // start observing if a device is set for it
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
++#if !IOS_DISABLE_SC
+         if (_context->observed_device) {
+             NSString *keyPath = NSStringFromSelector(@selector(transportControlsPlaybackMode));
+             NSKeyValueObservingOptions options = NSKeyValueObservingOptionNew;
+@@ -188,7 +192,7 @@ static void unlock_frames(AVFContext* ct
+ 
+ - (void)dealloc {
+     // stop observing if a device is set for it
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
++#if !IOS_DISABLE_SC
+     if (_context->observed_device) {
+         NSString *keyPath = NSStringFromSelector(@selector(transportControlsPlaybackMode));
+         [_context->observed_device removeObserver: self forKeyPath: keyPath];
+@@ -202,7 +206,7 @@ static void unlock_frames(AVFContext* ct
+                         change:(NSDictionary *)change
+                        context:(void *)context {
+     if (context == _context) {
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
++#if !IOS_DISABLE_SC
+         AVCaptureDeviceTransportControlsPlaybackMode mode =
+             [change[NSKeyValueChangeNewKey] integerValue];
+ 
+@@ -553,7 +557,7 @@ static int add_video_device(AVFormatCont
+     }
+     [ctx->video_output setAlwaysDiscardsLateVideoFrames:ctx->drop_late_frames];
+ 
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
++#if !IOS_DISABLE_SC
+     // check for transport control support and set observer device if supported
+     if (!ctx->video_is_screen) {
+         int trans_ctrl = [video_device transportControlsSupported];
+@@ -777,7 +781,7 @@ static int avf_read_header(AVFormatConte
+ 
+     pthread_mutex_init(&ctx->frame_lock, NULL);
+ 
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
++#if !TARGET_OS_EMBEDDED
+     CGGetActiveDisplayList(0, NULL, &num_screens);
+ #endif
+ 
+@@ -795,7 +799,7 @@ static int avf_read_header(AVFormatConte
+             index            = [devices count] + [devices_muxed indexOfObject:device];
+             av_log(ctx, AV_LOG_INFO, "[%d] %s\n", index, name);
+         }
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
++#if !TARGET_OS_EMBEDDED
+         if (num_screens > 0) {
+             CGDirectDisplayID screens[num_screens];
+             CGGetActiveDisplayList(num_screens, screens, &num_screens);
+@@ -837,7 +841,7 @@ static int avf_read_header(AVFormatConte
+                 ctx->video_is_muxed = 1;
+             }
+         } else if (ctx->video_device_index < ctx->num_video_devices + num_screens) {
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
++#if !TARGET_OS_EMBEDDED
+             CGDirectDisplayID screens[num_screens];
+             CGGetActiveDisplayList(num_screens, screens, &num_screens);
+             AVCaptureScreenInput* capture_screen_input = [[[AVCaptureScreenInput alloc] initWithDisplayID:screens[ctx->video_device_index - ctx->num_video_devices]] autorelease];
+@@ -846,13 +850,11 @@ static int avf_read_header(AVFormatConte
+                 capture_screen_input.minFrameDuration = CMTimeMake(ctx->framerate.den, ctx->framerate.num);
+             }
+ 
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
+             if (ctx->capture_cursor) {
+                 capture_screen_input.capturesCursor = YES;
+             } else {
+                 capture_screen_input.capturesCursor = NO;
+             }
+-#endif
+ 
+             if (ctx->capture_mouse_clicks) {
+                 capture_screen_input.capturesMouseClicks = YES;
+@@ -888,7 +890,7 @@ static int avf_read_header(AVFormatConte
+             }
+         }
+ 
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
++#if !TARGET_OS_EMBEDDED
+         // looking for screen inputs
+         if (!video_device) {
+             int idx;
+@@ -904,13 +906,11 @@ static int avf_read_header(AVFormatConte
+                     capture_screen_input.minFrameDuration = CMTimeMake(ctx->framerate.den, ctx->framerate.num);
+                 }
+ 
+-#if !TARGET_OS_IPHONE && __MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
+                 if (ctx->capture_cursor) {
+                     capture_screen_input.capturesCursor = YES;
+                 } else {
+                     capture_screen_input.capturesCursor = NO;
+                 }
+-#endif
+ 
+                 if (ctx->capture_mouse_clicks) {
+                     capture_screen_input.capturesMouseClicks = YES;
+--- a/libavdevice/openal-dec.c	1699573131.000000000
++++ b/libavdevice/openal-dec.c	1711358012.507963692
+@@ -21,8 +21,13 @@
+  * OpenAL 1.1 capture device for libavdevice
+  **/
+ 
++#if __APPLE__
++#include <OpenAL/al.h>
++#include <OpenAL/alc.h>
++#else
+ #include <AL/al.h>
+ #include <AL/alc.h>
++#endif
+ 
+ #include "libavutil/opt.h"
+ #include "libavutil/time.h"
+--- a/libavdevice/opengl_enc.c	1699662317.000000000
++++ b/libavdevice/opengl_enc.c	1711358438.389339868
+@@ -37,6 +37,10 @@
+ #elif HAVE_ES2_GL_H
+ #include <ES2/gl.h>
+ #else
++// Torrekie: libglvnd
++#ifndef GL_GLEXT_PROTOTYPES
++#define GL_GLEXT_PROTOTYPES
++#endif
+ #include <GL/gl.h>
+ #include <GL/glext.h>
+ #endif
+@@ -48,6 +52,10 @@
+ #include <SDL.h>
+ #endif
+ 
++#ifdef __APPLE__
++#include <TargetConditionals.h>
++#endif
++
+ #include "libavutil/common.h"
+ #include "libavutil/frame.h"
+ #include "libavutil/pixdesc.h"
+@@ -449,7 +457,7 @@ static int av_cold opengl_sdl_load_proce
+ }
+ #endif /* CONFIG_SDL2 */
+ 
+-#if defined(__APPLE__)
++#if defined(__APPLE__) && !TARGET_OS_EMBEDDED
+ static int av_cold opengl_load_procedures(OpenGLContext *opengl)
+ {
+     FFOpenGLFunctions *procs = &opengl->glprocs;
+--- a/libavfilter/metal/utils.m	1699573131.000000000
++++ b/libavfilter/metal/utils.m	1711184990.019556900
+@@ -30,7 +30,6 @@ void ff_metal_compute_encoder_dispatch(i
+     MTLSize threadsPerThreadgroup = MTLSizeMake(w, h, 1);
+     BOOL fallback = YES;
+     // MAC_OS_X_VERSION_10_15 is only defined on SDKs new enough to include its functionality (including iOS, tvOS, etc)
+-#ifdef MAC_OS_X_VERSION_10_15
+     if (@available(macOS 10.15, iOS 11, tvOS 14.5, *)) {
+         if ([device supportsFamily:MTLGPUFamilyCommon3]) {
+             MTLSize threadsPerGrid = MTLSizeMake(width, height, 1);
+@@ -38,7 +37,6 @@ void ff_metal_compute_encoder_dispatch(i
+             fallback = NO;
+         }
+     }
+-#endif
+     if (fallback) {
+         MTLSize threadgroups = MTLSizeMake((width + w - 1) / w,
+                                            (height + h - 1) / h,
+--- a/libavutil/macos_kperf.c	1699662317.000000000
++++ b/libavutil/macos_kperf.c	1711270855.571382491
+@@ -24,6 +24,13 @@
+ #include <stdlib.h>
+ #include <dlfcn.h>
+ 
++#include <TargetConditionals.h>
++#if !TARGET_OS_EMBEDDED
++#define KEPRF_PATH "/System/Library/PrivateFrameworks/kperf.framework/Versions/A/kperf"
++#else
++#define KPERF_PATH "/System/Library/PrivateFrameworks/kperf.framework/kperf"
++#endif
++
+ #define KPERF_LIST                                             \
+     F(int, kpc_get_counting, void)                             \
+     F(int, kpc_force_all_ctrs_set, int)                        \
+@@ -76,7 +83,7 @@ static void kperf_init(void)
+     uint64_t config[COUNTERS_COUNT] = {0};
+     void *kperf = NULL;
+ 
+-    av_assert0(kperf = dlopen("/System/Library/PrivateFrameworks/kperf.framework/Versions/A/kperf", RTLD_LAZY));
++    av_assert0(kperf = dlopen(KPERF_PATH, RTLD_LAZY));
+ 
+ #define F(ret, name, ...) av_assert0(name = (name##proc *)(dlsym(kperf, #name)));
+     KPERF_LIST

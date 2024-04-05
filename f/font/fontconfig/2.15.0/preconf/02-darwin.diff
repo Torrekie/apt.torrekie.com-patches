@@ -1,0 +1,14 @@
+--- a/src/fccache.c	1674641517.000000000
++++ b/src/fccache.c	1709542775.596375673
+@@ -53,6 +53,11 @@
+ #define O_BINARY 0
+ #endif
+ 
++#if defined(__APPLE__) && !defined(HAVE_STRUCT_STAT_ST_MTIM)
++#define st_mtim st_mtimespec
++#define st_atim st_atimespec
++#endif
++
+ FcBool
+ FcDirCacheCreateUUID (FcChar8  *dir,
+ 		      FcBool    force,

@@ -1,0 +1,106 @@
+--- a/conf.d/40-nonlatin.conf	1606995900.000000000
++++ b/conf.d/40-nonlatin.conf	1709541687.233861752
+@@ -158,10 +158,18 @@
+ 		<default><family>sans-serif</family></default>
+ 	</alias>
+ 	<alias>
++		<family>MgOpen Moderna</family>
++		<default><family>sans-serif</family></default>
++	</alias>
++	<alias>
+ 		<family>MgOpen Modata</family>
+ 		<default><family>sans-serif</family></default>
+ 	</alias>
+ 	<alias>
++		<family>MgOpen Cosmetica</family>
++		<default><family>sans-serif</family></default>
++	</alias>
++	<alias>
+ 		<family>Sazanami Gothic</family>
+ 		<default><family>sans-serif</family></default>
+ 	</alias>
+--- a/conf.d/60-latin.conf	1638528488.000000000
++++ b/conf.d/60-latin.conf	1709541689.627990209
+@@ -35,8 +35,9 @@
+ 	<alias>
+ 		<family>monospace</family>
+ 		<prefer>
+-			<family>Noto Sans Mono</family>
+ 			<family>DejaVu Sans Mono</family>
++			<family>Noto Mono</family>
++			<family>Noto Sans Mono</family>
+ 			<family>Inconsolata</family>
+ 			<family>Andale Mono</family>
+ 			<family>Courier New</family>
+--- a/conf.d/65-nonlatin.conf	1679485006.000000000
++++ b/conf.d/65-nonlatin.conf	1709541687.234533610
+@@ -20,8 +20,6 @@
+ 			<family>Urdu Nastaliq Unicode</family> <!-- arabic (ur) -->
+ 			<family>Raghindi</family> <!-- devanagari -->
+ 			<family>Mukti Narrow</family> <!-- bengali -->
+-			<family>malayalam</family> <!-- malayalam -->
+-			<family>Sampige</family> <!-- kannada -->
+ 			<family>padmaa</family> <!-- gujarati -->
+ 			<family>Hapax Berbère</family> <!-- tifinagh -->
+ 			<family>MS Mincho</family> <!-- han (ja) -->
+@@ -96,8 +94,6 @@
+ 			<family>Urdu Nastaliq Unicode</family> <!-- arabic (ur) -->
+ 			<family>Raghindi</family> <!-- devanagari -->
+ 			<family>Mukti Narrow</family> <!-- bengali -->
+-			<family>malayalam</family> <!-- malayalam -->
+-			<family>Sampige</family> <!-- kannada -->
+ 			<family>padmaa</family> <!-- gujarati -->
+ 			<family>Hapax Berbère</family> <!-- tifinagh -->
+ 			<family>MS Gothic</family> <!-- han (ja) -->
+@@ -114,7 +110,9 @@
+ 			<family>PingFang HK</family> <!-- han (zh-hk) - macOS -->
+ 			<family>Hiragino Sans CNS</family> <!-- han (zh-cn) - macOS -->
+ 			<family>Hiragino Sans GB</family> <!-- han (zh-tw) - macOS -->
++			<family>MgOpen Moderna</family>
+ 			<family>MgOpen Modata</family>
++			<family>MgOpen Cosmetica</family>
+ 			<family>VL Gothic</family>
+ 			<family>IPAMonaGothic</family>
+ 			<family>IPAGothic</family>
+@@ -127,7 +125,6 @@
+  			<family>AR PL Mingti2L Big5</family>
+ 			<family>ＭＳ ゴシック</family>
+ 			<family>ZYSong18030</family> <!-- han (zh-cn,zh-tw) -->
+-			<family>TSCu_Paranar</family> <!-- tamil -->
+ 			<family>NanumGothic</family> <!-- hangul (ko) -->
+ 			<family>UnDotum</family> <!-- hangul (ko) -->
+ 			<family>Baekmuk Dotum</family> <!-- hangul (ko) -->
+--- a/fonts.conf.in	1626778939.000000000
++++ b/fonts.conf.in	1709541687.825420388
+@@ -78,6 +78,20 @@
+ 	</match>
+ 
+ <!--
++  Ignore dpkg temporary files created in fonts directories
++-->
++	<selectfont>
++		<rejectfont>
++			<glob>*.dpkg-tmp</glob>
++		</rejectfont>
++	</selectfont>
++	<selectfont>
++		<rejectfont>
++			<glob>*.dpkg-new</glob>
++		</rejectfont>
++	</selectfont>
++
++<!--
+   Load local system customization file
+ -->
+ 	<include ignore_missing="yes">@CONFIGDIR@</include>
+--- a/src/fcmd5.h	1606995900.000000000
++++ b/src/fcmd5.h	1709541689.026407980
+@@ -33,7 +33,7 @@ static void MD5Transform(FcChar32 buf[4]
+ /*
+  * Note: this code is harmless on little-endian machines.
+  */
+-void byteReverse(unsigned char *buf, unsigned longs)
++FcPrivate void byteReverse(unsigned char *buf, unsigned longs)
+ {
+     FcChar32 t;
+     do {

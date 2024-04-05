@@ -1,0 +1,24 @@
+--- a/src/aacurkbd.c	1709799858.865969515
++++ b/src/aacurkbd.c	1709799933.846303333
+@@ -53,7 +53,9 @@ static int curses_init(struct aa_context
+ #ifdef GPM_MOUSEDRIVER
+     aa_recommendlowmouse("gpm");
+ #endif
++#ifdef LINUX_DRIVER
+     aa_recommendlowkbd ("linux");
++#endif
+     aa_recommendlowmouse("curses");
+     return 1;
+ }
+--- a/src/aaslang.c	988295851.000000000
++++ b/src/aaslang.c	1709799906.398932855
+@@ -34,7 +34,9 @@ static int slang_init(__AA_CONST struct
+ #ifdef GPM_MOUSEDRIVER
+     aa_recommendlowmouse("gpm");
+ #endif
++#ifdef LINUX_DRIVER
+     aa_recommendlowkbd ("linux");
++#endif
+     aa_recommendlowkbd("slang");
+     return 1;
+ }
