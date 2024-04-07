@@ -1,0 +1,57 @@
+--- a/libraries/unix/System/Posix/Process/ByteString.hsc	1708635637.000000000
++++ b/libraries/unix/System/Posix/Process/ByteString.hsc	1711789514.774888681
+@@ -135,13 +135,13 @@ executeFile path search args (Just env)
+                    (c_execve s arg_arr env_arr)
+         return undefined -- never reached
+ 
+-foreign import ccall unsafe "execvp"
++foreign import ccall unsafe "ie_execvp"
+   c_execvp :: CString -> Ptr CString -> IO CInt
+ 
+-foreign import ccall unsafe "execv"
++foreign import ccall unsafe "ie_execv"
+   c_execv :: CString -> Ptr CString -> IO CInt
+ 
+-foreign import ccall unsafe "execve"
++foreign import ccall unsafe "ie_execve"
+   c_execve :: CString -> Ptr CString -> Ptr CString -> IO CInt
+ 
+ #endif // HAVE_EXECV
+--- a/libraries/unix/System/Posix/Process/PosixString.hsc	1708635637.000000000
++++ b/libraries/unix/System/Posix/Process/PosixString.hsc	1711789594.646561968
+@@ -121,13 +121,13 @@ executeFile path search args (Just env)
+                    (c_execve s arg_arr env_arr)
+         return undefined -- never reached
+ 
+-foreign import ccall unsafe "execvp"
++foreign import ccall unsafe "ie_execvp"
+   c_execvp :: CString -> Ptr CString -> IO CInt
+ 
+-foreign import ccall unsafe "execv"
++foreign import ccall unsafe "ie_execv"
+   c_execv :: CString -> Ptr CString -> IO CInt
+ 
+-foreign import ccall unsafe "execve"
++foreign import ccall unsafe "ie_execve"
+   c_execve :: CString -> Ptr CString -> Ptr CString -> IO CInt
+ 
+ _equal :: Word8
+--- a/libraries/unix/System/Posix/Process.hsc	1708635637.000000000
++++ b/libraries/unix/System/Posix/Process.hsc	1711789493.977921684
+@@ -123,13 +123,13 @@ executeFile path search args (Just env)
+                    (c_execve s arg_arr env_arr)
+         return undefined -- never reached
+ 
+-foreign import ccall unsafe "execvp"
++foreign import ccall unsafe "ie_execvp"
+   c_execvp :: CString -> Ptr CString -> IO CInt
+ 
+-foreign import ccall unsafe "execv"
++foreign import ccall unsafe "ie_execv"
+   c_execv :: CString -> Ptr CString -> IO CInt
+ 
+-foreign import ccall unsafe "execve"
++foreign import ccall unsafe "ie_execve"
+   c_execve :: CString -> Ptr CString -> Ptr CString -> IO CInt
+ 
+ #endif // HAVE_EXECV

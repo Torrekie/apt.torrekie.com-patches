@@ -1,0 +1,452 @@
+--- a/compiler/CodeGen.Platform.h	1708635585.000000000
++++ b/compiler/CodeGen.Platform.h	1711788517.184440558
+@@ -6,6 +6,7 @@ import GHC.Utils.Panic.Plain
+ #endif
+ import GHC.Platform.Reg
+ 
++#include "ghcautoconf.h"
+ #include "MachRegs.h"
+ 
+ #if defined(MACHREGS_i386) || defined(MACHREGS_x86_64)
+--- a/compiler/GHC/CmmToAsm/PPC/CodeGen.hs	1708635585.000000000
++++ b/compiler/GHC/CmmToAsm/PPC/CodeGen.hs	1711788783.941204017
+@@ -546,7 +546,7 @@ getRegister' config platform (CmmMachOp
+                                  CLRLI arch_fmt dst src1 (arch_bits - size)
+                  return (Any (intFormat to) code)
+ 
+-getRegister' _ _ (CmmMachOp mop [x, y]) -- dyadic PrimOps
++getRegister' _ platform (CmmMachOp mop [x, y]) -- dyadic PrimOps
+   = case mop of
+       MO_F_Eq _ -> condFltReg EQQ x y
+       MO_F_Ne _ -> condFltReg NE  x y
+@@ -626,8 +626,9 @@ getRegister' _ _ (CmmMachOp mop [x, y])
+                 (src, srcCode) <- getSomeReg x
+                 let clear_mask = if imm == -4 then 2 else 3
+                     fmt = intFormat rep
++                    arch_fmt = intFormat (wordWidth platform)
+                     code dst = srcCode
+-                               `appOL` unitOL (CLRRI fmt dst src clear_mask)
++                      `appOL` unitOL (CLRRI arch_fmt dst src clear_mask)
+                 return (Any fmt code)
+         _ -> trivialCode rep False AND x y
+       MO_Or rep    -> trivialCode rep False OR x y
+--- a/compiler/GHC/Iface/Recomp.hs	1708635585.000000000
++++ b/compiler/GHC/Iface/Recomp.hs	1711788475.246116767
+@@ -1260,7 +1260,7 @@ addFingerprints hsc_env iface0
+                       (mod_hash,
+                        mi_src_hash iface0,
+                        ann_fn (mkVarOccFS (fsLit "module")),  -- See mkIfaceAnnCache
+-                       mi_usages iface0,
++                       usages,
+                        sorted_deps,
+                        mi_hpc iface0)
+ 
+@@ -1296,6 +1296,8 @@ addFingerprints hsc_env iface0
+     (non_orph_rules, orph_rules) = mkOrphMap ifRuleOrph    (mi_rules iface0)
+     (non_orph_fis,   orph_fis)   = mkOrphMap ifFamInstOrph (mi_fam_insts iface0)
+     ann_fn = mkIfaceAnnCache (mi_anns iface0)
++    -- Do not allow filenames to affect the interface
++    usages = [ case u of UsageFile _ fp fl -> UsageFile (fsLit "") fp fl; _ -> u | u <- mi_usages iface0 ]
+ 
+ -- | Retrieve the orphan hashes 'mi_orphan_hash' for a list of modules
+ -- (in particular, the orphan modules which are transitively imported by the
+--- a/configure.ac	1708635585.000000000
++++ b/configure.ac	1711788704.932267799
+@@ -565,14 +565,18 @@ AC_SUBST([ConfiguredEmsdkVersion])
+ dnl ** Which LLVM llc to use?
+ dnl --------------------------------------------------------------
+ AC_ARG_VAR(LLC,[Use as the path to LLVM's llc [default=autodetect]])
+-FIND_LLVM_PROG([LLC], [llc], [$LlvmMinVersion], [$LlvmMaxVersion])
++if test -z "$LLC"; then
++  FIND_LLVM_PROG([LLC], [llc], [$LlvmMinVersion], [$LlvmMaxVersion])
++fi
+ LlcCmd="$LLC"
+ AC_SUBST([LlcCmd])
+ 
+ dnl ** Which LLVM opt to use?
+ dnl --------------------------------------------------------------
+ AC_ARG_VAR(OPT,[Use as the path to LLVM's opt [default=autodetect]])
+-FIND_LLVM_PROG([OPT], [opt], [$LlvmMinVersion], [$LlvmMaxVersion])
++if test -z "$OPT"; then
++  FIND_LLVM_PROG([OPT], [opt], [$LlvmMinVersion], [$LlvmMaxVersion])
++fi
+ OptCmd="$OPT"
+ AC_SUBST([OptCmd])
+ 
+--- a/distrib/configure.ac.in	1711788922.314575113
++++ b/distrib/configure.ac.in	1711788704.933394779
+@@ -151,14 +151,18 @@ LlvmMaxVersion=@LlvmMaxVersion@
+ dnl ** Which LLVM llc to use?
+ dnl --------------------------------------------------------------
+ AC_ARG_VAR(LLC,[Use as the path to LLVM's llc [default=autodetect]])
+-FIND_LLVM_PROG([LLC], [llc], [$LlvmMinVersion], [$LlvmMaxVersion])
++if test -z "$LLC"; then
++  FIND_LLVM_PROG([LLC], [llc], [$LlvmMinVersion], [$LlvmMaxVersion])
++fi
+ LlcCmd="$LLC"
+ AC_SUBST([LlcCmd])
+ 
+ dnl ** Which LLVM opt to use?
+ dnl --------------------------------------------------------------
+ AC_ARG_VAR(OPT,[Use as the path to LLVM's opt [default=autodetect]])
+-FIND_LLVM_PROG([OPT], [opt], [$LlvmMinVersion], [$LlvmMaxVersion])
++if test -z "$OPT"; then
++  FIND_LLVM_PROG([OPT], [opt], [$LlvmMinVersion], [$LlvmMaxVersion])
++fi
+ OptCmd="$OPT"
+ AC_SUBST([OptCmd])
+ 
+--- a/distrib/configure.ac.in.orig	1708635585.000000000
++++ b/distrib/configure.ac.in.orig	1711709062.948145485
+@@ -103,6 +103,9 @@ dnl ** Which gcc to use?
+ dnl --------------------------------------------------------------
+ AC_PROG_CC([gcc clang])
+ AC_PROG_CXX([g++ clang++ c++])
++# Work around #24324
++MOVE_TO_FLAGS([CC],[CFLAGS])
++MOVE_TO_FLAGS([CXX],[CXXFLAGS])
+ 
+ dnl ** figure out how to invoke the C preprocessor (i.e. `gcc -E`)
+ AC_PROG_CPP
+--- a/docs/users_guide/conf.py	1708635585.000000000
++++ b/docs/users_guide/conf.py	1711788522.915173289
+@@ -66,7 +66,7 @@ exclude_patterns = ['.build']
+ html_title = "Glasgow Haskell Compiler %s User's Guide" % release
+ html_short_title = "GHC %s User's Guide" % release
+ html_theme_path = ['.']
+-html_theme = 'rtd-theme'
++html_theme = 'sphinx_rtd_theme'
+ html_logo = None
+ html_static_path = ['images']
+ # Convert quotes and dashes to typographically correct entities
+@@ -75,7 +75,7 @@ html_use_opensearch = 'https://downloads
+ html_show_copyright = True
+ 
+ # See GHC #15006, #19423
+-mathjax_path = 'https://cdn.jsdelivr.net/npm/mathjax@2/MathJax.js?config=TeX-AMS-MML_HTMLorMML '
++mathjax_path = 'file:///usr/share/javascript/mathjax/MathJax.js'
+ 
+ # If true, an OpenSearch description file will be output, and all pages will
+ # contain a <link> tag referring to it.  The value of this option must be the
+--- a/hadrian/hadrian.cabal	1708635585.000000000
++++ b/hadrian/hadrian.cabal	1711788712.553566687
+@@ -18,7 +18,7 @@ source-repository head
+ -- To accommodate #16873
+ flag threaded
+     manual:              True
+-    default:             True
++    default:             False
+     description:         Build with the threaded runtime for improved
+                          performance. Users with bootstrap compilers
+                          which don't support the threaded runtime should
+@@ -174,14 +174,6 @@ executable hadrian
+                        -rtsopts
+                        -fno-ignore-asserts
+ 
+-    if flag(threaded)
+-      ghc-options:
+-                       -- * -I0: Disable idle GC to avoid redundant GCs while
+-                       --        waiting for external processes
+-                       -- * -qg: Don't use parallel GC as the synchronization
+-                       --        time tends to eat any benefit.
+-                       "-with-rtsopts=-I0 -qg"
+-                       -threaded
+ 
+     if flag(selftest)
+       other-modules:   Rules.Selftest
+--- a/hadrian/src/Hadrian/Haskell/Cabal.hs	1711788918.457245936
++++ b/hadrian/src/Hadrian/Haskell/Cabal.hs	1711788854.186222106
+@@ -75,5 +75,6 @@ cabalOsString :: String -> String
+ cabalOsString "mingw32"  = "windows"
+ cabalOsString "darwin"   = "darwin"
+ cabalOsString "solaris2" = "solaris"
++cabalOsString "gnu"      = "hurd"
+ cabalOsString other      = other
+ 
+--- a/hadrian/src/Oracles/Setting.hs	1711788918.458892906
++++ b/hadrian/src/Oracles/Setting.hs	1711788858.289699134
+@@ -280,7 +280,7 @@ anyHostOs = matchSetting HostOs
+ elfOSes :: [String]
+ elfOSes =
+     [ "linux", "freebsd", "dragonfly", "openbsd", "netbsd", "solaris2", "kfreebsdgnu"
+-    , "haiku", "linux-android"
++    , "gnu", "haiku", "linux-android"
+     ]
+ 
+ -- | List of OSes that use the Mach-O object format.
+@@ -302,13 +302,8 @@ hostSupportsRPaths = anyHostOs (elfOSes
+ -- | Check whether the target supports GHCi.
+ ghcWithInterpreter :: Action Bool
+ ghcWithInterpreter = do
+-    goodOs <- anyTargetOs [ "mingw32", "cygwin32", "linux", "solaris2"
+-                          , "freebsd", "dragonfly", "netbsd", "openbsd"
+-                          , "ios", "darwin", "kfreebsdgnu" ]
+-    goodArch <- anyTargetArch [ "i386", "x86_64", "powerpc"
+-                              , "arm", "aarch64", "s390x"
+-                              , "powerpc64", "powerpc64le" ]
+-    return $ goodOs && goodArch
++    -- Enable GHCi on all platforms
++    return True
+ 
+ -- | Variants of the ARM architecture.
+ data ArmVersion = ARMv5 | ARMv6 | ARMv7
+--- a/hadrian/src/Packages.hs	1708635585.000000000
++++ b/hadrian/src/Packages.hs	1711788692.022687707
+@@ -197,7 +197,7 @@ programPath context@Context {..} = do
+     -- See: https://github.com/snowleopard/hadrian/issues/570
+     -- Likewise for @iserv@ and @unlit@.
+     name <- programName context
+-    path <- if package `elem` [iserv, touchy, unlit]
++    path <- if package `elem` [touchy, unlit]
+               then stageLibPath stage <&> (-/- "bin")
+               else stageBinPath stage
+     return $ path -/- name <.> exe
+--- a/hadrian/src/Settings/Builders/Haddock.hs	1708635585.000000000
++++ b/hadrian/src/Settings/Builders/Haddock.hs	1711788677.187807007
+@@ -30,6 +30,7 @@ haddockBuilderArgs = mconcat
+             , arg "-o", arg $ takeDirectory output
+             , arg "-t", arg "Haskell Hierarchical Libraries"
+             , arg "-p", arg "libraries/prologue.txt"
++            , arg "--mathjax=file:///usr/share/javascript/mathjax/MathJax.js"
+             , pure [ "--read-interface="
+                      ++ (takeFileName . takeDirectory) haddock
+                      ++ "," ++ haddock | haddock <- inputs ] ]
+@@ -63,6 +64,7 @@ haddockBuilderArgs = mconcat
+             , arg "--html"
+             , arg $ "--title=" ++ pkgName pkg ++ "-" ++ version
+                     ++ ": " ++ synopsis
++            , arg "--mathjax=file:///usr/share/javascript/mathjax/MathJax.js"
+             , arg $ "--prologue=" ++ takeDirectory output -/- "haddock-prologue.txt"
+             , arg $ "--optghc=-D__HADDOCK_VERSION__="
+                     ++ show (versionToInt hVersion)
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/GHC/Internal.hs	1708635636.000000000
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/GHC/Internal.hs	1711788793.341803504
+@@ -637,6 +637,7 @@ ghcOsString :: OS -> String
+ ghcOsString Windows = "mingw32"
+ ghcOsString OSX     = "darwin"
+ ghcOsString Solaris = "solaris2"
++ghcOsString Hurd    = "gnu"
+ ghcOsString other   = prettyShow other
+ 
+ -- | GHC's rendering of its platform and compiler version string as used in
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/GHC.hs	1708635636.000000000
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/GHC.hs	1711788797.164762974
+@@ -1851,7 +1851,7 @@ getRPaths lbi clbi | supportRPaths hostO
+     supportRPaths Android     = False
+     supportRPaths Ghcjs       = False
+     supportRPaths Wasi        = False
+-    supportRPaths Hurd        = False
++    supportRPaths Hurd        = True
+     supportRPaths (OtherOS _) = False
+     -- Do _not_ add a default case so that we get a warning here when a new OS
+     -- is added.
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/GHCJS.hs	1708635636.000000000
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/GHCJS.hs	1711788797.167753128
+@@ -1537,7 +1537,7 @@ getRPaths lbi clbi | supportRPaths hostO
+     supportRPaths Android     = False
+     supportRPaths Ghcjs       = False
+     supportRPaths Wasi        = False
+-    supportRPaths Hurd        = False
++    supportRPaths Hurd        = True
+     supportRPaths (OtherOS _) = False
+     -- Do _not_ add a default case so that we get a warning here when a new OS
+     -- is added.
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/PreProcess.hs	1708635636.000000000
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/PreProcess.hs	1711788788.309005648
+@@ -719,6 +719,7 @@ platformDefines lbi =
+       PPC         -> ["powerpc"]
+       PPC64       -> ["powerpc64"]
+       Sparc       -> ["sparc"]
++      Sparc64     -> ["sparc64"]
+       Arm         -> ["arm"]
+       AArch64     -> ["aarch64"]
+       Mips        -> ["mips"]
+--- a/libraries/Cabal/Cabal-syntax/src/Distribution/System.hs	1711788918.468220195
++++ b/libraries/Cabal/Cabal-syntax/src/Distribution/System.hs	1711788788.306822688
+@@ -159,19 +159,17 @@ buildOS = classifyOS Permissive System.I
+ -- ------------------------------------------------------------
+ 
+ -- | These are the known Arches: I386, X86_64, PPC, PPC64, Sparc,
+--- Arm, AArch64, Mips, SH, IA64, S390, S390X, Alpha, Hppa, Rs6000,
+--- M68k, Vax, JavaScript and Wasm32.
+---
++-- Sparc64, Arm, AArch64, Mips, SH, IA64, S390, S390X, Alpha, Hppa,
++-- Rs6000, M68k, Vax, JavaScript and Wasm32.
+ -- The following aliases can also be used:
+ --    * PPC alias: powerpc
+ --    * PPC64 alias : powerpc64, powerpc64le
+---    * Sparc aliases: sparc64, sun4
+ --    * Mips aliases: mipsel, mipseb
+ --    * Arm aliases: armeb, armel
+ --    * AArch64 aliases: arm64
+ --
+ data Arch = I386  | X86_64  | PPC  | PPC64 | Sparc
+-          | Arm   | AArch64 | Mips | SH
++          | Sparc64 | Arm   | AArch64 | Mips | SH
+           | IA64  | S390    | S390X
+           | Alpha | Hppa    | Rs6000
+           | M68k  | Vax
+@@ -186,7 +184,7 @@ instance NFData Arch where rnf = generic
+ 
+ knownArches :: [Arch]
+ knownArches = [I386, X86_64, PPC, PPC64, Sparc
+-              ,Arm, AArch64, Mips, SH
++              ,Sparc64 ,Arm, AArch64, Mips, SH
+               ,IA64, S390, S390X
+               ,Alpha, Hppa, Rs6000
+               ,M68k, Vax
+@@ -198,7 +196,6 @@ archAliases Strict _       = []
+ archAliases Compat _       = []
+ archAliases _      PPC     = ["powerpc"]
+ archAliases _      PPC64   = ["powerpc64", "powerpc64le"]
+-archAliases _      Sparc   = ["sparc64", "sun4"]
+ archAliases _      Mips    = ["mipsel", "mipseb"]
+ archAliases _      Arm     = ["armeb", "armel"]
+ archAliases _      AArch64 = ["arm64"]
+--- a/libraries/ghc-prim/cbits/atomic.c	1708635585.000000000
++++ b/libraries/ghc-prim/cbits/atomic.c	1711788766.739530331
+@@ -279,28 +279,36 @@ extern StgWord hs_cmpxchg8(StgWord x, St
+ StgWord
+ hs_cmpxchg8(StgWord x, StgWord old, StgWord new)
+ {
+-  return __sync_val_compare_and_swap((volatile StgWord8 *) x, (StgWord8) old, (StgWord8) new);
++  StgWord8 expected = (StgWord8) old;
++  __atomic_compare_exchange_n((StgWord8 *) x, &expected, (StgWord8) new, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
++  return expected;
+ }
+ 
+ extern StgWord hs_cmpxchg16(StgWord x, StgWord old, StgWord new);
+ StgWord
+ hs_cmpxchg16(StgWord x, StgWord old, StgWord new)
+ {
+-  return __sync_val_compare_and_swap((volatile StgWord16 *) x, (StgWord16) old, (StgWord16) new);
++  StgWord16 expected = (StgWord16) old;
++  __atomic_compare_exchange_n((StgWord16 *) x, &expected, (StgWord16) new, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
++  return expected;
+ }
+ 
+ extern StgWord hs_cmpxchg32(StgWord x, StgWord old, StgWord new);
+ StgWord
+ hs_cmpxchg32(StgWord x, StgWord old, StgWord new)
+ {
+-  return __sync_val_compare_and_swap((volatile StgWord32 *) x, (StgWord32) old, (StgWord32) new);
++  StgWord32 expected = (StgWord32) old;
++  __atomic_compare_exchange_n((StgWord32 *) x, &expected, (StgWord32) new, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
++  return expected;
+ }
+ 
+ extern StgWord64 hs_cmpxchg64(StgWord x, StgWord64 old, StgWord64 new);
+ StgWord64
+ hs_cmpxchg64(StgWord x, StgWord64 old, StgWord64 new)
+ {
+-  return __sync_val_compare_and_swap((volatile StgWord64 *) x, old, new);
++  StgWord64 expected = (StgWord64) old;
++  __atomic_compare_exchange_n((StgWord64 *) x, &expected, (StgWord64) new, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
++  return expected;
+ }
+ 
+ // Atomic exchange operations
+--- a/m4/fptools_set_haskell_platform_vars.m4	1708635585.000000000
++++ b/m4/fptools_set_haskell_platform_vars.m4	1711788708.928837316
+@@ -48,7 +48,7 @@ AC_DEFUN([FPTOOLS_SET_HASKELL_PLATFORM_V
+         loongarch64)
+             test -z "[$]2" || eval "[$]2=ArchLoongArch64"
+             ;;
+-        hppa|hppa1_1|ia64|m68k|nios2|riscv32|loongarch32|rs6000|s390|sh4|vax)
++        hppa|hppa1_1|ia64|m68k|nios2|riscv32|loongarch32|rs6000|s390|sh4|sparc|sparc64|vax)
+             test -z "[$]2" || eval "[$]2=ArchUnknown"
+             ;;
+         javascript)
+--- a/m4/get_arm_isa.m4	1708635585.000000000
++++ b/m4/get_arm_isa.m4	1711788461.487029516
+@@ -81,7 +81,7 @@ AC_DEFUN([GET_ARM_ISA],
+                 fi],
+                 [changequote(, )dnl
+                  ARM_ISA=ARMv7
+-                 ARM_ISA_EXT="[VFPv3,NEON]"
++                 ARM_ISA_EXT="[VFPv3D16,NEON]"
+                  changequote([, ])dnl
+                 ])
+         ])
+--- a/m4/ghc_convert_cpu.m4	1708635585.000000000
++++ b/m4/ghc_convert_cpu.m4	1711788708.927960873
+@@ -74,6 +74,12 @@ case "$1" in
+   sh4)
+     $2="sh4"
+     ;;
++  sparc64*)
++    $2="sparc64"
++    ;;
++  sparc*)
++    $2="sparc"
++    ;;
+   vax)
+     $2="vax"
+     ;;
+--- a/m4/ghc_convert_os.m4	1708635585.000000000
++++ b/m4/ghc_convert_os.m4	1711788489.630409131
+@@ -26,7 +26,7 @@ AC_DEFUN([GHC_CONVERT_OS],[
+         $3="mingw32"
+         ;;
+       # As far as I'm aware, none of these have relevant variants
+-      freebsd|dragonfly|hpux|linuxaout|kfreebsdgnu|freebsd2|darwin|nextstep2|nextstep3|sunos4|ultrix|haiku)
++      freebsd|dragonfly|hpux|linuxaout|freebsd2|darwin|nextstep2|nextstep3|sunos4|ultrix|haiku)
+         $3="$1"
+         ;;
+       msys)
+@@ -46,6 +46,9 @@ AC_DEFUN([GHC_CONVERT_OS],[
+                 #      i686-gentoo-freebsd8.2
+         $3="freebsd"
+         ;;
++      kfreebsd*)
++        $3="kfreebsdgnu"
++        ;;
+       nto-qnx*)
+         $3="nto-qnx"
+         ;;
+--- a/rts/RtsSymbols.c	1711788918.494792961
++++ b/rts/RtsSymbols.c	1711788479.517207369
+@@ -955,7 +955,7 @@ extern char **environ;
+       RTS_INTCHAR_SYMBOLS
+ 
+ // 64-bit support functions in libgcc.a
+-#if defined(__GNUC__) && SIZEOF_VOID_P <= 4 && !defined(_ABIN32)
++#if defined(__GNUC__) && SIZEOF_VOID_P <= 4 && !defined(_ABIN32) && !(defined(__x86_64__) && defined(__ILP32__))
+ #define RTS_LIBGCC_SYMBOLS                             \
+       SymI_NeedsProto(__divdi3)                        \
+       SymI_NeedsProto(__udivdi3)                       \
+--- a/utils/ghc-pkg/Main.hs	1708635586.000000000
++++ b/utils/ghc-pkg/Main.hs	1711788469.007419619
+@@ -1906,8 +1906,10 @@ checkPackageConfig pkg verbosity db_stac
+   mapM_ (checkDir True  "dynamic-library-dirs") (libraryDynDirs pkg)
+   mapM_ (checkDir True  "include-dirs") (includeDirs pkg)
+   mapM_ (checkDir True  "framework-dirs") (frameworkDirs pkg)
+-  mapM_ (checkFile   True "haddock-interfaces") (haddockInterfaces pkg)
+-  mapM_ (checkDirURL True "haddock-html")       (haddockHTMLs pkg)
++  -- In Debian, it is quite normal that the package is installed without the
++  -- documentation. Do not print a warning there.
++  -- mapM_ (checkFile   True "haddock-interfaces") (haddockInterfaces pkg)
++  -- mapM_ (checkDirURL True "haddock-html")       (haddockHTMLs pkg)
+   checkDuplicateModules pkg
+   checkExposedModules db_stack pkg
+   checkOtherModules pkg
+--- a/utils/haddock/haddock-api/src/Haddock/Backends/Xhtml.hs	1708635637.000000000
++++ b/utils/haddock/haddock-api/src/Haddock/Backends/Xhtml.hs	1711788512.991879276
+@@ -152,7 +152,7 @@ headHtml docTitle themes mathjax_url bas
+                 , thetype "text/css"
+                 , href (withBaseURL base_url quickJumpCssFile) ]
+              << noHtml
+-    , thelink ! [ rel "stylesheet", thetype "text/css", href fontUrl] << noHtml
++    -- , thelink ! [ rel "stylesheet", thetype "text/css", href fontUrl] << noHtml
+     , script ! [ src (withBaseURL base_url haddockJsFile)
+                , emptyAttr "async"
+                , thetype "text/javascript" ]
+@@ -161,7 +161,7 @@ headHtml docTitle themes mathjax_url bas
+     , script ! [src mjUrl, thetype "text/javascript"] << noHtml
+     ]
+   where
+-    fontUrl = "https://fonts.googleapis.com/css?family=PT+Sans:400,400i,700"
++    -- fontUrl = "https://fonts.googleapis.com/css?family=PT+Sans:400,400i,700"
+     mjUrl = fromMaybe "https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS-MML_HTMLorMML" mathjax_url
+     mjConf = unwords [ "MathJax.Hub.Config({"
+                      ,   "tex2jax: {"

@@ -1,0 +1,672 @@
+--- a/compiler/GHC/CmmToAsm/AArch64/Ppr.hs	1708635585.000000000
++++ b/compiler/GHC/CmmToAsm/AArch64/Ppr.hs	1711706995.165947715
+@@ -461,7 +461,7 @@ pprInstr platform instr = case instr of
+   STR _f o1 o2 -> op2 (text "\tstr") o1 o2
+   STLR _f o1 o2 -> op2 (text "\tstlr") o1 o2
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+   LDR _f o1 (OpImm (ImmIndex lbl' off)) | Just (_info, lbl) <- dynamicLinkerLabelInfo lbl' ->
+     op_adrp o1 (pprAsmLabel platform lbl <> text "@gotpage") $$
+     op_ldr o1 (pprAsmLabel platform lbl <> text "@gotpageoff") $$
+--- a/compiler/GHC/Llvm/Types.hs	1708635585.000000000
++++ b/compiler/GHC/Llvm/Types.hs	1711706977.039719992
+@@ -4,7 +4,7 @@
+ 
+ -- Workaround for #21972. It can be removed once the minimal bootstrapping
+ -- compiler has a fix for this bug.
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ {-# OPTIONS_GHC -fno-asm-shortcutting #-}
+ #endif
+ 
+--- a/compiler/GHC/Utils/Constants.hs	1708635585.000000000
++++ b/compiler/GHC/Utils/Constants.hs	1711706969.560944562
+@@ -44,7 +44,7 @@ isWindowsHost = False
+ #endif
+ 
+ isDarwinHost :: Bool
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ isDarwinHost = True
+ #else
+ isDarwinHost = False
+--- a/hadrian/src/Hadrian/Haskell/Cabal.hs	1708635585.000000000
++++ b/hadrian/src/Hadrian/Haskell/Cabal.hs	1711708650.075672913
+@@ -73,7 +73,7 @@ cabalArchString other         = other
+ -- Inverse of 'Cabal.Distribution.Simple.GHC.ghcOsString'.
+ cabalOsString :: String -> String
+ cabalOsString "mingw32"  = "windows"
+-cabalOsString "darwin"   = "osx"
++cabalOsString "darwin"   = "darwin"
+ cabalOsString "solaris2" = "solaris"
+ cabalOsString other      = other
+ 
+--- a/hadrian/src/Oracles/Setting.hs	1708635585.000000000
++++ b/hadrian/src/Oracles/Setting.hs	1711707290.826146481
+@@ -265,7 +265,7 @@ isJsTarget :: Action Bool
+ isJsTarget = anyTargetArch ["javascript"]
+ 
+ isOsxTarget :: Action Bool
+-isOsxTarget = anyTargetOs ["darwin"]
++isOsxTarget = anyTargetOs ["darwin", "ios"]
+ 
+ -- | Check whether the target architecture setting matches one of the given
+ -- strings.
+@@ -285,7 +285,7 @@ elfOSes =
+ 
+ -- | List of OSes that use the Mach-O object format.
+ machoOSes :: [String]
+-machoOSes = [ "darwin" ]
++machoOSes = [ "darwin", "ios" ]
+ 
+ -- | Check whether the target OS uses the ELF object format.
+ isElfTarget :: Action Bool
+@@ -304,7 +304,7 @@ ghcWithInterpreter :: Action Bool
+ ghcWithInterpreter = do
+     goodOs <- anyTargetOs [ "mingw32", "cygwin32", "linux", "solaris2"
+                           , "freebsd", "dragonfly", "netbsd", "openbsd"
+-                          , "darwin", "kfreebsdgnu" ]
++                          , "ios", "darwin", "kfreebsdgnu" ]
+     goodArch <- anyTargetArch [ "i386", "x86_64", "powerpc"
+                               , "arm", "aarch64", "s390x"
+                               , "powerpc64", "powerpc64le" ]
+--- a/hadrian/src/Rules/Rts.hs	1708635585.000000000
++++ b/hadrian/src/Rules/Rts.hs	1711707530.433917314
+@@ -96,6 +96,12 @@ copyLibffiDynamicUnix stage libSuf targe
+             , "-id", "@rpath/" ++ takeFileName target
+             , target
+             ]
++        -- TODO: iOS should use absolute path
++        when iosHost $ cmd
++            [ "install_name_tool"
++            , "-id", "@rpath/" ++ takeFileName target
++            , target
++            ]
+     else createFileLink versionlessSourceFileName target
+ 
+ -- | Copy a dynamic library file from the libffi build dir to the rts build dir.
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/Program/GHC.hs	1708635636.000000000
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/Program/GHC.hs	1711708122.061382574
+@@ -806,7 +806,7 @@ renderGhcOptions comp _platform@(Platfor
+ 
+   where
+     implInfo     = getImplInfo comp
+-    isOSX        = os == OSX
++    isOSX        = os == OSX || os == IOS
+     flag     flg = flagToList (flg opts)
+     flags    flg = fromNubListR . flg $ opts
+     flagBool flg = fromFlagOrDefault False (flg opts)
+--- a/libraries/Cabal/Cabal-syntax/src/Distribution/System.hs	1708635636.000000000
++++ b/libraries/Cabal/Cabal-syntax/src/Distribution/System.hs	1711708499.014455329
+@@ -124,6 +124,7 @@ osAliases :: ClassificationStrictness ->
+ osAliases Permissive Windows = ["mingw32", "win32", "cygwin32"]
+ osAliases Compat     Windows = ["mingw32", "win32"]
+ osAliases _          OSX     = ["darwin"]
++osAliases _          IOS     = ["ios"]
+ osAliases _          Hurd    = ["gnu"]
+ osAliases Permissive FreeBSD = ["kfreebsdgnu"]
+ osAliases Compat     FreeBSD = ["kfreebsdgnu"]
+--- a/libraries/Cabal/cabal-install/src/Distribution/Client/Compat/ExecutablePath.hs	1708635636.000000000
++++ b/libraries/Cabal/cabal-install/src/Distribution/Client/Compat/ExecutablePath.hs	1711706748.232096727
+@@ -12,7 +12,7 @@ import Prelude
+ -- The imports are purposely kept completely disjoint to prevent edits
+ -- to one OS implementation from breaking another.
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ import Data.Word
+ import Foreign.C
+ import Foreign.Marshal.Alloc
+@@ -51,7 +51,7 @@ getExecutablePath :: IO FilePath
+ --------------------------------------------------------------------------------
+ -- Mac OS X
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ 
+ type UInt32 = Word32
+ 
+--- a/libraries/base/GHC/Event/Manager.hs	1708635585.000000000
++++ b/libraries/base/GHC/Event/Manager.hs	1711706919.904249299
+@@ -148,9 +148,7 @@ callbackTableVar mgr fd = emFds mgr ! ha
+ 
+ haveOneShot :: Bool
+ {-# INLINE haveOneShot #-}
+-#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+-haveOneShot = False
+-#elif defined(HAVE_EPOLL) || defined(HAVE_KQUEUE)
++#if defined(HAVE_EPOLL) || defined(HAVE_KQUEUE)
+ haveOneShot = True
+ #else
+ haveOneShot = False
+@@ -374,9 +372,8 @@ registerFd mgr cb fd evs lt = do
+ -}
+ -- | Wake up the event manager.
+ wakeManager :: EventManager -> IO ()
+-#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+-wakeManager mgr = sendWakeup (emControl mgr)
+-#elif defined(HAVE_EPOLL) || defined(HAVE_KQUEUE)
++-- | Torrekie: Enable kqueue now
++#if defined(HAVE_EPOLL) || defined(HAVE_KQUEUE)
+ wakeManager _ = return ()
+ #else
+ wakeManager mgr = sendWakeup (emControl mgr)
+--- a/libraries/base/System/Environment/ExecutablePath.hsc	1708635585.000000000
++++ b/libraries/base/System/Environment/ExecutablePath.hsc	1711706939.204145709
+@@ -34,7 +34,7 @@ executablePath = Nothing
+ -- The imports are purposely kept completely disjoint to prevent edits
+ -- to one OS implementation from breaking another.
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ import Control.Exception (catch, throw)
+ import Data.Word
+ import Foreign.C
+@@ -129,7 +129,7 @@ executablePath :: Maybe (IO (Maybe FileP
+ --------------------------------------------------------------------------------
+ -- Mac OS X
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ 
+ type UInt32 = Word32
+ 
+--- a/libraries/base/include/HsBase.h	1708635585.000000000
++++ b/libraries/base/include/HsBase.h	1711706928.983971230
+@@ -104,7 +104,7 @@
+ # else
+ #  define CLOCK_ID CLOCK_REALTIME
+ # endif
+-#elif defined(darwin_HOST_OS)
++#elif defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ # include <mach/mach.h>
+ # include <mach/mach_time.h>
+ #endif
+@@ -540,7 +540,7 @@ INLINE int __hscore_open(char *file, int
+ }
+ #endif
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ // You should not access _environ directly on Darwin in a bundle/shared library.
+ // See #2458 and http://developer.apple.com/library/mac/#documentation/Darwin/Reference/ManPages/man7/environ.7.html
+ #include <crt_externs.h>
+--- a/libraries/ghci/GHCi/FFI.hsc	1708635585.000000000
++++ b/libraries/ghci/GHCi/FFI.hsc	1711706753.417827676
+@@ -24,7 +24,7 @@
+ #if !defined(javascript_HOST_ARCH)
+ -- See Note [FFI_GO_CLOSURES workaround] in ghc_ffi.h
+ -- We can't include ghc_ffi.h here as we must build with stage0
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ #if !defined(FFI_GO_CLOSURES)
+ #define FFI_GO_CLOSURES 0
+ #endif
+--- a/libraries/unix/System/Posix/Signals.hsc	1708635637.000000000
++++ b/libraries/unix/System/Posix/Signals.hsc	1711706713.158799304
+@@ -422,7 +422,7 @@ raiseSignal sig = throwErrnoIfMinus1_ "r
+ -- See also note in GHC's rts/RtsUtils.c
+ -- This is somewhat fragile because we need to keep the
+ -- `#if`-conditional in sync with GHC's runtime.
+-#if (defined(openbsd_HOST_OS) || defined(freebsd_HOST_OS) || defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) || defined(darwin_HOST_OS))
++#if (defined(openbsd_HOST_OS) || defined(freebsd_HOST_OS) || defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) || defined(darwin_HOST_OS) || defined(ios_HOST_OS))
+ foreign import ccall unsafe "genericRaise"
+   c_raise :: CInt -> IO CInt
+ #else
+--- a/llvm-targets	1708635585.000000000
++++ b/llvm-targets	1711708732.712951155
+@@ -47,9 +47,10 @@
+ ,("loongarch64-unknown-linux", ("e-m:e-p:64:64-i64:64-i128:128-n64-S128", "", "+f +d"))
+ ,("i386-apple-darwin", ("e-m:o-p:32:32-p270:32:32-p271:32:32-p272:64:64-f64:32:64-f80:128-n8:16:32-S128", "penryn", ""))
+ ,("x86_64-apple-darwin", ("e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", "penryn", ""))
++,("arm64-apple-ios", ("e-m:o-i64:64-i128:128-n32:64-S128", "apple-a9", "+v8.3a +fp-armv8 +neon +crc +crypto +fullfp16 +ras +lse +rdm +rcpc +zcm +zcz +sha2 +aes"))
+ ,("arm64-apple-darwin", ("e-m:o-i64:64-i128:128-n32:64-S128", "generic", "+v8.3a +fp-armv8 +neon +crc +crypto +fullfp16 +ras +lse +rdm +rcpc +zcm +zcz +sha2 +aes"))
+ ,("armv7-apple-ios", ("e-m:o-p:32:32-Fi8-f64:32:64-v64:32:64-v128:32:128-a:0:32-n32-S32", "generic", ""))
+-,("aarch64-apple-ios", ("e-m:o-i64:64-i128:128-n32:64-S128", "apple-a7", "+fp-armv8 +neon +crypto +zcm +zcz +sha2 +aes"))
++,("aarch64-apple-ios", ("e-m:o-i64:64-i128:128-n32:64-S128", "apple-a9", "+v8.3a +fp-armv8 +neon +crc +crypto +fullfp16 +ras +lse +rdm +rcpc +zcm +zcz +sha2 +aes"))
+ ,("i386-apple-ios", ("e-m:o-p:32:32-p270:32:32-p271:32:32-p272:64:64-f64:32:64-f80:128-n8:16:32-S128", "yonah", ""))
+ ,("x86_64-apple-ios", ("e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", "core2", ""))
+ ,("amd64-portbld-freebsd", ("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", "x86-64", ""))
+--- a/rts/Linker.c	1708635585.000000000
++++ b/rts/Linker.c	1711706559.601682176
+@@ -1454,7 +1454,7 @@ preloadObjectFile (pathchar *path)
+     *
+     * See also the misalignment logic for darwin below.
+     */
+-#if defined(darwin_HOST_OS) || defined(openbsd_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(openbsd_HOST_OS) || defined(ios_HOST_OS)
+    image = mmapForLinker(fileSize, MEM_READ_WRITE, MAP_PRIVATE, fd, 0);
+ #else
+    image = mmapForLinker(fileSize, MEM_READ_WRITE_EXECUTE, MAP_PRIVATE, fd, 0);
+@@ -1477,7 +1477,7 @@ preloadObjectFile (pathchar *path)
+        return NULL;
+    }
+ 
+-#  if defined(darwin_HOST_OS)
++#  if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ 
+     // In a Mach-O .o file, all sections can and will be misaligned
+     // if the total size of the headers is not a multiple of the
+--- a/rts/ProfHeap.c	1708635585.000000000
++++ b/rts/ProfHeap.c	1711706610.860285628
+@@ -27,7 +27,7 @@
+ #include <fs_rts.h>
+ #include <string.h>
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ #include <xlocale.h>
+ #else
+ #include <locale.h>
+--- a/rts/ReportMemoryMap.c	1708635585.000000000
++++ b/rts/ReportMemoryMap.c	1711706534.678189087
+@@ -14,7 +14,7 @@
+ 
+ #include <string.h>
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ #include <mach/mach.h>
+ #include <mach/mach_vm.h>
+ #include <mach/vm_region.h>
+@@ -72,7 +72,7 @@ void reportMemoryMap(void) {
+     }
+ }
+ 
+-#elif defined(darwin_HOST_OS)
++#elif defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ 
+ void reportMemoryMap(void) {
+     // Inspired by MacFUSE /proc implementation
+--- a/rts/RtsSymbols.c	1708635585.000000000
++++ b/rts/RtsSymbols.c	1711706588.718439869
+@@ -186,7 +186,7 @@ extern char **environ;
+ #endif
+ 
+ 
+-#if defined(darwin_HOST_OS) && HAVE_PRINTF_LDBLSTUB
++#if (defined(darwin_HOST_OS) || defined(ios_HOST_OS)) && HAVE_PRINTF_LDBLSTUB
+ #define RTS_DARWIN_ONLY_SYMBOLS                             \
+      SymI_NeedsProto(asprintf$LDBLStub)                     \
+      SymI_NeedsProto(err$LDBLStub)                          \
+--- a/rts/RtsUtils.c	1708635585.000000000
++++ b/rts/RtsUtils.c	1711706600.078683048
+@@ -338,7 +338,7 @@ heapCheckFail( void )
+  * genericRaise(), rather than raise(3).
+  */
+ int genericRaise(int sig) {
+-#if defined(THREADED_RTS) && (defined(openbsd_HOST_OS) || defined(freebsd_HOST_OS) || defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) || defined(darwin_HOST_OS))
++#if defined(THREADED_RTS) && (defined(openbsd_HOST_OS) || defined(freebsd_HOST_OS) || defined(dragonfly_HOST_OS) || defined(netbsd_HOST_OS) || defined(darwin_HOST_OS) || defined(ios_HOST_OS))
+         return pthread_kill(pthread_self(), sig);
+ #elif defined(HAVE_RAISE)
+         return raise(sig);
+--- a/rts/Task.h	1708635585.000000000
++++ b/rts/Task.h	1711706632.316248032
+@@ -318,7 +318,7 @@ typedef StgWord64 TaskId;
+ //
+ #if defined(THREADED_RTS)
+ INLINE_HEADER TaskId serialiseTaskId (OSThreadId taskID) {
+-#if defined(freebsd_HOST_OS) || defined(darwin_HOST_OS)
++#if defined(freebsd_HOST_OS) || defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+     // Here OSThreadId is a pthread_t and pthread_t is a pointer, but within
+     // the process we can still use that pointer value as a unique id.
+     return (TaskId) (size_t) taskID;
+--- a/rts/adjustor/NativeAmd64Asm.S	1708635585.000000000
++++ b/rts/adjustor/NativeAmd64Asm.S	1711706703.838919380
+@@ -25,7 +25,7 @@
+  * we will never execute it here; it will always be copied to an executable
+  * page first.
+  */
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ .section __DATA,__data
+ #else
+ .section .data
+@@ -87,7 +87,7 @@ DECLARE_CSYM(complex_ccall_adjustor_end)
+ 
+ 
+ /* See Note [Adjustor templates live in data section]. */
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ .section __TEXT,__text
+ #else
+ .section .text
+--- a/rts/adjustor/Nativei386.c	1708635585.000000000
++++ b/rts/adjustor/Nativei386.c	1711706688.726140319
+@@ -58,7 +58,7 @@ static struct AdjustorPool *ccall_pool;
+  * stdcall adjustor
+  ***************************************/
+ 
+-#if !defined(darwin_HOST_OS)
++#if !defined(darwin_HOST_OS) && !defined(ios_HOST_OS)
+ #define STDCALL_ADJUSTOR_LEN 0x0c
+ 
+ static void mk_stdcall_adjustor(uint8_t *code, const void *context, void *user_data STG_UNUSED)
+@@ -94,7 +94,7 @@ static struct AdjustorPool *stdcall_pool
+ 
+ void initAdjustors(void) {
+     ccall_pool = new_adjustor_pool(sizeof(struct CCallContext), CCALL_ADJUSTOR_LEN, mk_ccall_adjustor, NULL);
+-#if !defined(darwin_HOST_OS)
++#if !defined(darwin_HOST_OS) && !defined(ios_HOST_OS)
+     stdcall_pool = new_adjustor_pool(sizeof(struct AdjustorContext), STDCALL_ADJUSTOR_LEN, mk_stdcall_adjustor, NULL);
+ #endif
+ }
+@@ -108,7 +108,7 @@ createAdjustor(int cconv, StgStablePtr h
+     switch (cconv)
+     {
+     case 0: { /* _stdcall */
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+         barf("stdcall is not supported on Darwin")
+ #else
+         struct AdjustorContext context = {
+--- a/rts/include/rts/Flags.h	1708635585.000000000
++++ b/rts/include/rts/Flags.h	1711706502.763201835
+@@ -220,7 +220,7 @@ typedef struct _CONCURRENT_FLAGS {
+  * Note that there is no 32bit darwin system we can realistically expect to
+  * run on or compile for.
+  */
+-#if defined(darwin_HOST_OS) || defined(aarch64_HOST_ARCH) || defined(arm_HOST_ARCH)
++#if defined(darwin_HOST_OS) || defined(aarch64_HOST_ARCH) || defined(arm_HOST_ARCH) || defined(ios_HOST_OS)
+ #define DEFAULT_LINKER_ALWAYS_PIC true
+ #else
+ #define DEFAULT_LINKER_ALWAYS_PIC false
+--- a/rts/include/rts/ghc_ffi.h	1708635585.000000000
++++ b/rts/include/rts/ghc_ffi.h	1711706492.246919802
+@@ -19,7 +19,7 @@
+  *
+  * See #23568.
+  */
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ #if !defined(FFI_GO_CLOSURES)
+ #define FFI_GO_CLOSURES 0
+ #endif
+--- a/rts/include/stg/MachRegsForHost.h	1708635585.000000000
++++ b/rts/include/stg/MachRegsForHost.h	1711706519.705672746
+@@ -62,7 +62,7 @@
+ #define MACHREGS_aarch64  1
+ #endif
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ #define MACHREGS_darwin   1
+ #endif
+ 
+--- a/rts/posix/Clock.h	1708635585.000000000
++++ b/rts/posix/Clock.h	1711706439.326184658
+@@ -24,7 +24,7 @@
+ # else
+ #  define CLOCK_ID CLOCK_REALTIME
+ # endif
+-#elif defined(darwin_HOST_OS)
++#elif defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ # include <mach/mach.h>
+ # include <mach/mach_time.h>
+ #endif
+--- a/rts/posix/GetEnv.c	1708635585.000000000
++++ b/rts/posix/GetEnv.c	1711706321.199419411
+@@ -9,7 +9,7 @@
+ #include "Rts.h"
+ #include "GetEnv.h"
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ 
+ /* While the "extern char** environ" var does exist on OSX, it is not
+  * available to shared libs. See ghc ticket #2458 and
+--- a/rts/posix/GetTime.c	1708635585.000000000
++++ b/rts/posix/GetTime.c	1711706304.995989886
+@@ -25,7 +25,7 @@
+ #error No implementation for getProcessCPUTime() available.
+ #endif
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ #include <mach/mach_time.h>
+ #include <mach/mach_init.h>
+ #include <mach/thread_act.h>
+@@ -40,14 +40,14 @@
+ // we'll implement getProcessCPUTime() and getProcessElapsedTime()
+ // separately, using getrusage() and gettimeofday() respectively
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ static uint64_t timer_scaling_factor_numer = 0;
+ static uint64_t timer_scaling_factor_denom = 0;
+ #endif
+ 
+ void initializeTimer(void)
+ {
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+     mach_timebase_info_data_t info;
+     (void) mach_timebase_info(&info);
+     timer_scaling_factor_numer = (uint64_t)info.numer;
+@@ -74,7 +74,7 @@ Time getCurrentThreadCPUTime(void)
+     // N.B. Since macOS Catalina, Darwin supports clock_gettime but does not
+     // support clock_getcpuclockid. Hence we prefer to use the Darwin-specific
+     // path on Darwin, even if clock_gettime is available.
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+     thread_basic_info_data_t info = { };
+     mach_msg_type_number_t info_count = THREAD_BASIC_INFO_COUNT;
+     kern_return_t kern_err = thread_info(mach_thread_self(), THREAD_BASIC_INFO,
+@@ -148,7 +148,7 @@ StgWord64 getMonotonicNSec(void)
+ #if defined(HAVE_CLOCK_GETTIME)
+     return getClockTime(CLOCK_ID);
+ 
+-#elif defined(darwin_HOST_OS)
++#elif defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ 
+     uint64_t time = mach_absolute_time();
+     return (time * timer_scaling_factor_numer) / timer_scaling_factor_denom;
+--- a/rts/posix/OSThreads.c	1708635585.000000000
++++ b/rts/posix/OSThreads.c	1711706434.860601395
+@@ -26,7 +26,7 @@
+ #if defined(freebsd_HOST_OS) || defined(dragonfly_HOST_OS)
+ #define __BSD_VISIBLE   1
+ #endif
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ #define _DARWIN_C_SOURCE 1
+ #endif
+ #if defined(netbsd_HOST_OS)
+@@ -55,7 +55,7 @@
+ #include <string.h>
+ #endif
+ 
+-#if defined(darwin_HOST_OS) || defined(freebsd_HOST_OS) || defined(netbsd_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(freebsd_HOST_OS) || defined(netbsd_HOST_OS) || defined(ios_HOST_OS)
+ #include <sys/types.h>
+ #include <sys/sysctl.h>
+ #endif
+@@ -79,7 +79,7 @@
+ #include <unistd.h>
+ #endif
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ #include <mach/mach.h>
+ #endif
+ 
+@@ -370,7 +370,7 @@ getNumberOfProcessors (void)
+         }
+ #endif
+ 
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+         size_t size = sizeof(uint32_t);
+         if (sysctlbyname("machdep.cpu.thread_count",&nproc,&size,NULL,0) != 0) {
+             if (sysctlbyname("hw.logicalcpu",&nproc,&size,NULL,0) != 0) {
+@@ -448,7 +448,7 @@ setThreadAffinity (uint32_t n, uint32_t
+     sched_setaffinity(0, sizeof(cpu_set_t), &cs);
+ }
+ 
+-#elif defined(darwin_HOST_OS) && defined(THREAD_AFFINITY_POLICY)
++#elif (defined(darwin_HOST_OS) || defined(ios_HOST_OS)) && defined(THREAD_AFFINITY_POLICY)
+ // Schedules the current thread in the affinity set identified by tag n.
+ void
+ setThreadAffinity (uint32_t n, uint32_t m STG_UNUSED)
+@@ -535,10 +535,7 @@ KernelThreadId kernelThreadId (void)
+ #elif defined(freebsd_HOST_OS) && (__FreeBSD_version >= 900031)
+     return pthread_getthreadid_np();
+ 
+-// Check for OS X >= 10.6 (see #7356)
+-#elif defined(darwin_HOST_OS) && \
+-       !(defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && \
+-         __MAC_OS_X_VERSION_MIN_REQUIRED < 1060)
++#elif defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+     uint64_t ktid;
+     pthread_threadid_np(NULL, &ktid);
+     return ktid;
+--- a/rts/posix/Ticker.c	1708635585.000000000
++++ b/rts/posix/Ticker.c	1711706347.074420205
+@@ -39,7 +39,7 @@
+ #if defined(freebsd_HOST_OS) || defined(dragonfly_HOST_OS)
+ #define __BSD_VISIBLE   1
+ #endif
+-#if defined(darwin_HOST_OS)
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
+ #define _DARWIN_C_SOURCE 1
+ #endif
+ #if defined(netbsd_HOST_OS)
+--- a/rts/posix/OSMem.c	1708635585.000000000
++++ b/rts/posix/OSMem.c	1712303120.277343149
+@@ -60,16 +60,14 @@
+ # endif
+ #endif
+ 
+-#if !defined(darwin_HOST_OS)
+-# undef RESERVE_FLAGS
+-# if defined(MAP_GUARD)
+-#  define RESERVE_FLAGS  MAP_GUARD /* FreeBSD */
+-# elif defined(MAP_NORESERVE)
+-#  define RESERVE_FLAGS  MAP_NORESERVE | MAP_ANON | MAP_PRIVATE;
+-# else
+-#  if defined(USE_LARGE_ADDRESS_SPACE)
+-#   error USE_LARGE_ADDRESS_SPACE needs MAP_NORESERVE or MAP_GUARD
+-#  endif
++#undef RESERVE_FLAGS
++#if defined(MAP_GUARD)
++# define RESERVE_FLAGS  MAP_GUARD /* FreeBSD */
++#elif defined(MAP_NORESERVE) || defined(darwin_HOST_OS) || defined(ios_HOST_OS)
++# define RESERVE_FLAGS  MAP_NORESERVE | MAP_ANON | MAP_PRIVATE;
++#else
++# if defined(USE_LARGE_ADDRESS_SPACE)
++#  error USE_LARGE_ADDRESS_SPACE needs MAP_NORESERVE or MAP_GUARD
+ # endif
+ #endif
+ 
+@@ -181,18 +179,16 @@ static void *
+ my_mmap (void *addr, W_ size, int operation)
+ {
+     void *ret;
++    int try_mmap = 1;
+ 
+-#if defined(darwin_HOST_OS)
+-    // Without MAP_FIXED, Apple's mmap ignores addr.
+-    // With MAP_FIXED, it overwrites already mapped regions, which
+-    // mmap(0, ... MAP_FIXED ...) is worst of all: It unmaps the program text
+-    // and replaces it with zeroes, causing instant death.
+-    // This behaviour seems to be conformant with IEEE Std 1003.1-2001.
+-    // Let's just use the underlying Mach Microkernel calls directly,
+-    // they're much nicer.
+-
++#if defined(darwin_HOST_OS) || defined(ios_HOST_OS)
++    // We are compiling for Darwin 19+, the original comments
++    // here was just talking about what pre 2010 Darwins.
++    // So now, we first keep original behavior of the use of
++    // vm_allocate, if it fails like #21049, then try mmap
+     kern_return_t err = 0;
+     ret = addr;
++    try_mmap = 0;
+ 
+     if(operation & MEM_RESERVE)
+     {
+@@ -205,52 +201,52 @@ my_mmap (void *addr, W_ size, int operat
+     }
+ 
+     if(err) {
+-        // don't know what the error codes mean exactly, assume it's
+-        // not our problem though.
+-        errorBelch("memory allocation failed (requested %" FMT_Word " bytes)",
+-                   size);
+-        stg_exit(EXIT_FAILURE);
++        try_mmap = 1;
++        // Torrekie: no, please don't break the whole program, the
++        // mmap method was just returning NULL, we should match this
++        // behavior.
+     }
+ 
+-    if(operation & MEM_COMMIT) {
++    if(!try_mmap && operation & MEM_COMMIT) {
+         vm_protect(mach_task_self(), (vm_address_t)ret, size, false,
+                    VM_PROT_READ|VM_PROT_WRITE);
+     }
+ 
+-#else /* defined(darwin_HOST_OS) */
++#endif /* defined(darwin_HOST_OS) || defined(ios_HOST_OS) */
+ 
+-    int prot, flags;
+-    if (operation & MEM_COMMIT) {
+-        prot = PROT_READ | PROT_WRITE;
+-    } else {
+-        prot = PROT_NONE;
+-    }
++    if (try_mmap) {
++        int prot, flags;
++        if (operation & MEM_COMMIT) {
++            prot = PROT_READ | PROT_WRITE;
++        } else {
++            prot = PROT_NONE;
++        }
+ 
+-    if (operation == MEM_RESERVE) {
++        if (operation == MEM_RESERVE) {
+ # if defined(RESERVE_FLAGS)
+-        flags = RESERVE_FLAGS;
++            flags = RESERVE_FLAGS;
+ # else
+-        errorBelch("my_mmap(,,MEM_RESERVE) not supported on this platform");
++            errorBelch("my_mmap(,,MEM_RESERVE) not supported on this platform");
+ # endif
+-    } else if (operation == MEM_COMMIT) {
+-        flags = MAP_FIXED | MAP_ANON | MAP_PRIVATE;
+-    } else {
+-        flags = MAP_ANON | MAP_PRIVATE;
+-    }
++        } else if (operation == MEM_COMMIT) {
++            flags = MAP_FIXED | MAP_ANON | MAP_PRIVATE;
++        } else {
++            flags = MAP_ANON | MAP_PRIVATE;
++        }
+ 
+-    ret = mmap(addr, size, prot, flags, -1, 0);
++        ret = mmap(addr, size, prot, flags, -1, 0);
+ # if defined(linux_HOST_OS)
+-    if (ret == MAP_FAILED && errno == EPERM) {
+-        // Linux may return EPERM if it tried to give us
+-        // a chunk of address space below mmap_min_addr,
+-        // See #7500.
+-        ret = linux_retry_mmap(operation, size, ret, addr, prot, flags);
+-    }
+-# endif
+-    if (ret == MAP_FAILED) {
+-        return NULL;
++        if (ret == MAP_FAILED && errno == EPERM) {
++            // Linux may return EPERM if it tried to give us
++            // a chunk of address space below mmap_min_addr,
++            // See #7500.
++            ret = linux_retry_mmap(operation, size, ret, addr, prot, flags);
++        }
++# endif
++        if (ret == MAP_FAILED) {
++            return NULL;
++        }
+     }
+-#endif /* defined(darwin_HOST_OS) */
+ 
+     // Map in committed pages rather than take a fault for each chunk.
+     // Also arrange to include them in core-dump files.

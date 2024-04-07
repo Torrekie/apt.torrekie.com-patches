@@ -1,0 +1,208 @@
+--- a/docs/users_guide/extending_ghc.rst	1708635585.000000000
++++ b/docs/users_guide/extending_ghc.rst	1712310872.487805208
+@@ -1386,11 +1386,8 @@ The plugin has type ``WantedConstraints
+ * It is given the currently unsolved constraints.
+ * It returns a list of independent "defaulting proposals".
+ * Each proposal of type ``DefaultingProposal`` specifies:
+-  * ``deProposals``: specifies a list,
+-    in priority order, of sets of type variable assignments
+-  * ``deProposalCts :: [Ct]`` gives a set of constraints (always a
+-    subset of the incoming ``WantedConstraints``) to use as a
+-    criterion for acceptance
++  * ``deProposals``: specifies a list, in priority order, of sets of type variable assignments
++  * ``deProposalCts :: [Ct]`` gives a set of constraints (always a subset of the incoming ``WantedConstraints``) to use as a criterion for acceptance
+ 
+ After calling the plugin, GHC executes each ``DefaultingProposal`` in
+ turn.  To "execute" a proposal, GHC tries each of the proposed type
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/BuildPaths.hs	1708635636.000000000
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/BuildPaths.hs	1712261382.391384300
+@@ -258,6 +258,7 @@ objExtension = "o"
+ dllExtension :: Platform -> String
+ dllExtension (Platform _arch os)= case os of
+                    Windows -> "dll"
++                   IOS     -> "dylib"
+                    OSX     -> "dylib"
+                    _       -> "so"
+ 
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/Configure.hs	1708635636.000000000
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/Configure.hs	1712261534.710783340
+@@ -1995,7 +1995,7 @@ checkRelocatable verbosity pkg lbi
+     -- and RPATH, make sure you add your OS to RPATH-support list of:
+     -- Distribution.Simple.GHC.getRPaths
+     checkOS
+-        = unless (os `elem` [ OSX, Linux ])
++        = unless (os `elem` [ IOS, OSX, Linux ])
+         $ die' verbosity $ "Operating system: " ++ prettyShow os ++
+                 ", does not support relocatable builds"
+       where
+@@ -2075,27 +2075,28 @@ checkForeignLibSupported comp platform f
+       ]
+ 
+     goGhcPlatform :: Platform -> Maybe String
++    goGhcPlatform (Platform _      IOS    ) = goGhcOsx     (foreignLibType flib)
+     goGhcPlatform (Platform _      OSX    ) = goGhcOsx     (foreignLibType flib)
+     goGhcPlatform (Platform _      Linux  ) = goGhcLinux   (foreignLibType flib)
+     goGhcPlatform (Platform I386   Windows) = goGhcWindows (foreignLibType flib)
+     goGhcPlatform (Platform X86_64 Windows) = goGhcWindows (foreignLibType flib)
+     goGhcPlatform _ = unsupported [
+-        "Building foreign libraries is currently only supported on Mac OS, "
++        "Building foreign libraries is currently only supported on Darwin, "
+       , "Linux and Windows"
+       ]
+ 
+     goGhcOsx :: ForeignLibType -> Maybe String
+     goGhcOsx ForeignLibNativeShared
+       | not (null (foreignLibModDefFile flib)) = unsupported [
+-            "Module definition file not supported on OSX"
++            "Module definition file not supported on Darwin"
+           ]
+       | not (null (foreignLibVersionInfo flib)) = unsupported [
+-            "Foreign library versioning not currently supported on OSX"
++            "Foreign library versioning not currently supported on Darwin"
+           ]
+       | otherwise =
+           Nothing
+     goGhcOsx _ = unsupported [
+-        "We can currently only build shared foreign libraries on OSX"
++        "We can currently only build shared foreign libraries on Darwin"
+       ]
+ 
+     goGhcLinux :: ForeignLibType -> Maybe String
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/GHC.hs	1712431643.325945942
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/GHC.hs	1712261181.590304378
+@@ -912,7 +912,7 @@ buildOrReplLib mReplFlags verbosity numJ
+                 -- For dynamic libs, Mac OS/X needs to know the install location
+                 -- at build time. This only applies to GHC < 7.8 - see the
+                 -- discussion in #1660.
+-                ghcOptDylibName          = if hostOS == OSX
++                ghcOptDylibName          = if (hostOS == OSX || hostOS == IOS)
+                                               && ghcVersion < mkVersion [7,8]
+                                             then toFlag sharedLibInstallPath
+                                             else mempty,
+@@ -1816,6 +1816,7 @@ getRPaths :: LocalBuildInfo
+ getRPaths lbi clbi | supportRPaths hostOS = do
+     libraryPaths <- depLibraryPaths False (relocatable lbi) lbi clbi
+     let hostPref = case hostOS of
++                     IOS -> "@loader_path"
+                      OSX -> "@loader_path"
+                      _   -> "$ORIGIN"
+         relPath p = if isRelative p then hostPref </> p else p
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/GHCJS.hs	1712431637.882587039
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/GHCJS.hs	1712300041.214838360
+@@ -641,7 +641,7 @@ buildOrReplLib mReplFlags verbosity numJ
+                 -- at build time. This only applies to GHC < 7.8 - see the
+                 -- discussion in #1660.
+             {-
+-                ghcOptDylibName          = if hostOS == OSX
++                ghcOptDylibName          = if (hostOS == OSX || hostOS == IOS)
+                                               && ghcVersion < mkVersion [7,8]
+                                             then toFlag sharedLibInstallPath
+                                             else mempty, -}
+@@ -1502,6 +1502,7 @@ getRPaths :: LocalBuildInfo
+ getRPaths lbi clbi | supportRPaths hostOS = do
+     libraryPaths <- depLibraryPaths False (relocatable lbi) lbi clbi
+     let hostPref = case hostOS of
++                     IOS -> "@loader_path"
+                      OSX -> "@loader_path"
+                      _   -> "$ORIGIN"
+         relPath p = if isRelative p then hostPref </> p else p
+@@ -1533,7 +1534,7 @@ getRPaths lbi clbi | supportRPaths hostO
+     supportRPaths HPUX        = False
+     supportRPaths IRIX        = False
+     supportRPaths HaLVM       = False
+-    supportRPaths IOS         = False
++    supportRPaths IOS         = True
+     supportRPaths Android     = False
+     supportRPaths Ghcjs       = False
+     supportRPaths Wasi        = False
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/PreProcess.hs	1712431637.883403686
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/PreProcess.hs	1712261297.814103837
+@@ -568,7 +568,7 @@ ppHsc2hs bi lbi clbi =
+             Left index' -> index'
+             Right inf ->
+                 error ("ppHsc2hs: broken closure: " ++ show inf)
+-    isOSX = case buildOS of OSX -> True; _ -> False
++    isOSX = case buildOS of OSX -> True; IOS -> True; _ -> False
+     isELF = case buildOS of OSX -> False; Windows -> False; AIX -> False; _ -> True;
+     packageHacks = case compilerFlavor (compiler lbi) of
+       GHC   -> hackRtsPackage
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/Program/Ar.hs	1708635636.000000000
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/Program/Ar.hs	1712260220.821060010
+@@ -79,12 +79,14 @@ createArLibArchive verbosity lbi targetP
+   -- call on OSX we use "ar qs" so that it'll make the index.
+ 
+   let simpleArgs  = case hostOS of
++             IOS -> ["-r", "-s"]
+              OSX -> ["-r", "-s"]
+              _ | dashLSupported -> ["-qL"]
+              _   -> ["-r"]
+ 
+       initialArgs = ["-q"]
+       finalArgs   = case hostOS of
++             IOS -> ["-r", "-s"]
+              OSX -> ["-q", "-s"]
+              _ | dashLSupported -> ["-qL"]
+              _   -> ["-q"]
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/Utils.hs	1708635636.000000000
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/Utils.hs	1712300096.508490955
+@@ -1191,6 +1191,7 @@ addLibraryPath os paths = addEnv
+   where
+     pathsString = intercalate [searchPathSeparator] paths
+     ldPath = case os of
++               IOS -> "DYLD_LIBRARY_PATH"
+                OSX -> "DYLD_LIBRARY_PATH"
+                _   -> "LD_LIBRARY_PATH"
+ 
+--- a/libraries/Cabal/cabal-install/src/Distribution/Client/PackageHash.hs	1708635636.000000000
++++ b/libraries/Cabal/cabal-install/src/Distribution/Client/PackageHash.hs	1712261777.594248787
+@@ -29,7 +29,7 @@ import Distribution.Package
+          ( PackageId, PackageIdentifier(..), mkComponentId
+          , PkgconfigName )
+ import Distribution.System
+-         ( Platform, OS(Windows, OSX), buildOS )
++         ( Platform, OS(Windows, OSX, IOS), buildOS )
+ import Distribution.Types.Flag
+          ( FlagAssignment, showFlagAssignment )
+ import Distribution.Simple.Compiler
+@@ -62,6 +62,7 @@ hashedInstalledPackageId :: PackageHashI
+ hashedInstalledPackageId
+   | buildOS == Windows = hashedInstalledPackageIdShort
+   | buildOS == OSX     = hashedInstalledPackageIdVeryShort
++  | buildOS == IOS     = hashedInstalledPackageIdVeryShort
+   | otherwise          = hashedInstalledPackageIdLong
+ 
+ -- | Calculate a 'InstalledPackageId' for a package using our nix-style
+--- a/libraries/Cabal/cabal-install/src/Distribution/Client/ProjectPlanning.hs	1708635636.000000000
++++ b/libraries/Cabal/cabal-install/src/Distribution/Client/ProjectPlanning.hs	1712261713.546136266
+@@ -3444,6 +3444,7 @@ storePackageInstallDirs' StoreDirLayout{
+     --       command size limit of macOSs mach-o linker.
+     --       See also @PackageHash.hashedInstalledPackageIdVeryShort@
+     dynlibdir    | buildOS == OSX = store </> "lib"
++                 | buildOS == IOS = store </> "lib"
+                  | otherwise      = libdir
+     flibdir      = libdir
+     libexecdir   = prefix </> "libexec"
+--- a/libraries/Cabal/cabal-install/tests/IntegrationTests2.hs	1708635636.000000000
++++ b/libraries/Cabal/cabal-install/tests/IntegrationTests2.hs	1712261621.323693435
+@@ -1455,6 +1455,7 @@ testSetupScriptStyles config reportSubCa
+   plan0@(_,_,sharedConfig) <- planProject testdir1 config
+ 
+   let isOSX (Platform _ OSX) = True
++      isOSX (Platform _ IOS) = True
+       isOSX _ = False
+   -- Skip the Custom tests when the shipped Cabal library is buggy
+   unless (isOSX (pkgConfigPlatform sharedConfig)
+--- a/libraries/Cabal/doc/cabal-package.rst	1708635636.000000000
++++ b/libraries/Cabal/doc/cabal-package.rst	1712261563.627006566
+@@ -1467,9 +1467,9 @@ Foreign libraries
+ Foreign libraries are system libraries intended to be linked against
+ programs written in C or other "foreign" languages. They
+ come in two primary flavours: dynamic libraries (``.so`` files on Linux,
+-``.dylib`` files on OSX, ``.dll`` files on Windows, etc.) are linked against
++``.dylib`` files on Darwin, ``.dll`` files on Windows, etc.) are linked against
+ executables when the executable is run (or even lazily during
+-execution), while static libraries (``.a`` files on Linux/OSX, ``.lib``
++execution), while static libraries (``.a`` files on Linux/Darwin, ``.lib``
+ files on Windows) get linked against the executable at compile time.
+ 
+ Foreign libraries only work with GHC 7.8 and later.

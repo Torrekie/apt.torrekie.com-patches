@@ -1,0 +1,46 @@
+--- a/hadrian/bindist/config.mk.in	1704720299.000000000
++++ b/hadrian/bindist/config.mk.in	1712050124.263205522
+@@ -140,8 +140,8 @@ GhcWithSMP := $(strip $(if $(filter YESN
+ 
+ # Whether to include GHCi in the compiler.  Depends on whether the RTS linker
+ # has support for this OS/ARCH combination.
+-OsSupportsGHCi=$(strip $(patsubst $(TargetOS_CPP), YES, $(findstring $(TargetOS_CPP), mingw32 linux solaris2 freebsd dragonfly netbsd openbsd darwin kfreebsdgnu)))
+-ArchSupportsGHCi=$(strip $(patsubst $(TargetArch_CPP), YES, $(findstring $(TargetArch_CPP), i386 x86_64 powerpc powerpc64 powerpc64le sparc sparc64 arm aarch64)))
++OsSupportsGHCi=YES
++ArchSupportsGHCi=YES
+ 
+ ifeq "$(OsSupportsGHCi)$(ArchSupportsGHCi)" "YESYES"
+ GhcWithInterpreter=YES
+--- a/hadrian/src/Settings/Builders/RunTest.hs	1704720299.000000000
++++ b/hadrian/src/Settings/Builders/RunTest.hs	1712050327.927596841
+@@ -231,7 +231,7 @@ runTestBuilderArgs = builder Testsuite ?
+             , pure [ "--rootdir=" ++ testdir | testdir <- rootdirs ]
+             , arg "--top", arg (top -/- "testsuite")
+             , arg "-e", arg $ "windows=" ++ show windowsHost
+-            , arg "-e", arg $ "darwin=" ++ show osxHost
++            , arg "-e", arg $ "darwin=" ++ show (osxHost || iosHost)
+             , arg "-e", arg $ "config.local=False"
+             , arg "-e", arg $ "config.cleanup=" ++ show (not keepFiles)
+             , arg "-e", arg $ "config.accept=" ++ show accept
+--- a/hadrian/src/Settings/Packages.hs	1704720299.000000000
++++ b/hadrian/src/Settings/Packages.hs	1712049893.609028098
+@@ -441,7 +441,7 @@ rtsPackageArgs = package rts ? do
+ speedHack :: Action Bool
+ speedHack = do
+     i386   <- anyTargetArch ["i386"]
+-    goodOS <- not <$> anyTargetOs ["darwin", "solaris2"]
++    goodOS <- not <$> anyTargetOs ["darwin", "ios", "solaris2"]
+     return $ i386 && goodOS
+ 
+ -- See @rts/ghc.mk@.
+--- a/libraries/Cabal/Cabal/src/Distribution/Simple/GHC.hs	1712233903.613692341
++++ b/libraries/Cabal/Cabal/src/Distribution/Simple/GHC.hs	1712051046.229727053
+@@ -1826,7 +1826,7 @@ getRPaths lbi clbi | supportRPaths hostO
+     supportRPaths HPUX        = False
+     supportRPaths IRIX        = False
+     supportRPaths HaLVM       = False
+-    supportRPaths IOS         = False
++    supportRPaths IOS         = True
+     supportRPaths Android     = False
+     supportRPaths Ghcjs       = False
+     supportRPaths Wasi        = False
