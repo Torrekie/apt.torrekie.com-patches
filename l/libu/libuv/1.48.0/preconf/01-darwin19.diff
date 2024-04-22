@@ -1,0 +1,438 @@
+--- a/src/unix/core.c	1707337207.000000000
++++ b/src/unix/core.c	1713781367.907101202
+@@ -56,13 +56,13 @@
+ # endif /* defined(__APPLE__) */
+ 
+ 
+-#if defined(__APPLE__) && !TARGET_OS_IPHONE
++#if defined(__APPLE__)
+ # include <crt_externs.h>
+ # include <mach-o/dyld.h> /* _NSGetExecutablePath */
+ # define environ (*_NSGetEnviron())
+-#else /* defined(__APPLE__) && !TARGET_OS_IPHONE */
++#else /* defined(__APPLE__) */
+ extern char** environ;
+-#endif /* !(defined(__APPLE__) && !TARGET_OS_IPHONE) */
++#endif /* !(defined(__APPLE__)) */
+ 
+ 
+ #if defined(__DragonFly__)      || \
+@@ -589,7 +589,7 @@ int uv__close_nocancel(int fd) {
+ #if defined(__APPLE__)
+ #pragma GCC diagnostic push
+ #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
+-#if defined(__LP64__) || TARGET_OS_IPHONE
++#if defined(__LP64__) || TARGET_OS_EMBEDDED
+   extern int close$NOCANCEL(int);
+   return close$NOCANCEL(fd);
+ #else
+--- a/src/unix/darwin-proctitle.c	1707337207.000000000
++++ b/src/unix/darwin-proctitle.c	1713780806.496204282
+@@ -29,7 +29,7 @@
+ 
+ #include <TargetConditionals.h>
+ 
+-#if !TARGET_OS_IPHONE
++#if !TARGET_OS_EMBEDDED
+ #include "darwin-stub.h"
+ #endif
+ 
+@@ -50,7 +50,7 @@ static int uv__pthread_setname_np(const
+ 
+ 
+ int uv__set_process_title(const char* title) {
+-#if TARGET_OS_IPHONE
++#if TARGET_OS_EMBEDDED
+   return uv__pthread_setname_np(title);
+ #else
+   CFStringRef (*pCFStringCreateWithCString)(CFAllocatorRef,
+--- a/src/unix/fs.c	1707337207.000000000
++++ b/src/unix/fs.c	1713780362.087353663
+@@ -84,15 +84,35 @@
+ 
+ #if defined(__CYGWIN__) ||                                                    \
+     (defined(__HAIKU__) && B_HAIKU_VERSION < B_HAIKU_VERSION_1_PRE_BETA_5) || \
+-    (defined(__sun) && !defined(__illumos__)) ||                              \
+-    (defined(__APPLE__) && !TARGET_OS_IPHONE &&                               \
+-     MAC_OS_X_VERSION_MIN_REQUIRED < 110000)
++    (defined(__sun) && !defined(__illumos__))
+ #define preadv(fd, bufs, nbufs, off)                                          \
+   pread(fd, (bufs)->iov_base, (bufs)->iov_len, off)
+ #define pwritev(fd, bufs, nbufs, off)                                         \
+   pwrite(fd, (bufs)->iov_base, (bufs)->iov_len, off)
+ #endif
+ 
++#if __APPLE__
++/* use preadv/readv when available */
++extern __attribute__((weak_import)) ssize_t preadv(int d, const struct iovec *iov, int iovcnt, off_t offset);
++extern __attribute__((weak_import)) ssize_t pwritev(int fildes, const struct iovec *iov, int iovcnt, off_t offset);
++
++static ssize_t compat_preadv(int d, const struct iovec *iov, int iovcnt, off_t offset)
++{
++  return (preadv) ? preadv(d, iov, iovcnt, offset)
++                  : pread(d, (iov)->iov_base, (iov)->iov_len, offset);
++}
++static ssize_t compat_pwritev(int fildes, const struct iovec *iov, int iovcnt, off_t offset)
++{
++  return (pwritev) ? pwritev(fildes, iov, iovcnt, offset)
++                   : pwrite(fildes, (iov)->iov_base, (iov)->iov_len, offset);
++}
++
++#define preadv(fd, bufs, nbufs, off)                                          \
++  compat_preadv(fd, bufs, nbufs, off)
++#define pwritev(fd, bufs, nbufs, off)                                         \
++  compat_pwritev(fd, bufs, nbufs, off)
++#endif
++
+ #if defined(_AIX) && _XOPEN_SOURCE <= 600
+ extern char *mkdtemp(char *template); /* See issue #740 on AIX < 7 */
+ #endif
+--- a/src/unix/fsevents.c	1707337207.000000000
++++ b/src/unix/fsevents.c	1713781282.337729239
+@@ -21,7 +21,22 @@
+ #include "uv.h"
+ #include "internal.h"
+ 
+-#if TARGET_OS_IPHONE || MAC_OS_X_VERSION_MAX_ALLOWED < 1070
++/* Torrekie: iOS DO HAVE FSEvents, lets force open it */
++#if TARGET_OS_EMBEDDED
++#define PATH_COREFOUNDATION	"/System/Library/Frameworks/"             \
++				"CoreFoundation.framework/CoreFoundation"
++#define PATH_CORESERVICES	"/System/Library/Frameworks/"            \
++				"CoreServices.framework/CoreServices"
++#else
++#define PATH_COREFOUNDATION	"/System/Library/Frameworks/"             \
++				"Versions/A/"                             \
++				"CoreFoundation.framework/CoreFoundation"
++#define PATH_CORESERVICES	"/System/Library/Frameworks/"             \
++				"Versions/A/"                             \
++				"CoreServices.framework/CoreServices"
++#endif
++
++#if 0
+ 
+ /* iOS (currently) doesn't provide the FSEvents-API (nor CoreServices) */
+ /* macOS prior to 10.7 doesn't provide the full FSEvents API so use kqueue */
+@@ -39,7 +54,7 @@ int uv__fsevents_close(uv_fs_event_t* ha
+ void uv__fsevents_loop_delete(uv_loop_t* loop) {
+ }
+ 
+-#else /* TARGET_OS_IPHONE */
++#else
+ 
+ #include "darwin-stub.h"
+ 
+@@ -521,16 +536,12 @@ static int uv__fsevents_global_init(void
+    * per-event loop properties and have the dynamic linker keep track for us.
+    */
+   err = UV_ENOSYS;
+-  core_foundation_handle = dlopen("/System/Library/Frameworks/"
+-                                  "CoreFoundation.framework/"
+-                                  "Versions/A/CoreFoundation",
++  core_foundation_handle = dlopen(PATH_COREFOUNDATION,
+                                   RTLD_LAZY | RTLD_LOCAL);
+   if (core_foundation_handle == NULL)
+     goto out;
+ 
+-  core_services_handle = dlopen("/System/Library/Frameworks/"
+-                                "CoreServices.framework/"
+-                                "Versions/A/CoreServices",
++  core_services_handle = dlopen(PATH_CORESERVICES,
+                                 RTLD_LAZY | RTLD_LOCAL);
+   if (core_services_handle == NULL)
+     goto out;
+--- a/src/unix/internal.h	1707337207.000000000
++++ b/src/unix/internal.h	1713781249.168869300
+@@ -71,7 +71,8 @@
+ # include <poll.h>
+ #endif /* _AIX */
+ 
+-#if defined(__APPLE__) && !TARGET_OS_IPHONE
++#if defined(__APPLE__)
++# include <TargetConditionals.h>
+ # include <AvailabilityMacros.h>
+ #endif
+ 
+--- a/src/unix/kqueue.c	1707337207.000000000
++++ b/src/unix/kqueue.c	1713781460.096627637
+@@ -62,7 +62,7 @@ int uv__kqueue_init(uv_loop_t* loop) {
+ }
+ 
+ 
+-#if defined(__APPLE__) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
++#if defined(__APPLE__)
+ static _Atomic int uv__has_forked_with_cfrunloop;
+ #endif
+ 
+@@ -73,7 +73,7 @@ int uv__io_fork(uv_loop_t* loop) {
+   if (err)
+     return err;
+ 
+-#if defined(__APPLE__) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
++#if defined(__APPLE__)
+   if (loop->cf_state != NULL) {
+     /* We cannot start another CFRunloop and/or thread in the child
+        process; CF aborts if you try or if you try to touch the thread
+@@ -91,7 +91,7 @@ int uv__io_fork(uv_loop_t* loop) {
+     uv__free(loop->cf_state);
+     loop->cf_state = NULL;
+   }
+-#endif /* #if defined(__APPLE__) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1070 */
++#endif /* #if defined(__APPLE__) */
+   return err;
+ }
+ 
+@@ -531,7 +531,7 @@ int uv_fs_event_start(uv_fs_event_t* han
+                       const char* path,
+                       unsigned int flags) {
+   int fd;
+-#if defined(__APPLE__) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
++#if defined(__APPLE__)
+   struct stat statbuf;
+ #endif
+ 
+@@ -551,7 +551,7 @@ int uv_fs_event_start(uv_fs_event_t* han
+     return UV__ERR(errno);
+   }
+ 
+-#if defined(__APPLE__) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
++#if defined(__APPLE__)
+   /* Nullify field to perform checks later */
+   handle->cf_cb = NULL;
+   handle->realpath = NULL;
+@@ -580,7 +580,7 @@ int uv_fs_event_start(uv_fs_event_t* han
+     return r;
+   }
+ fallback:
+-#endif /* #if defined(__APPLE__) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1070 */
++#endif /* #if defined(__APPLE__) */
+ 
+   uv__handle_start(handle);
+   uv__io_init(&handle->event_watcher, uv__fs_event, fd);
+@@ -599,7 +599,7 @@ int uv_fs_event_stop(uv_fs_event_t* hand
+ 
+   uv__handle_stop(handle);
+ 
+-#if defined(__APPLE__) && MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
++#if defined(__APPLE__)
+   if (0 == atomic_load_explicit(&uv__has_forked_with_cfrunloop,
+                                 memory_order_relaxed))
+     if (handle->cf_cb != NULL)
+--- a/src/unix/process.c	1707337207.000000000
++++ b/src/unix/process.c	1713780503.687916207
+@@ -183,11 +183,6 @@ void uv__wait_children(uv_loop_t* loop)
+  * Used for initializing stdio streams like options.stdin_stream. Returns
+  * zero on success. See also the cleanup section in uv_spawn().
+  */
+-#if !(defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH))
+-/* execvp is marked __WATCHOS_PROHIBITED __TVOS_PROHIBITED, so must be
+- * avoided. Since this isn't called on those targets, the function
+- * doesn't even need to be defined for them.
+- */
+ static int uv__process_init_stdio(uv_stdio_container_t* container, int fds[2]) {
+   int mask;
+   int fd;
+@@ -951,15 +946,10 @@ static int uv__spawn_and_init_child(
+ 
+   return err;
+ }
+-#endif /* ISN'T TARGET_OS_TV || TARGET_OS_WATCH */
+ 
+ int uv_spawn(uv_loop_t* loop,
+              uv_process_t* process,
+              const uv_process_options_t* options) {
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  /* fork is marked __WATCHOS_PROHIBITED __TVOS_PROHIBITED. */
+-  return UV_ENOSYS;
+-#else
+   int pipes_storage[8][2];
+   int (*pipes)[2];
+   int stdio_count;
+@@ -1079,7 +1069,6 @@ error:
+   }
+ 
+   return err;
+-#endif
+ }
+ 
+ 
+--- a/test/runner-unix.c	1707337207.000000000
++++ b/test/runner-unix.c	1713780666.985697658
+@@ -40,10 +40,6 @@
+ #include <sys/time.h>
+ #include <pthread.h>
+ 
+-#ifdef __APPLE__
+-#include <TargetConditionals.h>
+-#endif
+-
+ extern char** environ;
+ 
+ static void closefd(int fd) {
+@@ -135,11 +131,7 @@ int process_start(char* name, char* part
+   p->terminated = 0;
+   p->status = 0;
+ 
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  pid = -1;
+-#else
+   pid = fork();
+-#endif
+ 
+   if (pid < 0) {
+     perror("fork");
+@@ -152,9 +144,7 @@ int process_start(char* name, char* part
+       closefd(pipefd[0]);
+     dup2(stdout_fd, STDOUT_FILENO);
+     dup2(stdout_fd, STDERR_FILENO);
+-#if !(defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH))
+     execve(args[0], args, environ);
+-#endif
+     perror("execve()");
+     _exit(127);
+   }
+--- a/test/test-fork.c	1707337207.000000000
++++ b/test/test-fork.c	1713780735.066172431
+@@ -27,10 +27,6 @@
+ #include <sys/socket.h>
+ #include <string.h>
+ 
+-#ifdef __APPLE__
+-#include <TargetConditionals.h>
+-#endif
+-
+ #include "uv.h"
+ #include "task.h"
+ 
+@@ -104,11 +100,7 @@ TEST_IMPL(fork_timer) {
+   pid_t child_pid;
+ 
+   run_timer_loop_once();
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  child_pid = -1;
+-#else
+   child_pid = fork();
+-#endif
+   ASSERT_NE(child_pid, -1);
+ 
+   if (child_pid != 0) {
+@@ -140,11 +132,7 @@ TEST_IMPL(fork_socketpair) {
+   /* Create the server watcher in the parent, use it in the child. */
+   ASSERT_OK(uv_poll_init(uv_default_loop(), &poll_handle, socket_fds[0]));
+ 
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  child_pid = -1;
+-#else
+   child_pid = fork();
+-#endif
+   ASSERT_NE(child_pid, -1);
+ 
+   if (child_pid != 0) {
+@@ -193,11 +181,7 @@ TEST_IMPL(fork_socketpair_started) {
+   */
+   ASSERT_EQ(1, uv_run(uv_default_loop(), UV_RUN_NOWAIT));
+ 
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  child_pid = -1;
+-#else
+   child_pid = fork();
+-#endif
+   ASSERT_NE(child_pid, -1);
+ 
+   if (child_pid != 0) {
+@@ -263,11 +247,7 @@ TEST_IMPL(fork_signal_to_child) {
+                             fork_signal_to_child_cb,
+                             SIGUSR1));
+ 
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  child_pid = -1;
+-#else
+   child_pid = fork();
+-#endif
+   ASSERT_NE(child_pid, -1);
+ 
+   if (child_pid != 0) {
+@@ -321,11 +301,7 @@ TEST_IMPL(fork_signal_to_child_closed) {
+                             fork_signal_to_child_cb,
+                             SIGUSR1));
+ 
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  child_pid = -1;
+-#else
+   child_pid = fork();
+-#endif
+   ASSERT_NE(child_pid, -1);
+ 
+   if (child_pid != 0) {
+@@ -532,11 +508,7 @@ static int _do_fork_fs_events_child(int
+ 
+   /* Watch in the parent, prime the loop and/or threads. */
+   assert_watch_file_current_dir(uv_default_loop(), file_or_dir);
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  child_pid = -1;
+-#else
+   child_pid = fork();
+-#endif
+   ASSERT_NE(child_pid, -1);
+ 
+   if (child_pid != 0) {
+@@ -642,11 +614,7 @@ TEST_IMPL(fork_fs_events_file_parent_chi
+   r = uv_timer_init(loop, &timer);
+   ASSERT_OK(r);
+ 
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  child_pid = -1;
+-#else
+   child_pid = fork();
+-#endif
+   ASSERT_NE(child_pid, -1);
+   if (child_pid != 0) {
+     /* parent */
+@@ -731,11 +699,7 @@ TEST_IMPL(fork_threadpool_queue_work_sim
+   /* Prime the pool and default loop. */
+   assert_run_work(uv_default_loop());
+ 
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  child_pid = -1;
+-#else
+   child_pid = fork();
+-#endif
+   ASSERT_NE(child_pid, -1);
+ 
+   if (child_pid != 0) {
+--- a/test/test-fs-event.c	1707337207.000000000
++++ b/test/test-fs-event.c	1713780698.166161207
+@@ -25,7 +25,7 @@
+ #include <string.h>
+ #include <fcntl.h>
+ 
+-#if defined(__APPLE__) && !TARGET_OS_IPHONE
++#if defined(__APPLE__)
+ # include <AvailabilityMacros.h>
+ #endif
+ 
+--- a/test/test-pipe-close-stdout-read-stdin.c	1707337207.000000000
++++ b/test/test-pipe-close-stdout-read-stdin.c	1713780751.302093217
+@@ -26,10 +26,6 @@
+ #include <sys/wait.h>
+ #include <sys/types.h>
+ 
+-#ifdef __APPLE__
+-#include <TargetConditionals.h>
+-#endif
+-
+ #include "uv.h"
+ #include "task.h"
+ 
+@@ -63,11 +59,7 @@ TEST_IMPL(pipe_close_stdout_read_stdin)
+   r = pipe(fd);
+   ASSERT_OK(r);
+     
+-#if defined(__APPLE__) && (TARGET_OS_TV || TARGET_OS_WATCH)
+-  pid = -1;
+-#else
+   pid = fork();
+-#endif
+ 
+   if (pid == 0) {
+     /*
