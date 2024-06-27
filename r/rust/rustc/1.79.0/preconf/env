@@ -1,0 +1,8 @@
+# We will need some wrapper tools
+PATH=$(srcroot)/altbin:$PATH
+# Never let rust embed what we already have
+AARCH64_APPLE_IOS_OPENSSL_DIR=/usr
+# THIS IS INCOMPATIBLE WITH NON-TORREKIE BUILDS
+AARCH64_APPLE_IOS_JEMALLOC_OVERRIDE=/usr/lib/libjemalloc.dylib
+LIBGIT2_NO_VENDOR=1
+LIBSSH2_SYS_USE_PKG_CONFIG=1

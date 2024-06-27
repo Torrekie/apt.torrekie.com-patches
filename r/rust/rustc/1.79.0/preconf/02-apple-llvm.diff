@@ -1,0 +1,963 @@
+--- ./rustc-1.79.0-src/compiler/rustc/build.rs	1153704088.000000000
++++ ./compiler/rustc/build.rs	1719046178.825149481
+@@ -6,6 +6,12 @@ fn main() {
+     if Ok("windows") == target_os.as_deref() && Ok("msvc") == target_env.as_deref() {
+         set_windows_exe_options();
+     } else {
++        #[cfg(target_os = "macos")]
++        println!(r"cargo:rustc-link-search=/opt/homebrew/opt/jemalloc/lib");
++        #[cfg(target_vendor = "apple")]
++        println!("cargo:rustc-link-lib=jemalloc");
++        #[cfg(target_vendor = "apple")]
++        println!("cargo:rustc-link-arg=-Wl,-dead_strip_dylibs");
+         // Avoid rerunning the build script every time.
+         println!("cargo:rerun-if-changed=build.rs");
+     }
+--- ./rustc-1.79.0-src/compiler/rustc/src/main.rs	1153704088.000000000
++++ ./compiler/rustc/src/main.rs	1719048717.346061715
+@@ -59,9 +59,10 @@ fn main() {
+         // registers itself with the allocator's zone APIs in a ctor. However,
+         // the linker doesn't seem to consider ctors as "used" when statically
+         // linking, so we need to explicitly depend on the function.
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         {
+             extern "C" {
++                #[cfg_attr(target_vendor = "apple", link_name = "je_zone_register")]
+                 fn _rjem_je_zone_register();
+             }
+ 
+--- ./rustc-1.79.0-src/compiler/rustc_codegen_cranelift/src/debuginfo/unwind.rs	1153704088.000000000
++++ ./compiler/rustc_codegen_cranelift/src/debuginfo/unwind.rs	1719046179.480199767
+@@ -108,7 +108,7 @@ impl UnwindContext {
+         // =======================================================================
+         // Everything after this line up to the end of the file is loosely based on
+         // https://github.com/bytecodealliance/wasmtime/blob/4471a82b0c540ff48960eca6757ccce5b1b5c3e4/crates/jit/src/unwind/systemv.rs
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         {
+             // On macOS, `__register_frame` takes a pointer to a single FDE
+             let start = eh_frame.as_ptr();
+@@ -128,7 +128,7 @@ impl UnwindContext {
+                 current = current.add(len + 4);
+             }
+         }
+-        #[cfg(not(target_os = "macos"))]
++        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+         {
+             // On other platforms, `__register_frame` will walk the FDEs until an entry of length 0
+             __register_frame(eh_frame.as_ptr());
+--- ./rustc-1.79.0-src/compiler/rustc_codegen_llvm/src/context.rs	1153704088.000000000
++++ ./compiler/rustc_codegen_llvm/src/context.rs	1719046821.888228812
+@@ -123,6 +123,40 @@ pub unsafe fn create_module<'ll>(
+ 
+     let mut target_data_layout = sess.target.data_layout.to_string();
+     let llvm_version = llvm_util::get_version();
++    if llvm_version < (14, 0, 0) {
++        if sess.target.llvm_target == "i686-pc-windows-msvc"
++            || sess.target.llvm_target == "i586-pc-windows-msvc"
++        {
++            target_data_layout =
++                "e-m:x-p:32:32-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:32-n8:16:32-a:0:32-S32"
++                    .to_string();
++        } else if sess.target.arch == "wasm32" {
++            target_data_layout = target_data_layout.replace("-p10:8:8-p20:8:8", "");
++        }
++    }
++    if llvm_version < (16, 0, 0) {
++        if sess.target.arch == "s390x" {
++            // LLVM 16 data layout changed to always set 64-bit vector alignment,
++            // which is conditional in earlier LLVM versions.
++            // https://reviews.llvm.org/D131158 for the discussion.
++            target_data_layout = target_data_layout.replace("-v128:64", "");
++        } else if sess.target.arch == "riscv64" {
++            // LLVM 16 introduced this change so as to produce more efficient code.
++            // See https://reviews.llvm.org/D116735 for the discussion.
++            target_data_layout = target_data_layout.replace("-n32:64-", "-n64-");
++        }
++    }
++    if llvm_version < (17, 0, 0) {
++        if sess.target.arch.starts_with("powerpc") {
++            // LLVM 17 specifies function pointer alignment for ppc:
++            // https://reviews.llvm.org/D147016
++            target_data_layout = target_data_layout
++                .replace("-Fn32", "")
++                .replace("-Fi32", "")
++                .replace("-Fn64", "")
++                .replace("-Fi64", "");
++        }
++    }
+     if llvm_version < (18, 0, 0) {
+         if sess.target.arch == "x86" || sess.target.arch == "x86_64" {
+             // LLVM 18 adjusts i128 to be 128-bit aligned on x86 variants.
+--- ./rustc-1.79.0-src/compiler/rustc_codegen_llvm/src/llvm_util.rs	1153704088.000000000
++++ ./compiler/rustc_codegen_llvm/src/llvm_util.rs	1719048558.311316062
+@@ -270,6 +270,10 @@ pub fn to_llvm_features<'a>(sess: &Sessi
+             "sve2-bitperm",
+             TargetFeatureFoldStrength::EnableOnly("neon"),
+         ),
++        // The unaligned-scalar-mem feature was renamed to fast-unaligned-access.
++        ("riscv32" | "riscv64", "fast-unaligned-access") if get_version().0 <= 17 => {
++            LLVMFeature::new("unaligned-scalar-mem")
++        }
+         // In LLVM 18, `unaligned-scalar-mem` was merged with `unaligned-vector-mem` into a single feature called
+         // `fast-unaligned-access`. In LLVM 19, it was split back out.
+         ("riscv32" | "riscv64", "unaligned-scalar-mem") if get_version().0 == 18 => {
+--- ./rustc-1.79.0-src/compiler/rustc_codegen_ssa/src/back/link.rs	1153704088.000000000
++++ ./compiler/rustc_codegen_ssa/src/back/link.rs	1719046825.839796242
+@@ -1030,18 +1030,24 @@ fn link_natively(
+     let strip = sess.opts.cg.strip;
+ 
+     if sess.target.is_like_osx {
+-        match (strip, crate_type) {
+-            (Strip::Debuginfo, _) => {
+-                strip_symbols_with_external_utility(sess, "strip", out_filename, Some("-S"))
++        // Torrekie: This will eventually break our auto codesigning on jailbroken system.
++        // But we can always do strip on macOS
++        if cfg!(target_os = "macos") || env::var("RUSTC_ALLOW_STRIP").is_err() {
++            match (strip, crate_type) {
++                (Strip::Debuginfo, _) => {
++                    strip_symbols_with_external_utility(sess, "strip", out_filename, Some("-S"))
++                }
++                // Per the manpage, `-x` is the maximum safe strip level for dynamic libraries. (#93988)
++                (Strip::Symbols, CrateType::Dylib | CrateType::Cdylib | CrateType::ProcMacro) => {
++                    strip_symbols_with_external_utility(sess, "strip", out_filename, Some("-x"))
++                }
++                (Strip::Symbols, _) => {
++                    strip_symbols_with_external_utility(sess, "strip", out_filename, None)
++                }
++                (Strip::None, _) => {}
+             }
+-            // Per the manpage, `-x` is the maximum safe strip level for dynamic libraries. (#93988)
+-            (Strip::Symbols, CrateType::Dylib | CrateType::Cdylib | CrateType::ProcMacro) => {
+-                strip_symbols_with_external_utility(sess, "strip", out_filename, Some("-x"))
+-            }
+-            (Strip::Symbols, _) => {
+-                strip_symbols_with_external_utility(sess, "strip", out_filename, None)
+-            }
+-            (Strip::None, _) => {}
++        } else {
++            info!("Stripping is prevented on non-macOS systems by default, set RUSTC_ALLOW_STRIP=1 to allow this behavior.");
+         }
+     }
+ 
+@@ -1274,7 +1274,7 @@ fn link_sanitizer_runtime(
+ 
+     if sess.target.is_like_osx {
+         // On Apple platforms, the sanitizer is always built as a dylib, and
+-        // LLVM will link to `@rpath/*.dylib`, so we need to specify an
++        // LLVM will link to `@rpath/.dylib`, so we need to specify an
+         // rpath to the library as well (the rpath should be absolute, see
+         // PR #41352 for details).
+         let filename = format!("rustc{channel}_rt.{name}");
+@@ -2956,10 +2956,10 @@ fn add_apple_sdk(cmd: &mut dyn Linker, s
+         ("arm", "ios") => "iphoneos",
+         ("aarch64", "ios") if llvm_target.contains("macabi") => "macosx",
+         ("aarch64", "ios") if llvm_target.ends_with("-simulator") => "iphonesimulator",
+-        ("aarch64", "ios") => "iphoneos",
++        ("aarch64", "ios") if !llvm_target.contains("sim") => "iphoneos",
+         ("x86", "ios") => "iphonesimulator",
+         ("x86_64", "ios") if llvm_target.contains("macabi") => "macosx",
+-        ("x86_64", "ios") => "iphonesimulator",
++        ("x86_64", "ios") if !llvm_target.contains("macabi") => "iphonesimulator",
+         ("x86_64", "watchos") => "watchsimulator",
+         ("arm64_32", "watchos") => "watchos",
+         ("aarch64", "watchos") if llvm_target.ends_with("-simulator") => "watchsimulator",
+@@ -3028,9 +3028,8 @@ fn get_apple_sdk_root(sdk_name: &str) ->
+                 if sdkroot.contains("iPhoneSimulator.platform")
+                     || sdkroot.contains("MacOSX.platform") => {}
+             "iphonesimulator"
+-                if sdkroot.contains("iPhoneOS.platform") || sdkroot.contains("MacOSX.platform") => {
+-            }
+-            "macosx10.15"
++                if sdkroot.contains("iPhoneOS.platform") || sdkroot.contains("MacOSX.platform") => {}
++            "macosx"
+                 if sdkroot.contains("iPhoneOS.platform")
+                     || sdkroot.contains("iPhoneSimulator.platform") => {}
+             "watchos"
+@@ -3044,10 +3043,12 @@ fn get_apple_sdk_root(sdk_name: &str) ->
+             "xrsimulator"
+                 if sdkroot.contains("XROS.platform") || sdkroot.contains("MacOSX.platform") => {}
+             // Ignore `SDKROOT` if it's not a valid path.
+-            _ if !p.is_absolute() || p == Path::new("/") || !p.exists() => {}
++            // Torrekie: On jailbroken iOS, we permit "/"
++            _ if !p.is_absolute() || !p.exists() => {}
+             _ => return Ok(sdkroot),
+         }
+     }
++    // TODO: Reimpl a xcrun, or remove this code
+     let res =
+         Command::new("xcrun").arg("--show-sdk-path").arg("-sdk").arg(sdk_name).output().and_then(
+             |output| {
+--- ./rustc-1.79.0-src/compiler/rustc_data_structures/src/profiling.rs	1153704088.000000000
++++ ./compiler/rustc_data_structures/src/profiling.rs	1719046826.427566298
+@@ -885,7 +885,7 @@ cfg_match! {
+             Some(pmc.WorkingSetSize)
+         }
+     }
+-    cfg(target_os = "macos")  => {
++    cfg(any(target_os = "macos", target_os = "ios"))  => {
+         pub fn get_resident_set_size() -> Option<usize> {
+             use libc::{c_int, c_void, getpid, proc_pidinfo, proc_taskinfo, PROC_PIDTASKINFO};
+             use std::mem;
+--- ./rustc-1.79.0-src/compiler/rustc_driver_impl/src/lib.rs	1153704088.000000000
++++ ./compiler/rustc_driver_impl/src/lib.rs	1719046827.015079689
+@@ -86,10 +86,10 @@ pub mod pretty;
+ #[macro_use]
+ mod print;
+ mod session_diagnostics;
+-#[cfg(all(unix, any(target_env = "gnu", target_os = "macos")))]
++#[cfg(all(unix, any(target_env = "gnu", any(target_os = "macos", target_os = "ios"))))]
+ mod signal_handler;
+ 
+-#[cfg(not(all(unix, any(target_env = "gnu", target_os = "macos"))))]
++#[cfg(not(all(unix, any(target_env = "gnu", any(target_os = "macos", target_os = "ios")))))]
+ mod signal_handler {
+     /// On platforms which don't support our signal handler's requirements,
+     /// simply use the default signal handler provided by std.
+--- ./rustc-1.79.0-src/compiler/rustc_error_codes/src/error_codes/E0778.md	1153704088.000000000
++++ ./compiler/rustc_error_codes/src/error_codes/E0778.md	1719046827.608653925
+@@ -16,7 +16,7 @@ specified:
+ ```
+ #![feature(isa_attribute)]
+ 
+-#[cfg_attr(target_arch="arm", instruction_set(arm::a32))]
++#[cfg_attr(all(target_arch="arm", target_os="none"), instruction_set(arm::a32))]
+ fn something() {}
+ ```
+ 
+@@ -25,7 +25,7 @@ or:
+ ```
+ #![feature(isa_attribute)]
+ 
+-#[cfg_attr(target_arch="arm", instruction_set(arm::t32))]
++#[cfg_attr(all(target_arch="arm", target_os="none"), instruction_set(arm::t32))]
+ fn something() {}
+ ```
+ 
+--- ./rustc-1.79.0-src/compiler/rustc_error_codes/src/error_codes/E0779.md	1153704088.000000000
++++ ./compiler/rustc_error_codes/src/error_codes/E0779.md	1719046828.195701948
+@@ -21,7 +21,7 @@ error. Example:
+ ```
+ #![feature(isa_attribute)]
+ 
+-#[cfg_attr(target_arch="arm", instruction_set(arm::a32))] // ok!
++#[cfg_attr(all(target_arch="arm", target_os="none"), instruction_set(arm::a32))] // ok!
+ pub fn something() {}
+ fn main() {}
+ ```
+--- ./rustc-1.79.0-src/compiler/rustc_lint/src/builtin.rs	1153704088.000000000
++++ ./compiler/rustc_lint/src/builtin.rs	1719046829.377959394
+@@ -2739,7 +2739,10 @@ declare_lint! {
+     /// ### Example
+     ///
+     /// ```rust,compile_fail
+-    /// # #![feature(asm_experimental_arch)]
++    /// #![cfg_attr(
++    ///  not(any(target_arch = "powerpc64", target_arch = "s390x")),
++    ///  feature(asm_experimental_arch)
++    /// )]
+     /// use std::arch::asm;
+     ///
+     /// fn main() {
+--- ./rustc-1.79.0-src/compiler/rustc_lint_defs/src/builtin.rs	1153704088.000000000
++++ ./compiler/rustc_lint_defs/src/builtin.rs	1719046828.785615352
+@@ -3099,11 +3099,13 @@ declare_lint! {
+     ///
+     /// use std::arch::asm;
+     ///
++    /// #[cfg(not(any(target_arch = "powerpc64", target_arch = "s390x")))]
+     /// #[naked]
+     /// pub fn default_abi() -> u32 {
+     ///     unsafe { asm!("", options(noreturn)); }
+     /// }
+     ///
++    /// #[cfg(not(any(target_arch = "powerpc64", target_arch = "s390x")))]
+     /// #[naked]
+     /// pub extern "Rust" fn rust_abi() -> u32 {
+     ///     unsafe { asm!("", options(noreturn)); }
+--- ./rustc-1.79.0-src/compiler/rustc_llvm/build.rs	1719049036.431860599
++++ ./compiler/rustc_llvm/build.rs	1719046913.419535763
+@@ -163,6 +163,10 @@ fn main() {
+     let mut cfg = cc::Build::new();
+     cfg.warnings(false);
+     for flag in cxxflags.split_whitespace() {
++        // Split-dwarf gives unreproducible DW_AT_GNU_dwo_id so don't do it
++        if flag == "-gsplit-dwarf" {
++            continue;
++        }
+         // Ignore flags like `-m64` when we're doing a cross build
+         if is_crossed && flag.starts_with("-m") {
+             continue;
+--- ./rustc-1.79.0-src/compiler/rustc_llvm/llvm-wrapper/LLVMWrapper.h	1153704088.000000000
++++ ./compiler/rustc_llvm/llvm-wrapper/LLVMWrapper.h	1719046933.661764168
+@@ -28,9 +28,16 @@
+ #include "llvm/Transforms/Instrumentation.h"
+ #include "llvm/Transforms/Scalar.h"
+ 
++#ifndef USE_APPLE_LLVM
+ #define LLVM_VERSION_GE(major, minor)                                          \
+   (LLVM_VERSION_MAJOR > (major) ||                                             \
+    LLVM_VERSION_MAJOR == (major) && LLVM_VERSION_MINOR >= (minor))
++#else
++/* Torrekie: We use Apple LLVM, but they lied to us the version */
++#define LLVM_VERSION_GE(major, minor)                                          \
++  ((LLVM_VERSION_MAJOR - 1) > (major) ||                                       \
++   (LLVM_VERSION_MAJOR - 1) == (major) && LLVM_VERSION_MINOR >= (minor))
++#endif
+ 
+ #define LLVM_VERSION_LT(major, minor) (!LLVM_VERSION_GE((major), (minor)))
+ 
+@@ -44,7 +51,11 @@
+ #include "llvm/IR/IRPrintingPasses.h"
+ #include "llvm/Linker/Linker.h"
+ 
++#if LLVM_VERSION_GE(16, 0)
+ #include "llvm/TargetParser/Triple.h"
++#else
++#include "llvm/ADT/Triple.h"
++#endif
+ 
+ extern "C" void LLVMRustSetLastError(const char *);
+ 
+--- ./rustc-1.79.0-src/compiler/rustc_llvm/llvm-wrapper/PassWrapper.cpp	1153704088.000000000
++++ ./compiler/rustc_llvm/llvm-wrapper/PassWrapper.cpp	1719048118.324097775
+@@ -24,7 +24,9 @@
+ #include "llvm/Passes/StandardInstrumentations.h"
+ #include "llvm/Support/CBindingWrapping.h"
+ #include "llvm/Support/FileSystem.h"
++#if LLVM_VERSION_GE(17, 0) || USE_APPLE_LLVM
+ #include "llvm/Support/VirtualFileSystem.h"
++#endif
+ #include "llvm/Target/TargetMachine.h"
+ #include "llvm/Transforms/IPO/AlwaysInliner.h"
+ #include "llvm/Transforms/IPO/FunctionImport.h"
+@@ -208,7 +210,11 @@ enum class LLVMRustCodeModel {
+   None,
+ };
+ 
++#if LLVM_VERSION_LT(16, 0)
++static Optional<CodeModel::Model>
++#else
+ static std::optional<CodeModel::Model>
++#endif
+ fromRust(LLVMRustCodeModel Model) {
+   switch (Model) {
+   case LLVMRustCodeModel::Tiny:
+@@ -222,7 +228,11 @@ fromRust(LLVMRustCodeModel Model) {
+   case LLVMRustCodeModel::Large:
+     return CodeModel::Large;
+   case LLVMRustCodeModel::None:
++#if LLVM_VERSION_LT(16, 0)
++    return None;
++#else
+     return std::nullopt;
++#endif
+   default:
+     report_fatal_error("Bad CodeModel.");
+   }
+@@ -332,8 +342,14 @@ extern "C" void LLVMRustPrintTargetCPUs(
+ 
+   std::ostringstream Buf;
+ 
++#if LLVM_VERSION_GE(17, 0)
+   const MCSubtargetInfo *MCInfo = Target->getMCSubtargetInfo();
+   const ArrayRef<SubtargetSubTypeKV> CPUTable = MCInfo->getAllProcessorDescriptions();
++#else
++  Buf << "Full target CPU help is not supported by this LLVM version.\n\n";
++  SubtargetSubTypeKV TargetCPUKV = { TargetCPU, {{}}, {{}} };
++  const ArrayRef<SubtargetSubTypeKV> CPUTable = TargetCPUKV;
++#endif
+   unsigned MaxCPULen = getLongestEntryLength(CPUTable);
+ 
+   Buf << "Available CPUs for this target:\n";
+@@ -468,6 +484,9 @@ extern "C" LLVMTargetMachineRef LLVMRust
+   Options.RelaxELFRelocations = RelaxELFRelocations;
+ #endif
+   Options.UseInitArray = UseInitArray;
++#if LLVM_VERSION_LT(17, 0) && !USE_APPLE_LLVM
++  Options.ExplicitEmulatedTLS = true;
++#endif
+   Options.EmulatedTLS = UseEmulatedTls;
+ 
+   if (TrapUnreachable) {
+@@ -741,18 +760,34 @@ LLVMRustOptimize(
+   bool DebugPassManager = false;
+ 
+   PassInstrumentationCallbacks PIC;
++#if LLVM_VERSION_LT(16, 0)
++  StandardInstrumentations SI(DebugPassManager);
++#else
+   StandardInstrumentations SI(TheModule->getContext(), DebugPassManager);
++#endif
+   SI.registerCallbacks(PIC);
+ 
+   if (LlvmSelfProfiler){
+     LLVMSelfProfileInitializeCallbacks(PIC,LlvmSelfProfiler,BeforePassCallback,AfterPassCallback);
+   }
+ 
++#if LLVM_VERSION_LT(16, 0)
++  Optional<PGOOptions> PGOOpt;
++#else
+   std::optional<PGOOptions> PGOOpt;
++#endif
++#if LLVM_VERSION_GE(17, 0) || USE_APPLE_LLVM
+   auto FS = vfs::getRealFileSystem();
++#endif
+   if (PGOGenPath) {
+     assert(!PGOUsePath && !PGOSampleUsePath);
+-    PGOOpt = PGOOptions(PGOGenPath, "", "", "", FS,
++    PGOOpt = PGOOptions(PGOGenPath, "", "",
++#if LLVM_VERSION_GE(17, 0) || USE_APPLE_LLVM
++#if LLVM_VERSION_GE(17, 0)
++                        "",
++#endif
++                        FS,
++#endif
+                         PGOOptions::IRInstr, PGOOptions::NoCSAction,
+ #if LLVM_VERSION_GE(19, 0)
+                         PGOOptions::ColdFuncOpt::Default,
+@@ -760,21 +795,39 @@ LLVMRustOptimize(
+                         DebugInfoForProfiling);
+   } else if (PGOUsePath) {
+     assert(!PGOSampleUsePath);
+-    PGOOpt = PGOOptions(PGOUsePath, "", "", "", FS,
++    PGOOpt = PGOOptions(PGOUsePath, "", "",
++#if LLVM_VERSION_GE(17, 0) || USE_APPLE_LLVM
++#if LLVM_VERSION_GE(17, 0)
++                        "",
++#endif
++                        FS,
++#endif
+                         PGOOptions::IRUse, PGOOptions::NoCSAction,
+ #if LLVM_VERSION_GE(19, 0)
+                         PGOOptions::ColdFuncOpt::Default,
+ #endif
+                         DebugInfoForProfiling);
+   } else if (PGOSampleUsePath) {
+-    PGOOpt = PGOOptions(PGOSampleUsePath, "", "", "", FS,
++    PGOOpt = PGOOptions(PGOSampleUsePath, "", "",
++#if LLVM_VERSION_GE(17, 0) || USE_APPLE_LLVM
++#if LLVM_VERSION_GE(17, 0)
++                        "",
++#endif
++                        FS,
++#endif
+                         PGOOptions::SampleUse, PGOOptions::NoCSAction,
+ #if LLVM_VERSION_GE(19, 0)
+                         PGOOptions::ColdFuncOpt::Default,
+ #endif
+                         DebugInfoForProfiling);
+   } else if (DebugInfoForProfiling) {
+-    PGOOpt = PGOOptions("", "", "", "", FS,
++    PGOOpt = PGOOptions("", "", "",
++#if LLVM_VERSION_GE(17, 0) || USE_APPLE_LLVM
++#if LLVM_VERSION_GE(17, 0)
++                        "",
++#endif
++                        FS,
++#endif
+                         PGOOptions::NoAction, PGOOptions::NoCSAction,
+ #if LLVM_VERSION_GE(19, 0)
+                         PGOOptions::ColdFuncOpt::Default,
+@@ -893,7 +946,12 @@ LLVMRustOptimize(
+           /*EagerChecks=*/true);
+       OptimizerLastEPCallbacks.push_back(
+         [Options](ModulePassManager &MPM, OptimizationLevel Level) {
++#if LLVM_VERSION_LT(16, 0) && !USE_APPLE_LLVM
++          MPM.addPass(ModuleMemorySanitizerPass(Options));
++          MPM.addPass(createModuleToFunctionPassAdaptor(MemorySanitizerPass(Options)));
++#else
+           MPM.addPass(MemorySanitizerPass(Options));
++#endif
+         }
+       );
+     }
+@@ -918,7 +976,11 @@ LLVMRustOptimize(
+             /*UseAfterScope=*/true,
+             AsanDetectStackUseAfterReturnMode::Runtime,
+           };
++#if LLVM_VERSION_LT(16, 0) && !USE_APPLE_LLVM
++          MPM.addPass(ModuleAddressSanitizerPass(opts));
++#else
+           MPM.addPass(AddressSanitizerPass(opts));
++#endif
+         }
+       );
+     }
+@@ -1323,7 +1385,9 @@ LLVMRustCreateThinLTOData(LLVMRustThinLT
+   ComputeCrossModuleImport(
+     Ret->Index,
+     Ret->ModuleToDefinedGVSummaries,
++#if LLVM_VERSION_GE(17, 0)
+     isPrevailing,
++#endif
+     Ret->ImportLists,
+     Ret->ExportLists
+   );
+--- ./rustc-1.79.0-src/compiler/rustc_llvm/llvm-wrapper/RustWrapper.cpp	1153704088.000000000
++++ ./compiler/rustc_llvm/llvm-wrapper/RustWrapper.cpp	1719048716.707747512
+@@ -15,13 +15,18 @@
+ #include "llvm/Remarks/RemarkSerializer.h"
+ #include "llvm/Remarks/RemarkFormat.h"
+ #include "llvm/Support/ToolOutputFile.h"
++#if LLVM_VERSION_GE(16, 0)
+ #include "llvm/Support/ModRef.h"
++#endif
+ #include "llvm/Object/Archive.h"
+ #include "llvm/Object/COFFImportFile.h"
+ #include "llvm/Object/ObjectFile.h"
+ #include "llvm/Pass.h"
+ #include "llvm/Bitcode/BitcodeWriter.h"
+ #include "llvm/Support/Signals.h"
++#if LLVM_VERSION_LT(16, 0)
++#include "llvm/ADT/Optional.h"
++#endif
+ 
+ #include <iostream>
+ 
+@@ -386,7 +391,13 @@ extern "C" LLVMAttributeRef LLVMRustCrea
+ }
+ 
+ extern "C" LLVMAttributeRef LLVMRustCreateAllocSizeAttr(LLVMContextRef C, uint32_t ElementSizeArg) {
+-  return wrap(Attribute::getWithAllocSizeArgs(*unwrap(C), ElementSizeArg, std::nullopt));
++  return wrap(Attribute::getWithAllocSizeArgs(*unwrap(C), ElementSizeArg,
++#if LLVM_VERSION_LT(16, 0)
++                                              None
++#else
++                                              std::nullopt
++#endif
++                                              ));
+ }
+ 
+ // These values **must** match ffi::AllocKindFlags.
+@@ -449,6 +460,7 @@ enum class LLVMRustMemoryEffects {
+ 
+ extern "C" LLVMAttributeRef LLVMRustCreateMemoryEffectsAttr(LLVMContextRef C,
+                                                             LLVMRustMemoryEffects Effects) {
++#if LLVM_VERSION_GE(16, 0)
+   switch (Effects) {
+     case LLVMRustMemoryEffects::None:
+       return wrap(Attribute::getWithMemoryEffects(*unwrap(C), MemoryEffects::none()));
+@@ -460,6 +472,18 @@ extern "C" LLVMAttributeRef LLVMRustCrea
+     default:
+       report_fatal_error("bad MemoryEffects.");
+   }
++#else
++  switch (Effects) {
++    case LLVMRustMemoryEffects::None:
++      return wrap(Attribute::get(*unwrap(C), Attribute::ReadNone));
++    case LLVMRustMemoryEffects::ReadOnly:
++      return wrap(Attribute::get(*unwrap(C), Attribute::ReadOnly));
++    case LLVMRustMemoryEffects::InaccessibleMemOnly:
++      return wrap(Attribute::get(*unwrap(C), Attribute::InaccessibleMemOnly));
++    default:
++      report_fatal_error("bad MemoryEffects.");
++  }
++#endif
+ }
+ 
+ // Enable all fast-math flags, including those which will cause floating-point operations
+@@ -802,10 +826,18 @@ enum class LLVMRustChecksumKind {
+   SHA256,
+ };
+ 
++#if LLVM_VERSION_LT(16, 0)
++static Optional<DIFile::ChecksumKind> fromRust(LLVMRustChecksumKind Kind) {
++#else
+ static std::optional<DIFile::ChecksumKind> fromRust(LLVMRustChecksumKind Kind) {
++#endif
+   switch (Kind) {
+   case LLVMRustChecksumKind::None:
++#if LLVM_VERSION_LT(16, 0)
++    return None;
++#else
+     return std::nullopt;
++#endif
+   case LLVMRustChecksumKind::MD5:
+     return DIFile::ChecksumKind::CSK_MD5;
+   case LLVMRustChecksumKind::SHA1:
+@@ -890,8 +922,17 @@ extern "C" LLVMMetadataRef LLVMRustDIBui
+     const char *Directory, size_t DirectoryLen, LLVMRustChecksumKind CSKind,
+     const char *Checksum, size_t ChecksumLen) {
+ 
++#if LLVM_VERSION_LT(16, 0)
++  Optional<DIFile::ChecksumKind> llvmCSKind = fromRust(CSKind);
++#else
+   std::optional<DIFile::ChecksumKind> llvmCSKind = fromRust(CSKind);
++#endif
++
++#if LLVM_VERSION_LT(16, 0)
++  Optional<DIFile::ChecksumInfo<StringRef>> CSInfo{};
++#else
+   std::optional<DIFile::ChecksumInfo<StringRef>> CSInfo{};
++#endif
+   if (llvmCSKind)
+     CSInfo.emplace(*llvmCSKind, StringRef{Checksum, ChecksumLen});
+   return wrap(Builder->createFile(StringRef(Filename, FilenameLen),
+@@ -2206,11 +2247,19 @@ extern "C" bool LLVMRustIsNonGVFunctionP
+ }
+ 
+ extern "C" bool LLVMRustLLVMHasZlibCompressionForDebugSymbols() {
++#if LLVM_VERSION_GE(16, 0)
+   return llvm::compression::zlib::isAvailable();
++#else
++  return false;
++#endif
+ }
+ 
+ extern "C" bool LLVMRustLLVMHasZstdCompressionForDebugSymbols() {
++#if LLVM_VERSION_GE(16, 0)
+   return llvm::compression::zstd::isAvailable();
++#else
++  return false;
++#endif
+ }
+ 
+ // Operations on composite constants.
+@@ -2229,3 +2278,19 @@ extern "C" LLVMValueRef LLVMConstStringI
+   return wrap(ConstantDataArray::getString(*unwrap(C), StringRef(Str, Length), !DontNullTerminate));
+ }
+ #endif
++
++// FIXME: Remove when Rust's minimum supported LLVM version reaches 17.
++// https://github.com/llvm/llvm-project/commit/35276f16e5a2cae0dfb49c0fbf874d4d2f177acc
++#if LLVM_VERSION_LT(17, 0)
++extern "C" LLVMValueRef LLVMConstArray2(LLVMTypeRef ElementTy,
++                                        LLVMValueRef *ConstantVals,
++                                        uint64_t Length) {
++  ArrayRef<Constant *> V(unwrap<Constant>(ConstantVals, Length), Length);
++  return wrap(ConstantArray::get(ArrayType::get(unwrap(ElementTy), Length), V));
++}
++
++extern "C" LLVMTypeRef LLVMArrayType2(LLVMTypeRef ElementTy,
++                                      uint64_t ElementCount) {
++  return wrap(ArrayType::get(unwrap(ElementTy), ElementCount));
++}
++#endif
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/base/windows_gnu.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/base/windows_gnu.rs	1719048717.931929313
+@@ -42,6 +42,8 @@ pub fn opts() -> TargetOptions {
+         "-lmsvcrt",
+         "-luser32",
+         "-lkernel32",
++        "-lssp_nonshared",
++        "-lssp",
+     ];
+     let mut late_link_args =
+         TargetOptions::link_args(LinkerFlavor::Gnu(Cc::No, Lld::No), mingw_libs);
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/mod.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/mod.rs	1719048718.520643141
+@@ -1234,6 +1234,10 @@ pub enum StackProbeType {
+ }
+ 
+ impl StackProbeType {
++    // LLVM X86 targets (ix86 and x86_64) can use inline-asm stack probes starting with LLVM 16.
++    // Notable past issues were rust#83139 (fixed in 14) and rust#84667 (fixed in 16).
++    const X86: Self = Self::InlineOrCall { min_llvm_version_for_inline: (16, 0, 0) };
++
+     fn from_json(json: &Json) -> Result<Self, String> {
+         let object = json.as_object().ok_or_else(|| "expected a JSON object")?;
+         let kind = object
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/aarch64_apple_ios.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/aarch64_apple_ios.rs	1719048719.111436830
+@@ -22,7 +22,7 @@ pub fn target() -> Target {
+         data_layout: "e-m:o-i64:64-i128:128-n32:64-S128".into(),
+         arch: arch.target_arch(),
+         options: TargetOptions {
+-            features: "+neon,+fp-armv8,+apple-a7".into(),
++            features: "+v8.3a,+neon,+fp-armv8,+apple-a12,+crc,+crypto,+fullfp16,+ras,+lse,+rdm,+rcpc,+zcm,+zcz,+sha2,+aes".into(),
+             max_atomic_width: Some(128),
+             frame_pointer: FramePointer::NonLeaf,
+             ..base
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/i586_pc_nto_qnx700.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/i586_pc_nto_qnx700.rs	1719048719.697812132
+@@ -22,7 +22,7 @@ pub fn target() -> Target {
+                 &["-Vgcc_ntox86_cxx"],
+             ),
+             env: "nto70".into(),
+-            stack_probes: StackProbeType::Inline,
++            stack_probes: StackProbeType::X86,
+             ..base::nto_qnx::opts()
+         },
+     }
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/i686_linux_android.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/i686_linux_android.rs	1719048720.286084838
+@@ -11,7 +11,7 @@ pub fn target() -> Target {
+     // https://developer.android.com/ndk/guides/abis.html#x86
+     base.cpu = "pentiumpro".into();
+     base.features = "+mmx,+sse,+sse2,+sse3,+ssse3".into();
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+ 
+     Target {
+         llvm_target: "i686-linux-android".into(),
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/i686_unknown_freebsd.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/i686_unknown_freebsd.rs	1719048720.876033033
+@@ -5,7 +5,7 @@ pub fn target() -> Target {
+     base.cpu = "pentium4".into();
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m32", "-Wl,-znotext"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+ 
+     Target {
+         llvm_target: "i686-unknown-freebsd".into(),
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/i686_unknown_haiku.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/i686_unknown_haiku.rs	1719048721.477494108
+@@ -5,7 +5,7 @@ pub fn target() -> Target {
+     base.cpu = "pentium4".into();
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m32"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+ 
+     Target {
+         llvm_target: "i686-unknown-haiku".into(),
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/i686_unknown_linux_gnu.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/i686_unknown_linux_gnu.rs	1719048722.064535155
+@@ -2,11 +2,11 @@ use crate::spec::{base, Cc, LinkerFlavor
+ 
+ pub fn target() -> Target {
+     let mut base = base::linux_gnu::opts();
+-    base.cpu = "pentium4".into();
++    base.cpu = "pentiumpro".into();
+     base.max_atomic_width = Some(64);
+     base.supported_sanitizers = SanitizerSet::ADDRESS;
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m32"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+ 
+     Target {
+         llvm_target: "i686-unknown-linux-gnu".into(),
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/i686_unknown_linux_musl.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/i686_unknown_linux_musl.rs	1719048722.652065699
+@@ -5,7 +5,7 @@ pub fn target() -> Target {
+     base.cpu = "pentium4".into();
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m32", "-Wl,-melf_i386"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+ 
+     // The unwinder used by i686-unknown-linux-musl, the LLVM libunwind
+     // implementation, apparently relies on frame pointers existing... somehow.
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/i686_unknown_netbsd.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/i686_unknown_netbsd.rs	1719048723.238501584
+@@ -5,7 +5,7 @@ pub fn target() -> Target {
+     base.cpu = "pentium4".into();
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m32"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+ 
+     Target {
+         llvm_target: "i686-unknown-netbsdelf".into(),
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/i686_unknown_openbsd.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/i686_unknown_openbsd.rs	1719048723.824129141
+@@ -5,7 +5,7 @@ pub fn target() -> Target {
+     base.cpu = "pentium4".into();
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m32", "-fuse-ld=lld"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+ 
+     Target {
+         llvm_target: "i686-unknown-openbsd".into(),
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/i686_wrs_vxworks.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/i686_wrs_vxworks.rs	1719048724.411591436
+@@ -5,7 +5,7 @@ pub fn target() -> Target {
+     base.cpu = "pentium4".into();
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m32"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+ 
+     Target {
+         llvm_target: "i686-unknown-linux-gnu".into(),
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_linux_android.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_linux_android.rs	1719048724.998827565
+@@ -10,7 +10,7 @@ pub fn target() -> Target {
+     base.features = "+mmx,+sse,+sse2,+sse3,+ssse3,+sse4.1,+sse4.2,+popcnt".into();
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.supports_xray = true;
+ 
+     Target {
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_pc_solaris.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_pc_solaris.rs	1719048725.592183569
+@@ -7,7 +7,7 @@ pub fn target() -> Target {
+     base.plt_by_default = false;
+     base.vendor = "pc".into();
+     base.max_atomic_width = Some(64);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.supported_sanitizers = SanitizerSet::ADDRESS | SanitizerSet::CFI | SanitizerSet::THREAD;
+ 
+     Target {
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unikraft_linux_musl.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unikraft_linux_musl.rs	1719048726.188186223
+@@ -18,7 +18,7 @@ pub fn target() -> Target {
+             plt_by_default: false,
+             pre_link_args: TargetOptions::link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]),
+             max_atomic_width: Some(64),
+-            stack_probes: StackProbeType::Inline,
++            stack_probes: StackProbeType::X86,
+             ..base::unikraft_linux_musl::opts()
+         },
+     }
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_dragonfly.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_dragonfly.rs	1719048726.761261989
+@@ -6,7 +6,7 @@ pub fn target() -> Target {
+     base.plt_by_default = false;
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+ 
+     Target {
+         llvm_target: "x86_64-unknown-dragonfly".into(),
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_freebsd.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_freebsd.rs	1719048727.362691856
+@@ -6,7 +6,7 @@ pub fn target() -> Target {
+     base.plt_by_default = false;
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.supported_sanitizers =
+         SanitizerSet::ADDRESS | SanitizerSet::CFI | SanitizerSet::MEMORY | SanitizerSet::THREAD;
+     base.supports_xray = true;
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_fuchsia.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_fuchsia.rs	1719048727.951889639
+@@ -5,7 +5,7 @@ pub fn target() -> Target {
+     base.cpu = "x86-64".into();
+     base.plt_by_default = false;
+     base.max_atomic_width = Some(64);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.supported_sanitizers = SanitizerSet::ADDRESS | SanitizerSet::CFI | SanitizerSet::LEAK;
+     base.supports_xray = true;
+ 
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_haiku.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_haiku.rs	1719048728.534368551
+@@ -6,7 +6,7 @@ pub fn target() -> Target {
+     base.plt_by_default = false;
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     // This option is required to build executables on Haiku x86_64
+     base.position_independent_executables = true;
+ 
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_hermit.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_hermit.rs	1719048729.117774955
+@@ -18,7 +18,7 @@ pub fn target() -> Target {
+             features: "+rdrnd,+rdseed".into(),
+             plt_by_default: false,
+             max_atomic_width: Some(64),
+-            stack_probes: StackProbeType::Inline,
++            stack_probes: StackProbeType::X86,
+             ..base::hermit::opts()
+         },
+     }
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_linux_gnu.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_linux_gnu.rs	1719048729.708479561
+@@ -6,7 +6,7 @@ pub fn target() -> Target {
+     base.plt_by_default = false;
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.static_position_independent_executables = true;
+     base.supported_sanitizers = SanitizerSet::ADDRESS
+         | SanitizerSet::CFI
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_linux_gnux32.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_linux_gnux32.rs	1719048730.303031850
+@@ -6,7 +6,7 @@ pub fn target() -> Target {
+     base.abi = "x32".into();
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-mx32"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.has_thread_local = false;
+     // BUG(GabrielMajeri): disabling the PLT on x86_64 Linux with x32 ABI
+     // breaks code gen. See LLVM bug 36743
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_linux_musl.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_linux_musl.rs	1719048730.896387604
+@@ -6,7 +6,7 @@ pub fn target() -> Target {
+     base.plt_by_default = false;
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.static_position_independent_executables = true;
+     base.supported_sanitizers = SanitizerSet::ADDRESS
+         | SanitizerSet::CFI
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_linux_ohos.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_linux_ohos.rs	1719048731.485283764
+@@ -5,7 +5,7 @@ pub fn target() -> Target {
+     base.cpu = "x86-64".into();
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.static_position_independent_executables = true;
+     base.supported_sanitizers = SanitizerSet::ADDRESS
+         | SanitizerSet::CFI
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_netbsd.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_netbsd.rs	1719048732.077806316
+@@ -8,7 +8,7 @@ pub fn target() -> Target {
+     base.plt_by_default = false;
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.supported_sanitizers = SanitizerSet::ADDRESS
+         | SanitizerSet::CFI
+         | SanitizerSet::LEAK
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_none.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_none.rs	1719048732.669327791
+@@ -12,7 +12,7 @@ pub fn target() -> Target {
+         cpu: "x86-64".into(),
+         plt_by_default: false,
+         max_atomic_width: Some(64),
+-        stack_probes: StackProbeType::Inline,
++        stack_probes: StackProbeType::X86,
+         position_independent_executables: true,
+         static_position_independent_executables: true,
+         relro_level: RelroLevel::Full,
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_openbsd.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_openbsd.rs	1719048733.262467589
+@@ -6,7 +6,7 @@ pub fn target() -> Target {
+     base.plt_by_default = false;
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.supports_xray = true;
+ 
+     Target {
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_unknown_redox.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_unknown_redox.rs	1719048733.851140459
+@@ -6,7 +6,7 @@ pub fn target() -> Target {
+     base.plt_by_default = false;
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+ 
+     Target {
+         llvm_target: "x86_64-unknown-redox".into(),
+--- ./rustc-1.79.0-src/compiler/rustc_target/src/spec/targets/x86_64_wrs_vxworks.rs	1153704088.000000000
++++ ./compiler/rustc_target/src/spec/targets/x86_64_wrs_vxworks.rs	1719048734.417750519
+@@ -6,7 +6,7 @@ pub fn target() -> Target {
+     base.plt_by_default = false;
+     base.max_atomic_width = Some(64);
+     base.add_pre_link_args(LinkerFlavor::Gnu(Cc::Yes, Lld::No), &["-m64"]);
+-    base.stack_probes = StackProbeType::Inline;
++    base.stack_probes = StackProbeType::X86;
+     base.disable_redzone = true;
+ 
+     Target {

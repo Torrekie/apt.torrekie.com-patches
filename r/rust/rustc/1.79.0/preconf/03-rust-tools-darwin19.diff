@@ -1,0 +1,554 @@
+--- ./rustc-1.79.0-src/library/alloc/tests/arc.rs	1719049036.436023404
++++ ./library/alloc/tests/arc.rs	1719049390.297256265
+@@ -118,6 +118,7 @@ fn shared_from_iter_normal() {
+     } // Drop what hasn't been here.
+ }
+ 
++#[cfg(not(any(target_arch = "powerpc", target_arch = "powerpc64")))]
+ #[test]
+ fn shared_from_iter_trustedlen_normal() {
+     // Exercise the `TrustedLen` implementation under normal circumstances
+--- ./rustc-1.79.0-src/library/alloc/tests/rc.rs	1719049036.438508138
++++ ./library/alloc/tests/rc.rs	1719049390.934501688
+@@ -70,6 +70,7 @@ fn partial_eq() {
+     assert_eq!(*x.0.borrow(), 4);
+ }
+ 
++#[cfg(not(any(target_arch = "powerpc", target_arch = "powerpc64")))]
+ #[test]
+ fn eq() {
+     #[derive(Eq)]
+--- ./rustc-1.79.0-src/library/std/src/sys/pal/unix/process/process_unix.rs	1153704088.000000000
++++ ./library/std/src/sys/pal/unix/process/process_unix.rs	1719049554.346500611
+@@ -420,9 +420,7 @@ impl Command {
+     }
+ 
+     #[cfg(not(any(
+-        target_os = "macos",
+-        target_os = "tvos",
+-        target_os = "watchos",
++        target_vendor = "apple",
+         target_os = "freebsd",
+         all(target_os = "linux", target_env = "gnu"),
+         all(target_os = "linux", target_env = "musl"),
+@@ -439,10 +437,7 @@ impl Command {
+     // Only support platforms for which posix_spawn() can return ENOENT
+     // directly.
+     #[cfg(any(
+-        target_os = "macos",
+-        // FIXME: `target_os = "ios"`?
+-        target_os = "tvos",
+-        target_os = "watchos",
++        target_vendor = "apple",
+         target_os = "freebsd",
+         all(target_os = "linux", target_env = "gnu"),
+         all(target_os = "linux", target_env = "musl"),
+@@ -530,7 +525,7 @@ impl Command {
+         }
+         let addchdir = match self.get_cwd() {
+             Some(cwd) => {
+-                if cfg!(any(target_os = "macos", target_os = "tvos", target_os = "watchos")) {
++                if cfg!(target_vendor = "apple") {
+                     // There is a bug in macOS where a relative executable
+                     // path like "../myprogram" will cause `posix_spawn` to
+                     // successfully launch the program, but erroneously return
+--- ./rustc-1.79.0-src/src/bootstrap/bootstrap.py	1719049036.445038177
++++ ./src/bootstrap/bootstrap.py	1719049673.784004107
+@@ -991,6 +991,8 @@ class RustBuild(object):
+         args = [self.cargo(), "build", "--manifest-path",
+                 os.path.join(self.rust_root, "src/bootstrap/Cargo.toml")]
+         args.extend("--verbose" for _ in range(self.verbose))
++        # Torrekie: MacPorts addition, but I like this
++        args.append("--offline")
+         if self.get_toml("metrics", "build"):
+             args.append("--features")
+             args.append("build-metrics")
+--- ./rustc-1.79.0-src/src/bootstrap/src/bin/rustc.rs	1153704088.000000000
++++ ./src/bootstrap/src/bin/rustc.rs	1719049686.672796943
+@@ -401,7 +401,7 @@ fn format_rusage_data(_child: Child) ->
+         recv
+     };
+     // Mac OS X reports the maxrss in bytes, not kb.
+-    let divisor = if env::consts::OS == "macos" { 1024 } else { 1 };
++    let divisor = if env::consts::OS == "macos" || env::consts::OS == "ios" { 1024 } else { 1 };
+     let maxrss = (rusage.ru_maxrss + (divisor - 1)) / divisor;
+ 
+     let mut init_str = format!(
+--- ./rustc-1.79.0-src/src/bootstrap/src/core/build_steps/dist.rs	1719049036.447967407
++++ ./src/bootstrap/src/core/build_steps/dist.rs	1719049813.328725763
+@@ -2123,7 +2123,7 @@ fn maybe_install_llvm(
+     // clear why this is the case, though. llvm-config will emit the versioned
+     // paths and we don't want those in the sysroot (as we're expecting
+     // unversioned paths).
+-    if target.contains("apple-darwin") && builder.llvm_link_shared() {
++    if (target.contains("apple-darwin") || target.contains("apple-ios")) && builder.llvm_link_shared() {
+         let src_libdir = builder.llvm_out(target).join("lib");
+         let llvm_dylib_path = src_libdir.join("libLLVM.dylib");
+         if llvm_dylib_path.exists() {
+--- ./rustc-1.79.0-src/src/bootstrap/src/core/build_steps/llvm.rs	1153704088.000000000
++++ ./src/bootstrap/src/core/build_steps/llvm.rs	1719050010.097412649
+@@ -581,12 +581,13 @@ fn check_llvm_version(builder: &Builder<
+     let mut cmd = Command::new(llvm_config);
+     let version = output(cmd.arg("--version"));
+     let mut parts = version.split('.').take(2).filter_map(|s| s.parse::<u32>().ok());
++    // Torrekie: We use LLVM 15+ since we don't know exact hell version of Apple LLVM
+     if let (Some(major), Some(_minor)) = (parts.next(), parts.next()) {
+-        if major >= 17 {
++        if major >= 15 {
+             return;
+         }
+     }
+-    panic!("\n\nbad LLVM version: {version}, need >=17.0\n\n")
++    panic!("\n\nbad LLVM version: {version}, need >=15.0\n\n")
+ }
+ 
+ fn configure_cmake(
+--- ./rustc-1.79.0-src/src/bootstrap/src/core/builder.rs	1719049036.458476795
++++ ./src/bootstrap/src/core/builder.rs	1719050300.550416277
+@@ -1,3 +1,9 @@
++// Torrekie: These are all for Debian patches (Why they didnt considered that?)
++#![allow(unreachable_code)]
++#![allow(unused_variables)]
++#![allow(unused_mut)]
++#![allow(unused_imports)]
++
+ use std::any::{type_name, Any};
+ use std::cell::{Cell, RefCell};
+ use std::collections::BTreeSet;
+--- ./rustc-1.79.0-src/src/bootstrap/src/core/config/config.rs	1719049036.461086402
++++ ./src/bootstrap/src/core/config/config.rs	1719050365.781259825
+@@ -23,6 +23,7 @@ use crate::utils::channel::{self, GitInf
+ use crate::utils::helpers::{exe, output, t};
+ use build_helper::exit;
+ use build_helper::util::fail;
++#[allow(unused_imports)]
+ use semver::Version;
+ use serde::{Deserialize, Deserializer};
+ use serde_derive::Deserialize;
+@@ -2404,6 +2405,8 @@ impl Config {
+             ));
+         }
+ 
++        /* Torrekie: We are not on a normal device, no time for us to stepping */
++        /*
+         let stage0_version =
+             Version::parse(stage0_output.next().unwrap().split('-').next().unwrap().trim())
+                 .unwrap();
+@@ -2420,6 +2423,7 @@ impl Config {
+                 "Unexpected {component_name} version: {stage0_version}, we should use {prev_version}/{source_version} to build source with {source_version}"
+             ));
+         }
++        */
+     }
+ 
+     /// Returns the commit to download, or `None` if we shouldn't download CI artifacts.
+--- ./rustc-1.79.0-src/src/bootstrap/src/utils/channel.rs	1719049036.466559282
++++ ./src/bootstrap/src/utils/channel.rs	1719050422.058903598
+@@ -5,6 +5,9 @@
+ //! `package_vers`, and otherwise indicating to the compiler what it should
+ //! print out as part of its version information.
+ 
++// Torrekie: Debian
++#![allow(unused_variables)]
++
+ use std::fs;
+ use std::path::Path;
+ use std::process::Command;
+@@ -34,6 +37,7 @@ pub struct Info {
+ }
+ 
+ impl GitInfo {
++    #[allow(unreachable_code)]
+     pub fn new(omit_git_hash: bool, dir: &Path) -> GitInfo {
+         //
+         // Debian: returning early because the Debian package is also in a git
+--- ./rustc-1.79.0-src/src/bootstrap/src/utils/dylib.rs	1153704088.000000000
++++ ./src/bootstrap/src/utils/dylib.rs	1719050438.168555964
+@@ -5,6 +5,8 @@
+ pub fn dylib_path_var() -> &'static str {
+     if cfg!(target_os = "windows") {
+         "PATH"
++    } else if cfg!(target_os = "ios") {
++        "DYLD_LIBRARY_PATH"
+     } else if cfg!(target_os = "macos") {
+         "DYLD_LIBRARY_PATH"
+     } else if cfg!(target_os = "haiku") {
+--- ./rustc-1.79.0-src/src/bootstrap/src/utils/helpers.rs	1153704088.000000000
++++ ./src/bootstrap/src/utils/helpers.rs	1719050438.752099801
+@@ -75,7 +75,10 @@ pub fn libdir(target: TargetSelection) -
+ pub fn add_dylib_path(path: Vec<PathBuf>, cmd: &mut Command) {
+     let mut list = dylib_path();
+     for path in path {
+-        list.insert(0, path);
++        // Torrekie: don't specify /usr/lib for dyld
++        if path != PathBuf::from("/usr/lib") {
++            list.insert(0, path);
++        }
+     }
+     cmd.env(dylib_path_var(), t!(env::join_paths(list)));
+ }
+--- ./rustc-1.79.0-src/src/tools/cargo/Cargo.toml	1719049036.503478283
++++ ./src/tools/cargo/Cargo.toml	1719050710.680101594
+@@ -39,7 +39,7 @@ color-print = "0.3.5"
+ core-foundation = { version = "0.9.4", features = ["mac_os_10_7_support"] }
+ crates-io = { version = "0.40.0", path = "crates/crates-io" }
+ criterion = { version = "0.5.1", features = ["html_reports"] }
+-curl = "0.4.46"
++curl = { version = "0.4.46", features = ["force-system-lib-on-osx"] }
+ curl-sys = "0.4.72"
+ filetime = "0.2.23"
+ flate2 = { version = "1.0.28", default-features = false, features = ["zlib"] }
+--- ./rustc-1.79.0-src/src/tools/cargo/crates/cargo-platform/examples/matches.rs	1153704088.000000000
++++ ./src/tools/cargo/crates/cargo-platform/examples/matches.rs	1719050732.484346413
+@@ -10,6 +10,7 @@ use std::str::FromStr;
+ static EXAMPLES: &[&str] = &[
+     "cfg(windows)",
+     "cfg(unix)",
++    "cfg(target_os=\"ios\")",
+     "cfg(target_os=\"macos\")",
+     "cfg(target_os=\"linux\")",
+     "cfg(any(target_arch=\"x86\", target_arch=\"x86_64\"))",
+--- ./rustc-1.79.0-src/src/tools/cargo/crates/cargo-util/Cargo.toml	1153704088.000000000
++++ ./src/tools/cargo/crates/cargo-util/Cargo.toml	1719050733.122881269
+@@ -21,7 +21,7 @@ tempfile.workspace = true
+ tracing.workspace = true
+ walkdir.workspace = true
+ 
+-[target.'cfg(target_os = "macos")'.dependencies]
++[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+ core-foundation.workspace = true
+ 
+ [target.'cfg(unix)'.dependencies]
+--- ./rustc-1.79.0-src/src/tools/cargo/crates/cargo-util/src/paths.rs	1153704088.000000000
++++ ./src/tools/cargo/crates/cargo-util/src/paths.rs	1719050733.704427942
+@@ -38,7 +38,7 @@ pub fn join_paths<T: AsRef<OsStr>>(paths
+ pub fn dylib_path_envvar() -> &'static str {
+     if cfg!(windows) {
+         "PATH"
+-    } else if cfg!(target_os = "macos") {
++    } else if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+         // When loading and linking a dynamic library or bundle, dlopen
+         // searches in LD_LIBRARY_PATH, DYLD_LIBRARY_PATH, PWD, and
+         // DYLD_FALLBACK_LIBRARY_PATH.
+@@ -577,7 +577,7 @@ fn _link_or_copy(src: &Path, dst: &Path)
+         // gory details.
+         fs::copy(src, dst).map(|_| ())
+     } else {
+-        if cfg!(target_os = "macos") {
++        if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+             // This is a work-around for a bug on macos. There seems to be a race condition
+             // with APFS when hard-linking binaries. Gatekeeper does not have signing or
+             // hash information stored in kernel when running the process. Therefore killing it.
+@@ -761,10 +761,10 @@ fn exclude_from_content_indexing(path: &
+     }
+ }
+ 
+-#[cfg(not(target_os = "macos"))]
++#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+ fn exclude_from_time_machine(_: &Path) {}
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ /// Marks files or directories as excluded from Time Machine on macOS
+ fn exclude_from_time_machine(path: &Path) {
+     use core_foundation::base::TCFType;
+--- ./rustc-1.79.0-src/src/tools/cargo/credential/cargo-credential-macos-keychain/Cargo.toml	1153704088.000000000
++++ ./src/tools/cargo/credential/cargo-credential-macos-keychain/Cargo.toml	1719050734.297675509
+@@ -11,7 +11,7 @@ description = "A Cargo credential proces
+ [dependencies]
+ cargo-credential.workspace = true
+ 
+-[target.'cfg(target_os = "macos")'.dependencies]
++[target.'cfg(any(target_os = "macos"))'.dependencies]
+ security-framework.workspace = true
+ 
+ [lints]
+--- ./rustc-1.79.0-src/src/tools/cargo/src/cargo/core/compiler/compilation.rs	1153704088.000000000
++++ ./src/tools/cargo/src/cargo/core/compiler/compilation.rs	1719050734.887322209
+@@ -324,7 +324,7 @@ impl<'gctx> Compilation<'gctx> {
+         let dylib_path = paths::dylib_path();
+         let dylib_path_is_empty = dylib_path.is_empty();
+         search_path.extend(dylib_path.into_iter());
+-        if cfg!(target_os = "macos") && dylib_path_is_empty {
++        if (cfg!(target_os = "macos") || cfg!(target_os = "ios")) && dylib_path_is_empty {
+             // These are the defaults when DYLD_FALLBACK_LIBRARY_PATH isn't
+             // set or set to an empty string. Since Cargo is explicitly setting
+             // the value, make sure the defaults still work.
+--- ./rustc-1.79.0-src/src/tools/cargo/src/cargo/util/cpu.rs	1153704088.000000000
++++ ./src/tools/cargo/src/cargo/util/cpu.rs	1719050735.481533774
+@@ -83,7 +83,7 @@ mod imp {
+     }
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ #[allow(bad_style)]
+ mod imp {
+     use std::io;
+@@ -225,7 +225,7 @@ mod imp {
+     }
+ }
+ 
+-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
++#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios", windows)))]
+ mod imp {
+     use std::io;
+ 
+--- ./rustc-1.79.0-src/src/tools/clippy/Cargo.toml	1153704088.000000000
++++ ./src/tools/clippy/Cargo.toml	1719050762.113647185
+@@ -43,7 +43,7 @@ clippy_utils = { path = "clippy_utils" }
+ if_chain = "1.0"
+ quote = "1.0.25"
+ serde = { version = "1.0.145", features = ["derive"] }
+-syn = { version = "2.0", features = ["full"] }
++syn = { version = "2.0", features = ["full", "visit"] }
+ futures = "0.3"
+ parking_lot = "0.12"
+ tokio = { version = "1", features = ["io-util"] }
+--- ./rustc-1.79.0-src/src/tools/compiletest/src/runtest.rs	1153704088.000000000
++++ ./src/tools/compiletest/src/runtest.rs	1719050811.989510980
+@@ -98,7 +98,7 @@ fn get_lib_name(lib: &str, aux_type: Aux
+         AuxType::Lib => Some(format!("lib{}.rlib", lib)),
+         AuxType::Dylib => Some(if cfg!(windows) {
+             format!("{}.dll", lib)
+-        } else if cfg!(target_os = "macos") {
++        } else if cfg!(target_vendor = "apple") {
+             format!("lib{}.dylib", lib)
+         } else {
+             format!("lib{}.so", lib)
+--- ./rustc-1.79.0-src/src/tools/compiletest/src/util.rs	1153704088.000000000
++++ ./src/tools/compiletest/src/util.rs	1719050824.758603674
+@@ -57,7 +57,7 @@ impl PathBufExt for PathBuf {
+ pub fn dylib_env_var() -> &'static str {
+     if cfg!(windows) {
+         "PATH"
+-    } else if cfg!(target_os = "macos") {
++    } else if cfg!(any(target_os = "macos", target_os = "ios")) {
+         "DYLD_LIBRARY_PATH"
+     } else if cfg!(target_os = "haiku") {
+         "LIBRARY_PATH"
+--- ./rustc-1.79.0-src/src/tools/miri/src/shims/time.rs	1153704088.000000000
++++ ./src/tools/miri/src/shims/time.rs	1719050825.345356713
+@@ -52,7 +52,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+                     this.eval_libc_i32("CLOCK_MONOTONIC_COARSE"),
+                 ];
+             }
+-            "macos" => {
++            "macos" | "ios" => {
+                 absolute_clocks = vec![this.eval_libc_i32("CLOCK_REALTIME")];
+                 relative_clocks = vec![this.eval_libc_i32("CLOCK_MONOTONIC")];
+                 // `CLOCK_UPTIME_RAW` supposed to not increment while the system is asleep... but
+--- ./rustc-1.79.0-src/src/tools/miri/src/shims/tls.rs	1153704088.000000000
++++ ./src/tools/miri/src/shims/tls.rs	1719050915.609006507
+@@ -246,7 +246,7 @@ impl<'tcx> TlsDtorsState<'tcx> {
+                             // Run the pthread dtors.
+                             break 'new_state PthreadDtors(Default::default());
+                         }
+-                        "macos" => {
++                        "macos" | "ios" | "tvos" | "watchos" | "visionos" => {
+                             // The macOS thread wide destructor runs "before any TLS slots get
+                             // freed", so do that first.
+                             this.schedule_macos_tls_dtor()?;
+--- ./rustc-1.79.0-src/src/tools/miri/src/shims/unix/foreign_items.rs	1153704088.000000000
++++ ./src/tools/miri/src/shims/unix/foreign_items.rs	1719050934.525736504
+@@ -29,6 +29,7 @@ fn is_dyn_sym(name: &str, target_os: &st
+             match target_os {
+                 "freebsd" => freebsd::is_dyn_sym(name),
+                 "linux" => linux::is_dyn_sym(name),
++                "ios" => macos::is_dyn_sym(name),
+                 "macos" => macos::is_dyn_sym(name),
+                 _ => false,
+             },
+@@ -593,7 +594,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+             "getentropy" => {
+                 // This function is non-standard but exists with the same signature and behavior on
+                 // Linux, macOS, and FreeBSD.
+-                if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "freebsd") {
++                if !matches!(&*this.tcx.sess.target.os, "linux" | "ios" | "macos" | "freebsd") {
+                     throw_unsup_format!(
+                         "`getentropy` is not supported on {}",
+                         this.tcx.sess.target.os
+@@ -749,6 +750,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+                 return match target_os {
+                     "freebsd" => freebsd::EvalContextExt::emulate_foreign_item_inner(this, link_name, abi, args, dest),
+                     "linux" => linux::EvalContextExt::emulate_foreign_item_inner(this, link_name, abi, args, dest),
++                    "ios" => macos::EvalContextExt::emulate_foreign_item_inner(this, link_name, abi, args, dest),
+                     "macos" => macos::EvalContextExt::emulate_foreign_item_inner(this, link_name, abi, args, dest),
+                     _ => Ok(EmulateForeignItemResult::NotSupported),
+                 };
+--- ./rustc-1.79.0-src/src/tools/miri/src/shims/unix/fs.rs	1153704088.000000000
++++ ./src/tools/miri/src/shims/unix/fs.rs	1719051045.533180074
+@@ -492,7 +492,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, Scalar<Provenance>> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "macos" | "freebsd") {
++        if !matches!(&*this.tcx.sess.target.os, "macos" | "ios" | "tvos" | "watchos" | "visionos" | "freebsd") {
+             panic!("`macos_fbsd_stat` should not be called on {}", this.tcx.sess.target.os);
+         }
+ 
+@@ -524,7 +524,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, Scalar<Provenance>> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "macos" | "freebsd") {
++        if !matches!(&*this.tcx.sess.target.os, "macos" | "ios" | "tvos" | "watchos" | "visionos" | "freebsd") {
+             panic!("`macos_fbsd_lstat` should not be called on {}", this.tcx.sess.target.os);
+         }
+ 
+@@ -554,7 +554,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, Scalar<Provenance>> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "macos" | "freebsd") {
++        if !matches!(&*this.tcx.sess.target.os, "macos" | "ios" | "tvos" | "watchos" | "visionos" | "freebsd") {
+             panic!("`macos_fbsd_fstat` should not be called on {}", this.tcx.sess.target.os);
+         }
+ 
+@@ -795,7 +795,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+         let this = self.eval_context_mut();
+ 
+         #[cfg_attr(not(unix), allow(unused_variables))]
+-        let mode = if matches!(&*this.tcx.sess.target.os, "macos" | "freebsd") {
++        let mode = if matches!(&*this.tcx.sess.target.os, "macos" | "ios" | "tvos" | "watchos" | "visionos" | "freebsd") {
+             u32::from(this.read_scalar(mode_op)?.to_u16()?)
+         } else {
+             this.read_scalar(mode_op)?.to_u32()?
+@@ -981,7 +981,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, Scalar<Provenance>> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "macos" | "freebsd") {
++        if !matches!(&*this.tcx.sess.target.os, "macos" | "ios" | "tvos" | "watchos" | "visionos" | "freebsd") {
+             panic!("`macos_fbsd_readdir_r` should not be called on {}", this.tcx.sess.target.os);
+         }
+ 
+--- ./rustc-1.79.0-src/src/tools/miri/src/shims/unix/mem.rs	1153704088.000000000
++++ ./src/tools/miri/src/shims/unix/mem.rs	1719051055.999246073
+@@ -44,7 +44,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+ 
+         // This is a horrible hack, but on MacOS the guard page mechanism uses mmap
+         // in a way we do not support. We just give it the return value it expects.
+-        if this.frame_in_std() && this.tcx.sess.target.os == "macos" && (flags & map_fixed) != 0 {
++        if this.frame_in_std() && (this.tcx.sess.target.os == "macos" || this.tcx.sess.target.os == "ios") && (flags & map_fixed) != 0 {
+             return Ok(Scalar::from_maybe_pointer(Pointer::from_addr_invalid(addr), this));
+         }
+ 
+--- ./rustc-1.79.0-src/src/tools/miri/src/shims/unix/sync.rs	1153704088.000000000
++++ ./src/tools/miri/src/shims/unix/sync.rs	1719051056.604713492
+@@ -279,7 +279,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, i32> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos") {
++        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "ios") {
+             throw_unsup_format!(
+                 "`pthread_mutexattr_init` is not supported on {}",
+                 this.tcx.sess.target.os
+@@ -368,7 +368,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, i32> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos") {
++        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "ios") {
+             throw_unsup_format!(
+                 "`pthread_mutex_init` is not supported on {}",
+                 this.tcx.sess.target.os
+@@ -529,7 +529,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, i32> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos") {
++        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "ios") {
+             throw_unsup_format!(
+                 "`pthread_rwlock_rdlock` is not supported on {}",
+                 this.tcx.sess.target.os
+@@ -554,7 +554,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, i32> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos") {
++        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "ios") {
+             throw_unsup_format!(
+                 "`pthread_rwlock_tryrdlock` is not supported on {}",
+                 this.tcx.sess.target.os
+@@ -578,7 +578,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, i32> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos") {
++        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "ios") {
+             throw_unsup_format!(
+                 "`pthread_rwlock_wrlock` is not supported on {}",
+                 this.tcx.sess.target.os
+@@ -615,7 +615,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, i32> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos") {
++        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "ios") {
+             throw_unsup_format!(
+                 "`pthread_rwlock_trywrlock` is not supported on {}",
+                 this.tcx.sess.target.os
+@@ -639,7 +639,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, i32> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos") {
++        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "ios") {
+             throw_unsup_format!(
+                 "`pthread_rwlock_unlock` is not supported on {}",
+                 this.tcx.sess.target.os
+@@ -665,7 +665,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, i32> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos") {
++        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "ios") {
+             throw_unsup_format!(
+                 "`pthread_rwlock_destroy` is not supported on {}",
+                 this.tcx.sess.target.os
+@@ -696,7 +696,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, i32> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos") {
++        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "ios") {
+             throw_unsup_format!(
+                 "`pthread_condattr_init` is not supported on {}",
+                 this.tcx.sess.target.os
+@@ -769,7 +769,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mi
+     ) -> InterpResult<'tcx, i32> {
+         let this = self.eval_context_mut();
+ 
+-        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos") {
++        if !matches!(&*this.tcx.sess.target.os, "linux" | "macos" | "ios") {
+             throw_unsup_format!(
+                 "`pthread_cond_init` is not supported on {}",
+                 this.tcx.sess.target.os
+--- ./rustc-1.79.0-src/src/tools/rust-analyzer/crates/proc-macro-srv/src/dylib.rs	1153704088.000000000
++++ ./src/tools/rust-analyzer/crates/proc-macro-srv/src/dylib.rs	1719051094.381257888
+@@ -38,7 +38,7 @@ fn find_registrar_symbol(file: &Utf8Path
+             // https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man3/dlsym.3.html
+             // Unlike other dyld API's, the symbol name passed to dlsym() must NOT be
+             // prepended with an underscore.
+-            if cfg!(target_os = "macos") && sym.starts_with('_') {
++            if cfg!(any(target_os = "macos", target_os = "ios")) && sym.starts_with('_') {
+                 sym[1..].to_owned()
+             } else {
+                 sym
+--- ./rustc-1.79.0-src/src/tools/rustfmt/Cargo.toml	1153704088.000000000
++++ ./src/tools/rustfmt/Cargo.toml	1719051126.532566101
+@@ -44,10 +44,11 @@ dirs = "4.0"
+ getopts = "0.2"
+ ignore = "0.4"
+ itertools = "0.11"
++libc = { version = "0.2.151", features = ["extra_traits"] }
+ lazy_static = "1.4"
+ regex = "1.7"
+ serde = { version = "1.0.160", features = ["derive"] }
+-serde_json = "1.0"
++serde_json = { version = "1.0", features = ["unbounded_depth"] }
+ term = "0.7"
+ thiserror = "1.0.40"
+ toml = "0.7.4"

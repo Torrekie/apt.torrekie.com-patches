@@ -1,0 +1,3621 @@
+--- ./rustc-1.79.0-src/src/bootstrap/bootstrap.py	1719485487.667070629
++++ ./src/bootstrap/bootstrap.py	1719223415.449799183
+@@ -992,6 +992,7 @@ class RustBuild(object):
+                 os.path.join(self.rust_root, "src/bootstrap/Cargo.toml")]
+         args.extend("--verbose" for _ in range(self.verbose))
+         # Torrekie: MacPorts addition, but I like this
++        args.append("--verbose")
+         args.append("--offline")
+         if self.get_toml("metrics", "build"):
+             args.append("--features")
+--- ./rustc-1.79.0-src/src/bootstrap/src/core/build_steps/test.rs	1719049036.453982617
++++ ./src/bootstrap/src/core/build_steps/test.rs	1719139461.740135678
+@@ -1918,6 +1918,7 @@ NOTE: if you're sure you want to do this
+             cmd.arg("--gdb").arg(gdb);
+         }
+ 
++        #[allow(unused_variables)]
+         let run = |cmd: &mut Command| {
+             cmd.output().map(|output| {
+                 String::from_utf8_lossy(&output.stdout)
+--- ./rustc-1.79.0-src/src/bootstrap/src/lib.rs	1719049036.464934668
++++ ./src/bootstrap/src/lib.rs	1719139818.652851344
+@@ -1603,6 +1603,7 @@ impl Build {
+     }
+ 
+     /// Returns the full commit hash.
++    #[allow(dead_code)]
+     fn rust_sha(&self) -> Option<&str> {
+         self.rust_info().sha()
+     }
+--- ./rustc-1.79.0-src/src/tools/cargo/crates/cargo-util/Cargo.toml	1719485487.699257548
++++ ./src/tools/cargo/crates/cargo-util/Cargo.toml	1719140521.171846932
+@@ -27,9 +27,5 @@ core-foundation.workspace = true
+ [target.'cfg(unix)'.dependencies]
+ libc.workspace = true
+ 
+-[target.'cfg(windows)'.dependencies]
+-miow.workspace = true
+-windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_Console"] }
+-
+ [lints]
+ workspace = true
+--- ./rustc-1.79.0-src/src/tools/cargo/credential/cargo-credential-wincred/Cargo.toml	1153704088.000000000
++++ ./src/tools/cargo/credential/cargo-credential-wincred/Cargo.toml	1719140537.678433265
+@@ -11,9 +11,5 @@ description = "A Cargo credential proces
+ [dependencies]
+ cargo-credential.workspace = true
+ 
+-[target.'cfg(windows)'.dependencies.windows-sys]
+-features = ["Win32_Foundation", "Win32_Security_Credentials"]
+-workspace = true
+-
+ [lints]
+ workspace = true
+--- ./rustc-1.79.0-src/vendor/cc-1.0.73/src/lib.rs	1153704088.000000000
++++ ./vendor/cc-1.0.73/src/lib.rs	1719051606.273755854
+@@ -2238,7 +2238,7 @@ impl Build {
+                     || target == "wasm32-unknown-wasi"
+                     || target == "wasm32-unknown-unknown"
+                 {
+-                    "clang".to_string()
++                    "rust-clang".to_string()
+                 } else if target.contains("vxworks") {
+                     if self.cpp {
+                         "wr-c++".to_string()
+--- ./rustc-1.79.0-src/vendor/cc-1.0.79/src/lib.rs	1153704088.000000000
++++ ./vendor/cc-1.0.79/src/lib.rs	1719051647.879866116
+@@ -2407,7 +2407,7 @@ impl Build {
+                     || target == "wasm32-unknown-wasi"
+                     || target == "wasm32-unknown-unknown"
+                 {
+-                    "clang".to_string()
++                    "rust-clang".to_string()
+                 } else if target.contains("vxworks") {
+                     if self.cpp {
+                         "wr-c++".to_string()
+--- ./rustc-1.79.0-src/vendor/cc-1.0.90/src/lib.rs	1153704088.000000000
++++ ./vendor/cc-1.0.90/src/lib.rs	1719051648.119873434
+@@ -2779,7 +2779,7 @@ impl Build {
+                     || target == "wasm32-unknown-wasi"
+                     || target == "wasm32-unknown-unknown"
+                 {
+-                    "clang".to_string()
++                    "rust-clang".to_string()
+                 } else if target.contains("vxworks") {
+                     if self.cpp {
+                         "wr-c++".to_string()
+--- ./rustc-1.79.0-src/vendor/cc-1.0.92/src/lib.rs	1153704088.000000000
++++ ./vendor/cc-1.0.92/src/lib.rs	1719051648.360213954
+@@ -2815,7 +2815,7 @@ impl Build {
+                     || target == "wasm32-unknown-wasi"
+                     || target == "wasm32-unknown-unknown"
+                 {
+-                    "clang".to_string()
++                    "rust-clang".to_string()
+                 } else if target.contains("vxworks") {
+                     if self.cpp {
+                         "wr-c++".to_string()
+--- ./rustc-1.79.0-src/vendor/console-0.15.8/src/unix_term.rs	1153704088.000000000
++++ ./vendor/console-0.15.8/src/unix_term.rs	1719051744.700895779
+@@ -117,7 +117,7 @@ fn poll_fd(fd: i32, timeout: i32) -> io:
+     }
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ fn select_fd(fd: i32, timeout: i32) -> io::Result<bool> {
+     unsafe {
+         let mut read_fd_set: libc::fd_set = mem::zeroed();
+@@ -154,7 +154,7 @@ fn select_or_poll_term_fd(fd: i32, timeo
+     // There is a bug on macos that ttys cannot be polled, only select()
+     // works.  However given how problematic select is in general, we
+     // normally want to use poll there too.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     {
+         if unsafe { libc::isatty(fd) == 1 } {
+             return select_fd(fd, timeout);
+@@ -342,7 +342,7 @@ pub fn key_from_utf8(buf: &[u8]) -> Key
+     Key::Unknown
+ }
+ 
+-#[cfg(not(target_os = "macos"))]
++#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+ lazy_static::lazy_static! {
+     static ref IS_LANG_UTF8: bool = match std::env::var("LANG") {
+         Ok(lang) => lang.to_uppercase().ends_with("UTF-8"),
+@@ -350,12 +350,12 @@ lazy_static::lazy_static! {
+     };
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ pub fn wants_emoji() -> bool {
+     true
+ }
+ 
+-#[cfg(not(target_os = "macos"))]
++#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+ pub fn wants_emoji() -> bool {
+     *IS_LANG_UTF8
+ }
+--- ./rustc-1.79.0-src/vendor/core-foundation-sys-0.8.6/src/bundle.rs	1153704088.000000000
++++ ./vendor/core-foundation-sys-0.8.6/src/bundle.rs	1719051821.635540551
+@@ -10,7 +10,6 @@
+ use std::os::raw::c_void;
+ 
+ use crate::array::CFArrayRef;
+-#[cfg(target_os = "macos")]
+ use crate::base::SInt32;
+ use crate::base::{Boolean, CFAllocatorRef, CFTypeID, CFTypeRef, UInt32};
+ use crate::dictionary::CFDictionaryRef;
+@@ -117,7 +116,6 @@ extern "C" {
+     pub fn CFBundleCopySupportFilesDirectoryURL(bundle: CFBundleRef) -> CFURLRef;
+ 
+     /* Locating Bundle Resources */
+-    #[cfg(target_os = "macos")]
+     pub fn CFBundleCloseBundleResourceMap(bundle: CFBundleRef, refNum: CFBundleRefNum); // DEPRECATED macosx(10.0, 10.15)
+     pub fn CFBundleCopyResourceURL(
+         bundle: CFBundleRef,
+@@ -154,13 +152,11 @@ extern "C" {
+         subDirName: CFStringRef,
+         localizationName: CFStringRef,
+     ) -> CFArrayRef;
+-    #[cfg(target_os = "macos")]
+     pub fn CFBundleOpenBundleResourceFiles(
+         bundle: CFBundleRef,
+         refNum: *mut CFBundleRefNum,
+         localizedRefNum: *mut CFBundleRefNum,
+     ) -> SInt32; // DEPRECATED macosx(10.0, 10.15)
+-    #[cfg(target_os = "macos")]
+     pub fn CFBundleOpenBundleResourceMap(bundle: CFBundleRef) -> CFBundleRefNum; // DEPRECATED macosx(10.0, 10.15)
+ 
+     /* Managing Localizations */
+--- ./rustc-1.79.0-src/vendor/core-foundation-sys-0.8.6/src/lib.rs	1153704088.000000000
++++ ./vendor/core-foundation-sys-0.8.6/src/lib.rs	1719051822.292285205
+@@ -65,7 +65,7 @@ pub mod timezone;
+ pub mod tree;
+ pub mod url;
+ pub mod url_enumerator;
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ pub mod user_notification;
+ pub mod uuid;
+ #[cfg(target_os = "macos")]
+--- ./rustc-1.79.0-src/vendor/core-foundation-sys-0.8.6/src/notification_center.rs	1153704088.000000000
++++ ./vendor/core-foundation-sys-0.8.6/src/notification_center.rs	1719051822.893224901
+@@ -44,7 +44,7 @@ extern "C" {
+ 
+     /* Accessing a Notification Center */
+     pub fn CFNotificationCenterGetDarwinNotifyCenter() -> CFNotificationCenterRef;
+-    #[cfg(any(target_os = "macos", target_os = "windows"))]
++    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
+     pub fn CFNotificationCenterGetDistributedCenter() -> CFNotificationCenterRef;
+     pub fn CFNotificationCenterGetLocalCenter() -> CFNotificationCenterRef;
+ 
+--- ./rustc-1.79.0-src/vendor/core-foundation-sys-0.8.6/src/url.rs	1153704088.000000000
++++ ./vendor/core-foundation-sys-0.8.6/src/url.rs	1719051823.494949460
+@@ -40,11 +40,9 @@ pub static kCFURLBookmarkCreationMinimal
+ pub static kCFURLBookmarkCreationSuitableForBookmarkFile: CFURLBookmarkCreationOptions =
+     (1u32 << 10) as usize;
+ 
+-#[cfg(target_os = "macos")]
+ pub static kCFURLBookmarkCreationWithSecurityScope: CFURLBookmarkCreationOptions =
+     (1u32 << 11) as usize;
+ 
+-#[cfg(target_os = "macos")]
+ pub static kCFURLBookmarkCreationSecurityScopeAllowOnlyReadAccess: CFURLBookmarkCreationOptions =
+     (1u32 << 12) as usize;
+ 
+@@ -74,7 +72,6 @@ pub const kCFURLBookmarkResolutionWithou
+     (1u32 << 8) as usize;
+ pub const kCFURLBookmarkResolutionWithoutMountingMask: CFURLBookmarkResolutionOptions =
+     (1u32 << 9) as usize;
+-#[cfg(target_os = "macos")]
+ pub const kCFURLBookmarkResolutionWithSecurityScope: CFURLBookmarkResolutionOptions =
+     (1u32 << 10) as usize;
+ //pub const kCFURLBookmarkResolutionWithoutImplicitStartAccessing: CFURLBookmarkResolutionOptions = ( 1u32 << 15 ) as usize; // macos(11.2)+
+@@ -453,7 +450,6 @@ extern "C" {
+         error: *mut CFErrorRef,
+     ) -> CFDataRef;
+ 
+-    #[cfg(target_os = "macos")]
+     pub fn CFURLCreateBookmarkDataFromAliasRecord(
+         allocator: CFAllocatorRef,
+         aliasRecordDataRef: CFDataRef,
+--- ./rustc-1.79.0-src/vendor/cranelift-native-0.107.0/src/lib.rs	1153704088.000000000
++++ ./vendor/cranelift-native-0.107.0/src/lib.rs	1719051867.822244484
+@@ -109,7 +109,7 @@ pub fn infer_native_flags(isa_builder: &
+             isa_builder.enable("has_pauth").unwrap();
+         }
+ 
+-        if cfg!(target_os = "macos") {
++        if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+             // Pointer authentication is always available on Apple Silicon.
+             isa_builder.enable("sign_return_address").unwrap();
+             // macOS enforces the use of the B key for return addresses.
+@@ -165,7 +165,7 @@ mod tests {
+                 .finish(settings::Flags::new(flag_builder))
+                 .unwrap();
+ 
+-            if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
++            if cfg!(all(any(target_os = "macos", target_os = "ios"), target_arch = "aarch64")) {
+                 assert_eq!(isa.default_call_conv(), CallConv::AppleAarch64);
+             } else if cfg!(any(unix, target_os = "nebulet")) {
+                 assert_eq!(isa.default_call_conv(), CallConv::SystemV);
+--- ./rustc-1.79.0-src/vendor/curl-0.4.46/Cargo.toml	1153704088.000000000
++++ ./vendor/curl-0.4.46/Cargo.toml	1719051944.829691156
+@@ -108,11 +108,11 @@ zlib-ng-compat = [
+     "static-curl",
+ ]
+ 
+-[target."cfg(all(unix, not(target_os = \"macos\")))".dependencies.openssl-probe]
++[target."cfg(all(unix, not(any(target_os = \"macos\", target_os = \"ios\"))))".dependencies.openssl-probe]
+ version = "0.1.2"
+ optional = true
+ 
+-[target."cfg(all(unix, not(target_os = \"macos\")))".dependencies.openssl-sys]
++[target."cfg(all(unix, not(any(target_os = \"macos\", target_os = \"ios\"))))".dependencies.openssl-sys]
+ version = "0.9.64"
+ optional = true
+ 
+--- ./rustc-1.79.0-src/vendor/curl-0.4.46/src/lib.rs	1153704088.000000000
++++ ./vendor/curl-0.4.46/src/lib.rs	1719051981.922605233
+@@ -135,7 +135,7 @@ pub fn init() {
+     any(target_os = "linux", target_os = "freebsd", target_os = "android"),
+     link_section = ".init_array"
+ )]
+-#[cfg_attr(target_os = "macos", link_section = "__DATA,__mod_init_func")]
++#[cfg_attr(any(target_os = "macos", target_os = "ios"), link_section = "__DATA,__mod_init_func")]
+ #[cfg_attr(target_os = "windows", link_section = ".CRT$XCU")]
+ pub static INIT_CTOR: extern "C" fn() = {
+     /// This is the body of our constructor function.
+--- ./rustc-1.79.0-src/vendor/curl-sys-0.4.72+curl-8.6.0/Cargo.toml	1719049036.562761801
++++ ./vendor/curl-sys-0.4.72+curl-8.6.0/Cargo.toml	1719051912.445885899
+@@ -69,7 +69,7 @@ zlib-ng-compat = [
+     "static-curl",
+ ]
+ 
+-[target."cfg(all(unix, not(target_os = \"macos\")))".dependencies.openssl-sys]
++[target."cfg(all(unix, not(any(target_os = \"macos\", target_os = \"ios\"))))".dependencies.openssl-sys]
+ version = "0.9.64"
+ optional = true
+ 
+--- ./rustc-1.79.0-src/vendor/dirs-sys-0.3.7/src/lib.rs	1153704088.000000000
++++ ./vendor/dirs-sys-0.3.7/src/lib.rs	1719051982.503801030
+@@ -34,11 +34,11 @@ pub fn home_dir() -> Option<PathBuf> {
+         .or_else(|| unsafe { fallback() })
+         .map(PathBuf::from);
+ 
+-    #[cfg(any(target_os = "android", target_os = "ios", target_os = "emscripten"))]
++    #[cfg(any(target_os = "android", target_os = "emscripten"))]
+     unsafe fn fallback() -> Option<OsString> {
+         None
+     }
+-    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "emscripten")))]
++    #[cfg(not(any(target_os = "android", target_os = "emscripten")))]
+     unsafe fn fallback() -> Option<OsString> {
+         let amt = match libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) {
+             n if n < 0 => 512 as usize,
+--- ./rustc-1.79.0-src/vendor/dirs-sys-0.4.1/src/lib.rs	1153704088.000000000
++++ ./vendor/dirs-sys-0.4.1/src/lib.rs	1719133567.023281693
+@@ -36,11 +36,11 @@ pub fn home_dir() -> Option<PathBuf> {
+         .or_else(|| unsafe { fallback() })
+         .map(PathBuf::from);
+ 
+-    #[cfg(any(target_os = "android", target_os = "ios", target_os = "emscripten"))]
++    #[cfg(any(target_os = "android", target_os = "emscripten"))]
+     unsafe fn fallback() -> Option<OsString> {
+         None
+     }
+-    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "emscripten")))]
++    #[cfg(not(any(target_os = "android", target_os = "emscripten")))]
+     unsafe fn fallback() -> Option<OsString> {
+         let amt = match libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) {
+             n if n < 0 => 512 as usize,
+--- ./rustc-1.79.0-src/vendor/dirs-sys-next-0.1.2/src/lib.rs	1153704088.000000000
++++ ./vendor/dirs-sys-next-0.1.2/src/lib.rs	1719133471.754591015
+@@ -31,11 +31,11 @@ mod target_unix_not_redox {
+             .or_else(|| unsafe { fallback() })
+             .map(PathBuf::from);
+ 
+-        #[cfg(any(target_os = "android", target_os = "ios", target_os = "emscripten"))]
++        #[cfg(any(target_os = "android", target_os = "emscripten"))]
+         unsafe fn fallback() -> Option<OsString> {
+             None
+         }
+-        #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "emscripten")))]
++        #[cfg(not(any(target_os = "android", target_os = "emscripten")))]
+         unsafe fn fallback() -> Option<OsString> {
+             let amt = match libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) {
+                 n if n < 0 => 512 as usize,
+--- ./rustc-1.79.0-src/vendor/dlmalloc-0.2.6/src/lib.rs	1153704088.000000000
++++ ./vendor/dlmalloc-0.2.6/src/lib.rs	1719133638.458614446
+@@ -83,7 +83,7 @@ cfg_if::cfg_if! {
+     } else if #[cfg(target_os = "xous")] {
+         #[path = "xous.rs"]
+         mod sys;
+-    } else if #[cfg(any(target_os = "linux", target_os = "macos"))] {
++    } else if #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))] {
+         #[path = "unix.rs"]
+         mod sys;
+     } else {
+--- ./rustc-1.79.0-src/vendor/dlmalloc-0.2.6/src/unix.rs	1153704088.000000000
++++ ./vendor/dlmalloc-0.2.6/src/unix.rs	1719133639.054807019
+@@ -45,7 +45,7 @@ unsafe impl Allocator for System {
+         }
+     }
+ 
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     fn remap(&self, _ptr: *mut u8, _oldsize: usize, _newsize: usize, _can_move: bool) -> *mut u8 {
+         ptr::null_mut()
+     }
+@@ -61,7 +61,7 @@ unsafe impl Allocator for System {
+         }
+     }
+ 
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     fn free_part(&self, ptr: *mut u8, oldsize: usize, newsize: usize) -> bool {
+         unsafe { libc::munmap(ptr.add(newsize).cast(), oldsize - newsize) == 0 }
+     }
+--- ./rustc-1.79.0-src/vendor/filetime-0.2.23/src/unix/mod.rs	1153704088.000000000
++++ ./vendor/filetime-0.2.23/src/unix/mod.rs	1719133672.229597568
+@@ -11,7 +11,7 @@ cfg_if::cfg_if! {
+     } else if #[cfg(target_os = "android")] {
+         mod android;
+         pub use self::android::*;
+-    } else if #[cfg(target_os = "macos")] {
++    } else if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+         mod utimes;
+         mod macos;
+         pub use self::macos::*;
+@@ -35,6 +35,7 @@ cfg_if::cfg_if! {
+ fn to_timespec(ft: &Option<FileTime>) -> timespec {
+     cfg_if::cfg_if! {
+         if #[cfg(any(target_os = "macos",
++                     target_os = "ios",
+                      target_os = "illumos",
+                      target_os = "freebsd"))] {
+             // https://github.com/apple/darwin-xnu/blob/a449c6a3b8014d9406c2ddbdc81795da24aa7443/bsd/sys/stat.h#L541
+--- ./rustc-1.79.0-src/vendor/fsevent-sys-4.1.0/src/lib.rs	1153704088.000000000
++++ ./vendor/fsevent-sys-4.1.0/src/lib.rs	1719133721.681744707
+@@ -1,4 +1,4 @@
+-#![cfg(target_os = "macos")]
++#![cfg(any(target_os = "macos", target_os = "ios"))]
+ #![cfg_attr(feature = "cargo-clippy", allow(unreadable_literal))]
+ 
+ pub mod core_foundation;
+--- ./rustc-1.79.0-src/vendor/getrandom-0.2.12/src/lib.rs	1153704088.000000000
++++ ./vendor/getrandom-0.2.12/src/lib.rs	1719133821.691385089
+@@ -238,9 +238,9 @@ cfg_if! {
+         #[path = "dragonfly.rs"] mod imp;
+     } else if #[cfg(target_os = "fuchsia")] {
+         #[path = "fuchsia.rs"] mod imp;
+-    } else if #[cfg(any(target_os = "ios", target_os = "watchos", target_os = "tvos"))] {
++    } else if #[cfg(any(target_os = "watchos", target_os = "tvos"))] {
+         #[path = "apple-other.rs"] mod imp;
+-    } else if #[cfg(target_os = "macos")] {
++    } else if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+         mod util_libc;
+         #[path = "macos.rs"] mod imp;
+     } else if #[cfg(target_os = "openbsd")] {
+--- ./rustc-1.79.0-src/vendor/getrandom-0.2.12/src/util_libc.rs	1153704088.000000000
++++ ./vendor/getrandom-0.2.12/src/util_libc.rs	1719133928.004001890
+@@ -15,7 +15,7 @@ cfg_if! {
+         use libc::__errno_location as errno_location;
+     } else if #[cfg(any(target_os = "solaris", target_os = "illumos"))] {
+         use libc::___errno as errno_location;
+-    } else if #[cfg(any(target_os = "macos", target_os = "freebsd"))] {
++    } else if #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))] {
+         use libc::__error as errno_location;
+     } else if #[cfg(target_os = "haiku")] {
+         use libc::_errnop as errno_location;
+--- ./rustc-1.79.0-src/vendor/getrandom-0.2.13/src/lib.rs	1153704088.000000000
++++ ./vendor/getrandom-0.2.13/src/lib.rs	1719133835.306168488
+@@ -294,9 +294,9 @@ cfg_if! {
+         #[path = "dragonfly.rs"] mod imp;
+     } else if #[cfg(target_os = "fuchsia")] {
+         #[path = "fuchsia.rs"] mod imp;
+-    } else if #[cfg(any(target_os = "ios", target_os = "watchos", target_os = "tvos"))] {
++    } else if #[cfg(any(target_os = "watchos", target_os = "tvos"))] {
+         #[path = "apple-other.rs"] mod imp;
+-    } else if #[cfg(target_os = "macos")] {
++    } else if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+         mod util_libc;
+         #[path = "macos.rs"] mod imp;
+     } else if #[cfg(target_os = "openbsd")] {
+--- ./rustc-1.79.0-src/vendor/getrandom-0.2.13/src/util_libc.rs	1153704088.000000000
++++ ./vendor/getrandom-0.2.13/src/util_libc.rs	1719133937.270388701
+@@ -15,7 +15,7 @@ cfg_if! {
+         use libc::__errno_location as errno_location;
+     } else if #[cfg(any(target_os = "solaris", target_os = "illumos"))] {
+         use libc::___errno as errno_location;
+-    } else if #[cfg(any(target_os = "macos", target_os = "freebsd"))] {
++    } else if #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))] {
+         use libc::__error as errno_location;
+     } else if #[cfg(target_os = "haiku")] {
+         use libc::_errnop as errno_location;
+--- ./rustc-1.79.0-src/vendor/git2-0.18.3/Cargo.toml	1153704088.000000000
++++ ./vendor/git2-0.18.3/Cargo.toml	1719134121.677614728
+@@ -75,10 +75,10 @@ vendored-openssl = [
+ ]
+ zlib-ng-compat = ["libgit2-sys/zlib-ng-compat"]
+ 
+-[target."cfg(all(unix, not(target_os = \"macos\")))".dependencies.openssl-probe]
++[target."cfg(all(unix, not(any(target_os = \"macos\", target_os = \"ios\"))))".dependencies.openssl-probe]
+ version = "0.1"
+ optional = true
+ 
+-[target."cfg(all(unix, not(target_os = \"macos\")))".dependencies.openssl-sys]
++[target."cfg(all(unix, not(any(target_os = \"macos\", target_os = \"ios\"))))".dependencies.openssl-sys]
+ version = "0.9.45"
+ optional = true
+--- ./rustc-1.79.0-src/vendor/gix-discover-0.32.0/Cargo.toml	1153704088.000000000
++++ ./vendor/gix-discover-0.32.0/Cargo.toml	1719134216.759111603
+@@ -70,7 +70,7 @@ default-features = false
+ [target."cfg(any(unix, windows))".dev-dependencies.tempfile]
+ version = "3.2.0"
+ 
+-[target."cfg(target_os = \"macos\")".dev-dependencies.defer]
++[target."cfg(target_vendor = \"apple\")".dev-dependencies.defer]
+ version = "0.2.1"
+ 
+ [target."cfg(windows)".dependencies.dunce]
+--- ./rustc-1.79.0-src/vendor/gix-fs-0.11.0/src/capabilities.rs	1153704088.000000000
++++ ./vendor/gix-fs-0.11.0/src/capabilities.rs	1719134323.044531490
+@@ -27,7 +27,20 @@ impl Default for Capabilities {
+     }
+ }
+ 
+-#[cfg(all(unix, not(target_os = "macos")))]
++#[cfg(target_os = "ios")]
++impl Default for Capabilities {
++    fn default() -> Self {
++        Capabilities {
++            precompose_unicode: true,
++            // iOS is case-sensitive
++            ignore_case: false,
++            executable_bit: true,
++            symlink: true,
++        }
++    }
++}
++
++#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+ impl Default for Capabilities {
+     fn default() -> Self {
+         Capabilities {
+--- ./rustc-1.79.0-src/vendor/glob-0.3.1/src/lib.rs	1153704088.000000000
++++ ./vendor/glob-0.3.1/src/lib.rs	1719134365.541184952
+@@ -1060,7 +1060,7 @@ mod test {
+     // this test assumes that there is a /root directory and that
+     // the user running this test is not root or otherwise doesn't
+     // have permission to read its contents
+-    #[cfg(all(unix, not(target_os = "macos")))]
++    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+     #[test]
+     fn test_iteration_errors() {
+         use std::io;
+--- ./rustc-1.79.0-src/vendor/hyper-0.14.28/Cargo.toml	1153704088.000000000
++++ ./vendor/hyper-0.14.28/Cargo.toml	1719134413.922131693
+@@ -330,5 +330,5 @@ tcp = [
+     "tokio/time",
+ ]
+ 
+-[target."cfg(any(target_os = \"linux\", target_os = \"macos\"))".dev-dependencies.pnet_datalink]
++[target."cfg(any(target_os = \"linux\", target_os = \"macos\", target_os = \"ios\"))".dev-dependencies.pnet_datalink]
+ version = "0.27.2"
+--- ./rustc-1.79.0-src/vendor/jemalloc-sys-0.5.4+5.3.0-patched/build.rs	1153704088.000000000
++++ ./vendor/jemalloc-sys-0.5.4+5.3.0-patched/build.rs	1719134523.752246409
+@@ -34,8 +34,7 @@ fn read_and_watch_env(name: &str) -> Res
+ }
+ 
+ fn read_and_watch_env_os(name: &str) -> Option<OsString> {
+-    println!("cargo:rerun-if-env-changed={name}");
+-    env::var_os(name)
++    target_env(name)
+ }
+ 
+ fn copy_recursively(src: &Path, dst: &Path) -> io::Result<()> {
+@@ -55,6 +54,24 @@ fn copy_recursively(src: &Path, dst: &Pa
+     Ok(())
+ }
+ 
++fn env_inner(name: &str) -> Option<OsString> {
++    let var = env::var_os(name);
++    println!("cargo:rerun-if-env-changed={}", name);
++
++    match var {
++        Some(ref v) => println!("{} = {}", name, v.to_string_lossy()),
++        None => println!("{} unset", name),
++    }
++
++    var
++}
++
++fn target_env(name: &str) -> Option<OsString> {
++    let prefix = env::var("TARGET").unwrap().to_uppercase().replace('-', "_");
++    let prefixed = format!("{}_{}", prefix, name);
++    env_inner(&prefixed).or_else(|| env_inner(name))
++}
++
+ // TODO: split main functions and remove following allow.
+ #[allow(clippy::cognitive_complexity)]
+ fn main() {
+@@ -235,11 +252,13 @@ fn main() {
+         cmd.arg(format!("--with-lg-vaddr={lg_vaddr}"));
+     }
+ 
++    #[cfg(not(target_vendor = "apple"))]
+     if use_prefix {
+         cmd.arg("--with-jemalloc-prefix=_rjem_");
+         info!("--with-jemalloc-prefix=_rjem_");
+     }
+ 
++    #[cfg(not(target_vendor = "apple"))]
+     cmd.arg("--with-private-namespace=_rjem_");
+ 
+     if env::var("CARGO_FEATURE_DEBUG").is_ok() {
+--- ./rustc-1.79.0-src/vendor/jemalloc-sys-0.5.4+5.3.0-patched/src/env.rs	1153704088.000000000
++++ ./vendor/jemalloc-sys-0.5.4+5.3.0-patched/src/env.rs	1719134524.341666624
+@@ -22,4 +22,4 @@ pub static NO_BG_THREAD_TARGETS: &[&str]
+ // https://github.com/rust-lang/rust/commit/536011d929ecbd1170baf34e09580e567c971f95
+ // https://github.com/rust-lang/rust/commit/9f3de647326fbe50e0e283b9018ab7c41abccde3
+ // https://github.com/rust-lang/rust/commit/ed015456a114ae907a36af80c06f81ea93182a24
+-pub static NO_UNPREFIXED_MALLOC_TARGETS: &[&str] = &["android", "dragonfly", "musl", "darwin"];
++pub static NO_UNPREFIXED_MALLOC_TARGETS: &[&str] = &["android", "dragonfly", "musl"];
+--- ./rustc-1.79.0-src/vendor/jemalloc-sys-0.5.4+5.3.0-patched/src/lib.rs	1153704088.000000000
++++ ./vendor/jemalloc-sys-0.5.4+5.3.0-patched/src/lib.rs	1719134524.922966075
+@@ -39,6 +39,9 @@
+ //! [jemalloc_docs]: http://jemalloc.net/jemalloc.3.html
+ //! [jemalloc_wiki]: https://github.com/jemalloc/jemalloc/wiki
+ //! [jemalloc_mallctl]: http://jemalloc.net/jemalloc.3.html#mallctl_namespace
++
++//! # Torrekie: jemalloc already prefixed as "je" on Darwin
++
+ #![no_std]
+ #![allow(non_snake_case, non_camel_case_types)]
+ #![cfg_attr(
+@@ -144,7 +147,7 @@ extern "C" {
+     ///
+     /// If the space cannot be allocated, a null pointer is returned and `errno`
+     /// is set to `ENOMEM`.
+-    #[cfg_attr(prefixed, link_name = "_rjem_malloc")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_malloc")]
+     pub fn malloc(size: size_t) -> *mut c_void;
+     /// Allocates zero-initialized space for an array of `number` objects, each
+     /// of whose size is `size`.
+@@ -155,7 +158,7 @@ extern "C" {
+     ///
+     /// Note: zero-initialized memory need not be the same as the
+     /// representation of floating-point zero or a null pointer constant.
+-    #[cfg_attr(prefixed, link_name = "_rjem_calloc")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_calloc")]
+     pub fn calloc(number: size_t, size: size_t) -> *mut c_void;
+ 
+     /// Allocates `size` bytes of memory at an address which is a multiple of
+@@ -179,7 +182,7 @@ extern "C" {
+     /// The behavior is _undefined_ if:
+     ///
+     /// * `ptr` is null.
+-    #[cfg_attr(prefixed, link_name = "_rjem_posix_memalign")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_posix_memalign")]
+     pub fn posix_memalign(ptr: *mut *mut c_void, alignment: size_t, size: size_t) -> c_int;
+ 
+     /// Allocates `size` bytes of memory at an address which is a multiple of
+@@ -199,7 +202,7 @@ extern "C" {
+     ///
+     /// * `alignment` is not a power-of-two
+     /// * `size` is not an integral multiple of `alignment`
+-    #[cfg_attr(prefixed, link_name = "_rjem_aligned_alloc")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_aligned_alloc")]
+     pub fn aligned_alloc(alignment: size_t, size: size_t) -> *mut c_void;
+ 
+     /// Resizes the previously-allocated memory region referenced by `ptr` to
+@@ -238,7 +241,7 @@ extern "C" {
+     /// * `ptr` does not match a pointer previously returned by the memory
+     ///   allocation functions of this crate, or
+     /// * the memory region referenced by `ptr` has been deallocated.
+-    #[cfg_attr(prefixed, link_name = "_rjem_realloc")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_realloc")]
+     pub fn realloc(ptr: *mut c_void, size: size_t) -> *mut c_void;
+ 
+     /// Deallocates previously-allocated memory region referenced by `ptr`.
+@@ -254,7 +257,7 @@ extern "C" {
+     /// * `ptr` does not match a pointer earlier returned by the memory
+     ///   allocation functions of this crate, or
+     /// * the memory region referenced by `ptr` has been deallocated.
+-    #[cfg_attr(prefixed, link_name = "_rjem_free")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_free")]
+     pub fn free(ptr: *mut c_void);
+ 
+     /// Allocates at least `size` bytes of memory according to `flags`.
+@@ -274,7 +277,7 @@ extern "C" {
+     /// # Safety
+     ///
+     /// The behavior is _undefined_ if `size == 0`.
+-    #[cfg_attr(prefixed, link_name = "_rjem_mallocx")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_mallocx")]
+     pub fn mallocx(size: size_t, flags: c_int) -> *mut c_void;
+ 
+     /// Resizes the previously-allocated memory region referenced by `ptr` to be
+@@ -307,7 +310,7 @@ extern "C" {
+     /// * `ptr` does not match a pointer earlier returned by
+     ///   the memory allocation functions of this crate, or
+     /// * the memory region referenced by `ptr` has been deallocated.
+-    #[cfg_attr(prefixed, link_name = "_rjem_rallocx")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_rallocx")]
+     pub fn rallocx(ptr: *mut c_void, size: size_t, flags: c_int) -> *mut c_void;
+ 
+     /// Resizes the previously-allocated memory region referenced by `ptr` _in
+@@ -348,7 +351,7 @@ extern "C" {
+     /// * `ptr` does not match a pointer earlier returned by the memory
+     ///   allocation functions of this crate, or
+     /// * the memory region referenced by `ptr` has been deallocated.
+-    #[cfg_attr(prefixed, link_name = "_rjem_xallocx")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_xallocx")]
+     pub fn xallocx(ptr: *mut c_void, size: size_t, extra: size_t, flags: c_int) -> size_t;
+ 
+     /// Returns the real size of the previously-allocated memory region
+@@ -363,7 +366,7 @@ extern "C" {
+     /// * `ptr` does not match a pointer earlier returned by the memory
+     ///   allocation functions of this crate, or
+     /// * the memory region referenced by `ptr` has been deallocated.
+-    #[cfg_attr(prefixed, link_name = "_rjem_sallocx")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_sallocx")]
+     pub fn sallocx(ptr: *const c_void, flags: c_int) -> size_t;
+ 
+     /// Deallocates previously-allocated memory region referenced by `ptr`.
+@@ -378,7 +381,7 @@ extern "C" {
+     ///   allocation functions of this crate, or
+     /// * `ptr` is null, or
+     /// * the memory region referenced by `ptr` has been deallocated.
+-    #[cfg_attr(prefixed, link_name = "_rjem_dallocx")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_dallocx")]
+     pub fn dallocx(ptr: *mut c_void, flags: c_int);
+ 
+     /// Deallocates previously-allocated memory region referenced by `ptr` with
+@@ -398,7 +401,7 @@ extern "C" {
+     ///   allocation functions of this crate, or
+     /// * `ptr` is null, or
+     /// * the memory region referenced by `ptr` has been deallocated.
+-    #[cfg_attr(prefixed, link_name = "_rjem_sdallocx")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_sdallocx")]
+     pub fn sdallocx(ptr: *mut c_void, size: size_t, flags: c_int);
+ 
+     /// Returns the real size of the allocation that would result from a
+@@ -412,7 +415,7 @@ extern "C" {
+     /// # Safety
+     ///
+     /// The behavior is _undefined_ if `size == 0`.
+-    #[cfg_attr(prefixed, link_name = "_rjem_nallocx")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_nallocx")]
+     pub fn nallocx(size: size_t, flags: c_int) -> size_t;
+ 
+     /// Returns the real size of the previously-allocated memory region
+@@ -437,7 +440,7 @@ extern "C" {
+     /// * `ptr` does not match a pointer earlier returned by the memory
+     ///   allocation functions of this crate, or
+     /// * the memory region referenced by `ptr` has been deallocated.
+-    #[cfg_attr(prefixed, link_name = "_rjem_malloc_usable_size")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_malloc_usable_size")]
+     pub fn malloc_usable_size(ptr: *const c_void) -> size_t;
+ 
+     /// General interface for introspecting the memory allocator, as well as
+@@ -470,7 +473,7 @@ extern "C" {
+     /// directly related to `mallctl` read/write processing.
+     ///
+     /// [jemalloc_mallctl]: http://jemalloc.net/jemalloc.3.html#mallctl_namespace
+-    #[cfg_attr(prefixed, link_name = "_rjem_mallctl")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_mallctl")]
+     pub fn mallctl(
+         name: *const c_char,
+         oldp: *mut c_void,
+@@ -492,11 +495,11 @@ extern "C" {
+     /// a complete MIB. For name components that are integers (e.g. the 2 in
+     /// arenas.bin.2.size), the corresponding MIB component will always be that
+     /// integer.
+-    #[cfg_attr(prefixed, link_name = "_rjem_mallctlnametomib")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_mallctlnametomib")]
+     pub fn mallctlnametomib(name: *const c_char, mibp: *mut size_t, miblenp: *mut size_t) -> c_int;
+ 
+     /// Like [`mallctl`] but taking a `mib` as input instead of a name.
+-    #[cfg_attr(prefixed, link_name = "_rjem_mallctlbymib")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_mallctlbymib")]
+     pub fn mallctlbymib(
+         mib: *const size_t,
+         miblen: size_t,
+@@ -533,7 +536,7 @@ extern "C" {
+     /// Note that thread caching may prevent some statistics from being
+     /// completely up to date, since extra locking would be required to merge
+     /// counters that track thread cache operations.
+-    #[cfg_attr(prefixed, link_name = "_rjem_malloc_stats_print")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_malloc_stats_print")]
+     pub fn malloc_stats_print(
+         write_cb: Option<unsafe extern "C" fn(*mut c_void, *const c_char)>,
+         cbopaque: *mut c_void,
+@@ -550,7 +553,7 @@ extern "C" {
+     ///
+     /// Please note that doing anything which tries to allocate memory in this
+     /// function is likely to result in a crash or deadlock.
+-    #[cfg_attr(prefixed, link_name = "_rjem_malloc_message")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_malloc_message")]
+     pub static mut malloc_message:
+         Option<unsafe extern "C" fn(cbopaque: *mut c_void, s: *const c_char)>;
+ 
+@@ -580,7 +583,7 @@ extern "C" {
+     /// Some options have boolean values (`true`/`false`), others have integer
+     /// values (base `8`, `10`, or `16`, depending on prefix), and yet others
+     /// have raw string values.
+-    #[cfg_attr(prefixed, link_name = "_rjem_malloc_conf")]
++    #[cfg_attr(target_vendor = "apple", link_name = "je_malloc_conf")]
+     pub static malloc_conf: Option<&'static c_char>;
+ }
+ 
+--- ./rustc-1.79.0-src/vendor/jemalloc-sys-0.5.4+5.3.0-patched/tests/malloc_conf_set.rs	1153704088.000000000
++++ ./vendor/jemalloc-sys-0.5.4+5.3.0-patched/tests/malloc_conf_set.rs	1719134525.516981417
+@@ -4,7 +4,7 @@ union U {
+ }
+ 
+ #[allow(non_upper_case_globals)]
+-#[cfg_attr(prefixed, export_name = "_rjem_malloc_conf")]
++#[cfg_attr(prefixed, export_name = "je_malloc_conf")]
+ #[cfg_attr(not(prefixed), no_mangle)]
+ pub static malloc_conf: Option<&'static libc::c_char> = Some(unsafe {
+     U {
+--- ./rustc-1.79.0-src/vendor/libc-0.2.150/src/unix/bsd/apple/mod.rs	1153704088.000000000
++++ ./vendor/libc-0.2.150/src/unix/bsd/apple/mod.rs	1719134587.652880060
+@@ -6000,6 +6000,7 @@ extern "C" {
+     #[deprecated(since = "0.2.55", note = "Use the `mach2` crate instead")]
+     pub fn _dyld_get_image_name(image_index: u32) -> *const ::c_char;
+ 
++    #[cfg_attr(target_os = "ios", link_name = "ie_posix_spawn")]
+     pub fn posix_spawn(
+         pid: *mut ::pid_t,
+         path: *const ::c_char,
+@@ -6008,6 +6009,7 @@ extern "C" {
+         argv: *const *mut ::c_char,
+         envp: *const *mut ::c_char,
+     ) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_posix_spawnp")]
+     pub fn posix_spawnp(
+         pid: *mut ::pid_t,
+         file: *const ::c_char,
+@@ -6097,6 +6099,10 @@ extern "C" {
+         fd: ::c_int,
+         newfd: ::c_int,
+     ) -> ::c_int;
++    #[cfg_attr(
++        all(target_os = "ios"),
++        link_name = "ie_uname"
++    )]
+     pub fn uname(buf: *mut ::utsname) -> ::c_int;
+ 
+     pub fn connectx(
+@@ -6420,7 +6426,7 @@ pub unsafe fn mach_task_self() -> ::mach
+ }
+ 
+ cfg_if! {
+-    if #[cfg(target_os = "macos")] {
++    if #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))] {
+         extern "C" {
+             pub fn clock_settime(clock_id: ::clockid_t, tp: *const ::timespec) -> ::c_int;
+         }
+--- ./rustc-1.79.0-src/vendor/libc-0.2.150/src/unix/mod.rs	1153704088.000000000
++++ ./vendor/libc-0.2.150/src/unix/mod.rs	1719134637.956528782
+@@ -875,15 +875,21 @@ extern "C" {
+     pub fn close(fd: ::c_int) -> ::c_int;
+     pub fn dup(fd: ::c_int) -> ::c_int;
+     pub fn dup2(src: ::c_int, dst: ::c_int) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execl")]
+     pub fn execl(path: *const c_char, arg0: *const c_char, ...) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execle")]
+     pub fn execle(path: *const ::c_char, arg0: *const ::c_char, ...) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execlp")]
+     pub fn execlp(file: *const ::c_char, arg0: *const ::c_char, ...) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execv")]
+     pub fn execv(prog: *const c_char, argv: *const *const c_char) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execve")]
+     pub fn execve(
+         prog: *const c_char,
+         argv: *const *const c_char,
+         envp: *const *const c_char,
+     ) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execvp")]
+     pub fn execvp(c: *const c_char, argv: *const *const c_char) -> ::c_int;
+     pub fn fork() -> pid_t;
+     pub fn fpathconf(filedes: ::c_int, name: ::c_int) -> c_long;
+--- ./rustc-1.79.0-src/vendor/libc-0.2.151/src/unix/bsd/apple/mod.rs	1153704088.000000000
++++ ./vendor/libc-0.2.151/src/unix/bsd/apple/mod.rs	1719134526.109366399
+@@ -6002,6 +6002,7 @@ extern "C" {
+     #[deprecated(since = "0.2.55", note = "Use the `mach2` crate instead")]
+     pub fn _dyld_get_image_name(image_index: u32) -> *const ::c_char;
+ 
++    #[cfg_attr(target_os = "ios", link_name = "ie_posix_spawn")]
+     pub fn posix_spawn(
+         pid: *mut ::pid_t,
+         path: *const ::c_char,
+@@ -6010,6 +6011,7 @@ extern "C" {
+         argv: *const *mut ::c_char,
+         envp: *const *mut ::c_char,
+     ) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_posix_spawnp")]
+     pub fn posix_spawnp(
+         pid: *mut ::pid_t,
+         file: *const ::c_char,
+@@ -6099,6 +6101,10 @@ extern "C" {
+         fd: ::c_int,
+         newfd: ::c_int,
+     ) -> ::c_int;
++    #[cfg_attr(
++        all(target_os = "ios"),
++        link_name = "ie_uname"
++    )]
+     pub fn uname(buf: *mut ::utsname) -> ::c_int;
+ 
+     pub fn connectx(
+@@ -6430,7 +6436,7 @@ pub unsafe fn mach_task_self() -> ::mach
+ }
+ 
+ cfg_if! {
+-    if #[cfg(target_os = "macos")] {
++    if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+         extern "C" {
+             pub fn clock_settime(clock_id: ::clockid_t, tp: *const ::timespec) -> ::c_int;
+         }
+--- ./rustc-1.79.0-src/vendor/libc-0.2.151/src/unix/mod.rs	1153704088.000000000
++++ ./vendor/libc-0.2.151/src/unix/mod.rs	1719134526.702984994
+@@ -861,15 +861,39 @@ extern "C" {
+     pub fn close(fd: ::c_int) -> ::c_int;
+     pub fn dup(fd: ::c_int) -> ::c_int;
+     pub fn dup2(src: ::c_int, dst: ::c_int) -> ::c_int;
++    #[cfg_attr(
++        all(target_os = "ios"),
++        link_name = "ie_execl"
++    )]
+     pub fn execl(path: *const c_char, arg0: *const c_char, ...) -> ::c_int;
++    #[cfg_attr(
++        all(target_os = "ios"),
++        link_name = "ie_execle"
++    )]
+     pub fn execle(path: *const ::c_char, arg0: *const ::c_char, ...) -> ::c_int;
++    #[cfg_attr(
++        all(target_os = "ios"),
++        link_name = "ie_execlp"
++    )]
+     pub fn execlp(file: *const ::c_char, arg0: *const ::c_char, ...) -> ::c_int;
++    #[cfg_attr(
++        all(target_os = "ios"),
++        link_name = "ie_execv"
++    )]
+     pub fn execv(prog: *const c_char, argv: *const *const c_char) -> ::c_int;
++    #[cfg_attr(
++        all(target_os = "ios"),
++        link_name = "ie_execve"
++    )]
+     pub fn execve(
+         prog: *const c_char,
+         argv: *const *const c_char,
+         envp: *const *const c_char,
+     ) -> ::c_int;
++    #[cfg_attr(
++        all(target_os = "ios"),
++        link_name = "ie_execvp"
++    )]
+     pub fn execvp(c: *const c_char, argv: *const *const c_char) -> ::c_int;
+     pub fn fork() -> pid_t;
+     pub fn fpathconf(filedes: ::c_int, name: ::c_int) -> c_long;
+--- ./rustc-1.79.0-src/vendor/libc-0.2.153/src/unix/bsd/apple/mod.rs	1153704088.000000000
++++ ./vendor/libc-0.2.153/src/unix/bsd/apple/mod.rs	1719134601.778698099
+@@ -6040,6 +6040,7 @@ extern "C" {
+     #[deprecated(since = "0.2.55", note = "Use the `mach2` crate instead")]
+     pub fn _dyld_get_image_name(image_index: u32) -> *const ::c_char;
+ 
++    #[cfg_attr(target_os = "ios", link_name = "ie_posix_spawn")]
+     pub fn posix_spawn(
+         pid: *mut ::pid_t,
+         path: *const ::c_char,
+@@ -6048,6 +6049,7 @@ extern "C" {
+         argv: *const *mut ::c_char,
+         envp: *const *mut ::c_char,
+     ) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_posix_spawnp")]
+     pub fn posix_spawnp(
+         pid: *mut ::pid_t,
+         file: *const ::c_char,
+@@ -6137,6 +6139,10 @@ extern "C" {
+         fd: ::c_int,
+         newfd: ::c_int,
+     ) -> ::c_int;
++    #[cfg_attr(
++        all(target_os = "ios"),
++        link_name = "ie_uname"
++    )]
+     pub fn uname(buf: *mut ::utsname) -> ::c_int;
+ 
+     pub fn connectx(
+@@ -6468,7 +6474,7 @@ pub unsafe fn mach_task_self() -> ::mach
+ }
+ 
+ cfg_if! {
+-    if #[cfg(target_os = "macos")] {
++    if #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos"))] {
+         extern "C" {
+             pub fn clock_settime(clock_id: ::clockid_t, tp: *const ::timespec) -> ::c_int;
+         }
+--- ./rustc-1.79.0-src/vendor/libc-0.2.153/src/unix/mod.rs	1153704088.000000000
++++ ./vendor/libc-0.2.153/src/unix/mod.rs	1719134626.441556005
+@@ -861,15 +861,21 @@ extern "C" {
+     pub fn close(fd: ::c_int) -> ::c_int;
+     pub fn dup(fd: ::c_int) -> ::c_int;
+     pub fn dup2(src: ::c_int, dst: ::c_int) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execl")]
+     pub fn execl(path: *const c_char, arg0: *const c_char, ...) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execle")]
+     pub fn execle(path: *const ::c_char, arg0: *const ::c_char, ...) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execlp")]
+     pub fn execlp(file: *const ::c_char, arg0: *const ::c_char, ...) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execv")]
+     pub fn execv(prog: *const c_char, argv: *const *const c_char) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execve")]
+     pub fn execve(
+         prog: *const c_char,
+         argv: *const *const c_char,
+         envp: *const *const c_char,
+     ) -> ::c_int;
++    #[cfg_attr(target_os = "ios", link_name = "ie_execvp")]
+     pub fn execvp(c: *const c_char, argv: *const *const c_char) -> ::c_int;
+     pub fn fork() -> pid_t;
+     pub fn fpathconf(filedes: ::c_int, name: ::c_int) -> c_long;
+--- ./rustc-1.79.0-src/vendor/libloading-0.8.3/tests/library_filename.rs	1153704088.000000000
++++ ./vendor/libloading-0.8.3/tests/library_filename.rs	1719134684.314954444
+@@ -6,7 +6,7 @@ use std::path::Path;
+ const EXPECTED: &str = "audioengine.dll";
+ #[cfg(target_os = "linux")]
+ const EXPECTED: &str = "libaudioengine.so";
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ const EXPECTED: &str = "libaudioengine.dylib";
+ 
+ #[test]
+--- ./rustc-1.79.0-src/vendor/libmimalloc-sys-0.1.35/c_src/mimalloc/src/prim/unix/prim.c	1153704088.000000000
++++ ./vendor/libmimalloc-sys-0.1.35/c_src/mimalloc/src/prim/unix/prim.c	1719134709.876571316
+@@ -38,9 +38,7 @@ terms of the MIT license. A copy of the
+   #endif
+ #elif defined(__APPLE__)
+   #include <TargetConditionals.h>
+-  #if !TARGET_IOS_IPHONE && !TARGET_IOS_SIMULATOR
+   #include <mach/vm_statistics.h>
+-  #endif
+ #elif defined(__FreeBSD__) || defined(__DragonFly__)
+   #include <sys/param.h>
+   #if __FreeBSD_version >= 1200000
+@@ -732,12 +730,10 @@ bool _mi_prim_getenv(const char* name, c
+ #if defined(__APPLE__)
+ 
+ #include <AvailabilityMacros.h>
+-#if defined(MAC_OS_X_VERSION_10_10) && MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_10
+ #include <CommonCrypto/CommonCryptoError.h>
+ #include <CommonCrypto/CommonRandom.h>
+-#endif
+ bool _mi_prim_random_buf(void* buf, size_t buf_len) {
+-  #if defined(MAC_OS_X_VERSION_10_15) && MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_15
++  #if defined(MAC_OS_X_VERSION_10_15) && MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_15 && 0
+     // We prefere CCRandomGenerateBytes as it returns an error code while arc4random_buf
+     // may fail silently on macOS. See PR #390, and <https://opensource.apple.com/source/Libc/Libc-1439.40.11/gen/FreeBSD/arc4random.c.auto.html>
+     return (CCRandomGenerateBytes(buf, buf_len) == kCCSuccess);
+--- ./rustc-1.79.0-src/vendor/lzma-sys-0.1.20/Cargo.toml	1153704088.000000000
++++ ./vendor/lzma-sys-0.1.20/Cargo.toml	1719134783.213639728
+@@ -39,3 +39,6 @@ version = "0.3.14"
+ 
+ [features]
+ static = []
++
++[target.aarch64-apple-ios]
++rustc-link-search = ["/usr/libexec/xz/lib"]
+--- ./rustc-1.79.0-src/vendor/lzma-sys-0.1.20/build.rs	1153704088.000000000
++++ ./vendor/lzma-sys-0.1.20/build.rs	1719134801.051863583
+@@ -1,108 +1,6 @@
+-use std::env;
+-use std::fs;
+-use std::path::PathBuf;
+-
+-const SKIP_FILENAMES: &[&str] = &["crc32_small", "crc64_small"];
+-
+ fn main() {
+-    let target = env::var("TARGET").unwrap();
+-
+-    println!("cargo:rerun-if-changed=build.rs");
+-    println!("cargo:rerun-if-env-changed=LZMA_API_STATIC");
+-    let want_static = cfg!(feature = "static") || env::var("LZMA_API_STATIC").is_ok();
+-    let msvc = target.contains("msvc");
+-
+-    // If a static link is desired, we compile from source.
+-    // If we're compiling for MSVC, pkg-config runs a risk of picking up MinGW
+-    // libraries by accident, so disable it.
+-    //
+-    // Otherwise check the system to see if it has an lzma library already
+-    // installed that we can use.
+-    if !want_static && !msvc && pkg_config::probe_library("liblzma").is_ok() {
+-        return;
+-    }
+-
+-    let out_dir = env::var("OUT_DIR").unwrap();
+-    println!("cargo:root={}", out_dir);
+-    let include_dir = env::current_dir().unwrap().join("xz-5.2/src/liblzma/api");
+-    println!("cargo:include={}", include_dir.display());
+-
+-    let mut src_files = [
+-        "xz-5.2/src/liblzma/common",
+-        "xz-5.2/src/liblzma/lzma",
+-        "xz-5.2/src/liblzma/lz",
+-        "xz-5.2/src/liblzma/check",
+-        "xz-5.2/src/liblzma/delta",
+-        "xz-5.2/src/liblzma/rangecoder",
+-        "xz-5.2/src/liblzma/simple",
+-    ]
+-    .iter()
+-    .flat_map(|dir| read_dir_files(dir))
+-    .chain(vec![
+-        "xz-5.2/src/common/tuklib_cpucores.c".into(),
+-        "xz-5.2/src/common/tuklib_physmem.c".into(),
+-    ])
+-    .collect::<Vec<_>>();
+-
+-    // sort to make build reproducible.
+-    src_files.sort();
+-
+-    let mut build = cc::Build::new();
+-
+-    build
+-        .files(src_files)
+-        // all C preproc defines are in `./config.h`
+-        .define("HAVE_CONFIG_H", "1")
+-        .include("xz-5.2/src/liblzma/api")
+-        .include("xz-5.2/src/liblzma/lzma")
+-        .include("xz-5.2/src/liblzma/lz")
+-        .include("xz-5.2/src/liblzma/check")
+-        .include("xz-5.2/src/liblzma/simple")
+-        .include("xz-5.2/src/liblzma/delta")
+-        .include("xz-5.2/src/liblzma/common")
+-        .include("xz-5.2/src/liblzma/rangecoder")
+-        .include("xz-5.2/src/common")
+-        .include(env::current_dir().unwrap());
+-
+-    if !target.ends_with("msvc") {
+-        build.flag("-std=c99").flag("-pthread");
+-    }
+-
+-    if let Ok(s) = env::var("CARGO_CFG_TARGET_ENDIAN") {
+-        if s == "big" {
+-            build.define("WORDS_BIGENDIAN", None);
+-        }
+-    }
+-
+-    build.compile("liblzma.a");
+-}
+-
+-fn read_dir_files(dir: &str) -> impl Iterator<Item = PathBuf> {
+-    fs::read_dir(dir)
+-        .expect(&format!("failed to read dir {}", dir))
+-        .filter_map(|ent| {
+-            let ent = ent.expect("failed to read entry");
+-
+-            if ent.file_type().unwrap().is_dir() {
+-                return None;
+-            }
+-
+-            let path = ent.path();
+-
+-            if path.extension().unwrap() != "c" {
+-                return None;
+-            }
+-
+-            {
+-                let file_stem = path.file_stem().unwrap().to_str().unwrap();
+-                if SKIP_FILENAMES.contains(&file_stem) {
+-                    return None;
+-                }
+-                if file_stem.ends_with("tablegen") {
+-                    return None;
+-                }
+-            }
+-
+-            Some(path)
+-        })
++  #[cfg(target_os = "macos")]
++  println!(r"cargo:rustc-link-search=/opt/homebrew/opt/xz/lib");
++  println!(r"cargo:rustc-link-search=/usr/libexec/xz/lib");
++  println!("cargo:rustc-link-lib=lzma");
+ }
+--- ./rustc-1.79.0-src/vendor/mdbook-0.4.37/src/utils/fs.rs	1153704088.000000000
++++ ./vendor/mdbook-0.4.37/src/utils/fs.rs	1719134883.997162945
+@@ -197,7 +197,7 @@ fn copy<P: AsRef<Path>, Q: AsRef<Path>>(
+     //
+     // This is essentially a copy of the simple copy code path in Rust's
+     // standard library.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     fn copy_inner(from: &Path, to: &Path) -> Result<()> {
+         use std::fs::OpenOptions;
+         use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+@@ -229,7 +229,7 @@ fn copy<P: AsRef<Path>, Q: AsRef<Path>>(
+         Ok(())
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     fn copy_inner(from: &Path, to: &Path) -> Result<()> {
+         fs::copy(from, to)?;
+         Ok(())
+--- ./rustc-1.79.0-src/vendor/nix-0.26.4/src/mount/bsd.rs	1153704088.000000000
++++ ./vendor/nix-0.26.4/src/mount/bsd.rs	1719135014.297930380
+@@ -33,7 +33,7 @@ libc_bitflags!(
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         MNT_GJOURNAL;
+         /// MAC support for objects.
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         MNT_MULTILABEL;
+         /// Disable read clustering.
+@@ -66,7 +66,7 @@ libc_bitflags!(
+         /// Create a snapshot of the file system.
+         ///
+         /// See [mksnap_ffs(8)](https://www.freebsd.org/cgi/man.cgi?query=mksnap_ffs)
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         MNT_SNAPSHOT;
+         /// Using soft updates.
+@@ -87,6 +87,7 @@ libc_bitflags!(
+         MNT_SYNCHRONOUS;
+         /// Union with underlying fs.
+         #[cfg(any(
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "freebsd",
+                 target_os = "netbsd"
+--- ./rustc-1.79.0-src/vendor/nix-0.26.4/src/mount/mod.rs	1153704088.000000000
++++ ./vendor/nix-0.26.4/src/mount/mod.rs	1719135014.850764451
+@@ -9,6 +9,7 @@ pub use self::linux::*;
+ #[cfg(any(
+     target_os = "dragonfly",
+     target_os = "freebsd",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+@@ -19,6 +20,7 @@ mod bsd;
+ #[cfg(any(
+     target_os = "dragonfly",
+     target_os = "freebsd",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+--- ./rustc-1.79.0-src/vendor/nix-0.26.4/src/net/if_.rs	1153704088.000000000
++++ ./vendor/nix-0.26.4/src/net/if_.rs	1719135015.438627763
+@@ -102,6 +102,7 @@ libc_bitflags!(
+         /// Can't hear own transmissions.
+         #[cfg(any(target_os = "dragonfly",
+                   target_os = "freebsd",
++                  target_os = "ios",
+                   target_os = "macos",
+                   target_os = "netbsd",
+                   target_os = "openbsd"))]
+--- ./rustc-1.79.0-src/vendor/nix-0.26.4/src/sys/mod.rs	1153704088.000000000
++++ ./vendor/nix-0.26.4/src/sys/mod.rs	1719135016.004004435
+@@ -78,6 +78,7 @@ feature! {
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "linux",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+--- ./rustc-1.79.0-src/vendor/nix-0.26.4/src/sys/ptrace/bsd.rs	1153704088.000000000
++++ ./vendor/nix-0.26.4/src/sys/ptrace/bsd.rs	1719135016.610955624
+@@ -12,6 +12,7 @@ cfg_if! {
+     if #[cfg(any(target_os = "dragonfly",
+                  target_os = "freebsd",
+                  target_os = "macos",
++                 target_os = "ios",
+                  target_os = "openbsd"))] {
+         #[doc(hidden)]
+         pub type AddressType = *mut ::libc::c_char;
+@@ -29,18 +30,19 @@ libc_enum! {
+         PT_TRACE_ME,
+         PT_READ_I,
+         PT_READ_D,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_READ_U,
+         PT_WRITE_I,
+         PT_WRITE_D,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_WRITE_U,
+         PT_CONTINUE,
+         PT_KILL,
+         #[cfg(any(any(target_os = "dragonfly",
+                   target_os = "freebsd",
++                  target_os = "ios",
+                   target_os = "macos"),
+                   all(target_os = "openbsd", target_arch = "x86_64"),
+                   all(target_os = "netbsd", any(target_arch = "x86_64",
+@@ -48,13 +50,13 @@ libc_enum! {
+         PT_STEP,
+         PT_ATTACH,
+         PT_DETACH,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_SIGEXC,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_THUPDATE,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_ATTACHEXC
+     }
+@@ -157,7 +159,7 @@ pub fn kill(pid: Pid) -> Result<()> {
+ /// }
+ /// ```
+ #[cfg(any(
+-    any(target_os = "dragonfly", target_os = "freebsd", target_os = "macos"),
++    any(target_os = "dragonfly", target_os = "freebsd", target_os = "macos", target_os = "ios"),
+     all(target_os = "openbsd", target_arch = "x86_64"),
+     all(
+         target_os = "netbsd",
+--- ./rustc-1.79.0-src/vendor/nix-0.26.4/src/sys/ptrace/mod.rs	1153704088.000000000
++++ ./vendor/nix-0.26.4/src/sys/ptrace/mod.rs	1719135017.197116617
+@@ -10,6 +10,7 @@ pub use self::linux::*;
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "macos",
++    target_os = "ios",
+     target_os = "netbsd",
+     target_os = "openbsd"
+ ))]
+@@ -19,6 +20,7 @@ mod bsd;
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "macos",
++    target_os = "ios",
+     target_os = "netbsd",
+     target_os = "openbsd"
+ ))]
+--- ./rustc-1.79.0-src/vendor/nix-0.26.4/src/sys/socket/addr.rs	1153704088.000000000
++++ ./vendor/nix-0.26.4/src/sys/socket/addr.rs	1719135017.785684297
+@@ -414,7 +414,7 @@ impl AddressFamily {
+             libc::AF_INET6 => Some(AddressFamily::Inet6),
+             #[cfg(any(target_os = "android", target_os = "linux"))]
+             libc::AF_NETLINK => Some(AddressFamily::Netlink),
+-            #[cfg(any(target_os = "macos", target_os = "macos"))]
++            #[cfg(any(target_os = "macos", target_os = "ios"))]
+             libc::AF_SYSTEM => Some(AddressFamily::System),
+             #[cfg(any(target_os = "android", target_os = "linux"))]
+             libc::AF_PACKET => Some(AddressFamily::Packet),
+--- ./rustc-1.79.0-src/vendor/nix-0.26.4/src/sys/statfs.rs	1153704088.000000000
++++ ./vendor/nix-0.26.4/src/sys/statfs.rs	1719135018.348629365
+@@ -14,6 +14,7 @@ use cfg_if::cfg_if;
+     any(
+         target_os = "dragonfly",
+         target_os = "freebsd",
++        target_os = "ios",
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "openbsd"
+@@ -457,6 +458,7 @@ impl Statfs {
+         any(
+             target_os = "dragonfly",
+             target_os = "freebsd",
++            target_os = "ios",
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd"
+@@ -704,6 +706,7 @@ impl Debug for Statfs {
+             any(
+                 target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"
+--- ./rustc-1.79.0-src/vendor/nix-0.26.4/src/sys/termios.rs	1153704088.000000000
++++ ./vendor/nix-0.26.4/src/sys/termios.rs	1719135018.922598046
+@@ -375,6 +375,7 @@ libc_enum! {
+         B4800,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -383,6 +384,7 @@ libc_enum! {
+         B9600,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -391,6 +393,7 @@ libc_enum! {
+         B19200,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -400,6 +403,7 @@ libc_enum! {
+         B57600,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -546,6 +550,7 @@ libc_enum! {
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
+                 target_os = "illumos",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd",
+@@ -575,6 +580,7 @@ libc_enum! {
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
+                 target_os = "illumos",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd",
+@@ -616,6 +622,7 @@ pub use libc::NCCS;
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "linux",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+@@ -643,7 +650,7 @@ libc_bitflags! {
+         #[cfg(not(any(target_os = "redox", target_os = "haiku")))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         IMAXBEL;
+-        #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++        #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         IUTF8;
+     }
+@@ -804,6 +811,7 @@ libc_bitflags! {
+         OXTABS;
+         #[cfg(any(target_os = "freebsd",
+                   target_os = "dragonfly",
++                  target_os = "ios",
+                   target_os = "macos",
+                   target_os = "netbsd",
+                   target_os = "openbsd"))]
+@@ -899,6 +907,7 @@ libc_bitflags! {
+         CBAUDEX;
+         #[cfg(any(target_os = "dragonfly",
+                   target_os = "freebsd",
++                  target_os = "ios",
+                   target_os = "macos",
+                   target_os = "netbsd",
+                   target_os = "openbsd"))]
+--- ./rustc-1.79.0-src/vendor/nix-0.27.1/src/mount/bsd.rs	1153704088.000000000
++++ ./vendor/nix-0.27.1/src/mount/bsd.rs	1719135136.968467828
+@@ -33,7 +33,7 @@ libc_bitflags!(
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         MNT_GJOURNAL;
+         /// MAC support for objects.
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         MNT_MULTILABEL;
+         /// Disable read clustering.
+@@ -66,7 +66,7 @@ libc_bitflags!(
+         /// Create a snapshot of the file system.
+         ///
+         /// See [mksnap_ffs(8)](https://www.freebsd.org/cgi/man.cgi?query=mksnap_ffs)
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         MNT_SNAPSHOT;
+         /// Using soft updates.
+@@ -88,6 +88,7 @@ libc_bitflags!(
+         /// Union with underlying fs.
+         #[cfg(any(
+                 target_os = "macos",
++                target_os = "ios",
+                 target_os = "freebsd",
+                 target_os = "netbsd"
+         ))]
+--- ./rustc-1.79.0-src/vendor/nix-0.27.1/src/mount/mod.rs	1153704088.000000000
++++ ./vendor/nix-0.27.1/src/mount/mod.rs	1719135137.033806057
+@@ -9,6 +9,7 @@ pub use self::linux::*;
+ #[cfg(any(
+     target_os = "dragonfly",
+     target_os = "freebsd",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+@@ -19,6 +20,7 @@ mod bsd;
+ #[cfg(any(
+     target_os = "dragonfly",
+     target_os = "freebsd",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+--- ./rustc-1.79.0-src/vendor/nix-0.27.1/src/net/if_.rs	1153704088.000000000
++++ ./vendor/nix-0.27.1/src/net/if_.rs	1719135137.099447574
+@@ -102,6 +102,7 @@ libc_bitflags!(
+         /// Can't hear own transmissions.
+         #[cfg(any(target_os = "dragonfly",
+                   target_os = "freebsd",
++                  target_os = "ios",
+                   target_os = "macos",
+                   target_os = "netbsd",
+                   target_os = "openbsd"))]
+--- ./rustc-1.79.0-src/vendor/nix-0.27.1/src/sys/mod.rs	1153704088.000000000
++++ ./vendor/nix-0.27.1/src/sys/mod.rs	1719135137.165522672
+@@ -83,6 +83,7 @@ feature! {
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "linux",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+--- ./rustc-1.79.0-src/vendor/nix-0.27.1/src/sys/ptrace/bsd.rs	1153704088.000000000
++++ ./vendor/nix-0.27.1/src/sys/ptrace/bsd.rs	1719135137.232167348
+@@ -12,6 +12,7 @@ cfg_if! {
+     if #[cfg(any(target_os = "dragonfly",
+                  target_os = "freebsd",
+                  target_os = "macos",
++                 target_ps = "ios",
+                  target_os = "openbsd"))] {
+         #[doc(hidden)]
+         pub type AddressType = *mut ::libc::c_char;
+@@ -29,18 +30,19 @@ libc_enum! {
+         PT_TRACE_ME,
+         PT_READ_I,
+         PT_READ_D,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_READ_U,
+         PT_WRITE_I,
+         PT_WRITE_D,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_WRITE_U,
+         PT_CONTINUE,
+         PT_KILL,
+         #[cfg(any(any(target_os = "dragonfly",
+                   target_os = "freebsd",
++                  target_os = "ios",
+                   target_os = "macos"),
+                   all(target_os = "openbsd", target_arch = "x86_64"),
+                   all(target_os = "netbsd", any(target_arch = "x86_64",
+@@ -48,13 +50,13 @@ libc_enum! {
+         PT_STEP,
+         PT_ATTACH,
+         PT_DETACH,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_SIGEXC,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_THUPDATE,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_ATTACHEXC
+     }
+@@ -157,7 +159,7 @@ pub fn kill(pid: Pid) -> Result<()> {
+ /// }
+ /// ```
+ #[cfg(any(
+-    any(target_os = "dragonfly", target_os = "freebsd", target_os = "macos"),
++    any(target_os = "dragonfly", target_os = "freebsd", target_os = "macos", target_os = "ios"),
+     all(target_os = "openbsd", target_arch = "x86_64"),
+     all(
+         target_os = "netbsd",
+--- ./rustc-1.79.0-src/vendor/nix-0.27.1/src/sys/ptrace/mod.rs	1153704088.000000000
++++ ./vendor/nix-0.27.1/src/sys/ptrace/mod.rs	1719135137.295583635
+@@ -10,6 +10,7 @@ pub use self::linux::*;
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "macos",
++    target_os = "ios",
+     target_os = "netbsd",
+     target_os = "openbsd"
+ ))]
+@@ -19,6 +20,7 @@ mod bsd;
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "macos",
++    target_os = "ios",
+     target_os = "netbsd",
+     target_os = "openbsd"
+ ))]
+--- ./rustc-1.79.0-src/vendor/nix-0.27.1/src/sys/socket/addr.rs	1153704088.000000000
++++ ./vendor/nix-0.27.1/src/sys/socket/addr.rs	1719135137.316748725
+@@ -14,7 +14,7 @@
+ ))]
+ #[cfg(feature = "net")]
+ pub use self::datalink::LinkAddr;
+-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+ pub use self::vsock::VsockAddr;
+ use super::sa_family_t;
+ use crate::errno::Errno;
+@@ -252,7 +252,7 @@ pub enum AddressFamily {
+     #[cfg_attr(docsrs, doc(cfg(all())))]
+     Nfc = libc::AF_NFC,
+     /// VMWare VSockets protocol for hypervisor-guest interaction.
+-    #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++    #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+     #[cfg_attr(docsrs, doc(cfg(all())))]
+     Vsock = libc::AF_VSOCK,
+     /// ARPANet IMP addresses
+@@ -427,7 +427,7 @@ impl AddressFamily {
+             libc::AF_INET6 => Some(AddressFamily::Inet6),
+             #[cfg(any(target_os = "android", target_os = "linux"))]
+             libc::AF_NETLINK => Some(AddressFamily::Netlink),
+-            #[cfg(any(target_os = "macos", target_os = "macos"))]
++            #[cfg(any(target_os = "macos", target_os = "ios"))]
+             libc::AF_SYSTEM => Some(AddressFamily::System),
+             #[cfg(not(any(
+                 target_os = "redox",
+@@ -447,7 +447,7 @@ impl AddressFamily {
+                 target_os = "openbsd"
+             ))]
+             libc::AF_LINK => Some(AddressFamily::Link),
+-            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++            #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+             libc::AF_VSOCK => Some(AddressFamily::Vsock),
+             _ => None,
+         }
+@@ -1293,7 +1293,7 @@ pub union SockaddrStorage {
+     sin6: SockaddrIn6,
+     ss: libc::sockaddr_storage,
+     su: UnixAddr,
+-    #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos" ))]
++    #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios" ))]
+     #[cfg_attr(docsrs, doc(cfg(all())))]
+     vsock: VsockAddr,
+ }
+@@ -1385,7 +1385,7 @@ impl SockaddrLike for SockaddrStorage {
+                 libc::AF_SYSTEM => {
+                     SysControlAddr::from_raw(addr, l).map(|sctl| Self { sctl })
+                 }
+-                #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos" ))]
++                #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios" ))]
+                 libc::AF_VSOCK => {
+                     VsockAddr::from_raw(addr, l).map(|vsock| Self { vsock })
+                 }
+@@ -1561,7 +1561,7 @@ impl SockaddrStorage {
+     accessors! {as_sys_control_addr, as_sys_control_addr_mut, SysControlAddr,
+     AddressFamily::System, libc::sockaddr_ctl, sctl}
+ 
+-    #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++    #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+     #[cfg_attr(docsrs, doc(cfg(all())))]
+     accessors! {as_vsock_addr, as_vsock_addr_mut, VsockAddr,
+     AddressFamily::Vsock, libc::sockaddr_vm, vsock}
+@@ -1611,7 +1611,7 @@ impl fmt::Display for SockaddrStorage {
+                 #[cfg(feature = "ioctl")]
+                 libc::AF_SYSTEM => self.sctl.fmt(f),
+                 libc::AF_UNIX => self.su.fmt(f),
+-                #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++                #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+                 libc::AF_VSOCK => self.vsock.fmt(f),
+                 _ => "<Address family unspecified>".fmt(f),
+             }
+@@ -1685,7 +1685,7 @@ impl Hash for SockaddrStorage {
+                 #[cfg(feature = "ioctl")]
+                 libc::AF_SYSTEM => self.sctl.hash(s),
+                 libc::AF_UNIX => self.su.hash(s),
+-                #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++                #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+                 libc::AF_VSOCK => self.vsock.hash(s),
+                 _ => self.ss.hash(s),
+             }
+@@ -1727,7 +1727,7 @@ impl PartialEq for SockaddrStorage {
+                 #[cfg(feature = "ioctl")]
+                 (libc::AF_SYSTEM, libc::AF_SYSTEM) => self.sctl == other.sctl,
+                 (libc::AF_UNIX, libc::AF_UNIX) => self.su == other.su,
+-                #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++                #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+                 (libc::AF_VSOCK, libc::AF_VSOCK) => self.vsock == other.vsock,
+                 _ => false,
+             }
+@@ -2276,7 +2276,7 @@ mod datalink {
+     }
+ }
+ 
+-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+ #[cfg_attr(docsrs, doc(cfg(all())))]
+ pub mod vsock {
+     use super::*;
+@@ -2328,7 +2328,7 @@ pub mod vsock {
+             (inner.svm_family, inner.svm_cid, inner.svm_port)
+                 == (other.svm_family, other.svm_cid, other.svm_port)
+         }
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         fn eq(&self, other: &Self) -> bool {
+             let (inner, other) = (self.0, other.0);
+             (inner.svm_family, inner.svm_cid, inner.svm_port, inner.svm_len)
+@@ -2344,7 +2344,7 @@ pub mod vsock {
+             let inner = self.0;
+             (inner.svm_family, inner.svm_cid, inner.svm_port).hash(s);
+         }
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         fn hash<H: Hasher>(&self, s: &mut H) {
+             let inner = self.0;
+             (inner.svm_family, inner.svm_cid, inner.svm_port, inner.svm_len).hash(s);
+@@ -2363,7 +2363,7 @@ pub mod vsock {
+             addr.svm_cid = cid;
+             addr.svm_port = port;
+ 
+-            #[cfg(target_os = "macos")]
++            #[cfg(any(target_os = "macos", target_os = "ios"))]
+             {
+              addr.svm_len =  std::mem::size_of::<sockaddr_vm>() as u8;
+             }
+--- ./rustc-1.79.0-src/vendor/nix-0.27.1/src/sys/socket/mod.rs	1153704088.000000000
++++ ./vendor/nix-0.27.1/src/sys/socket/mod.rs	1719135137.386718748
+@@ -62,7 +62,7 @@ pub use crate::sys::socket::addr::netlin
+ #[cfg(any(target_os = "ios", target_os = "macos"))]
+ #[cfg(feature = "ioctl")]
+ pub use crate::sys::socket::addr::sys_control::SysControlAddr;
+-#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++#[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+ pub use crate::sys::socket::addr::vsock::VsockAddr;
+ 
+ #[cfg(all(feature = "uio", not(target_os = "redox")))]
+--- ./rustc-1.79.0-src/vendor/nix-0.27.1/src/sys/statfs.rs	1153704088.000000000
++++ ./vendor/nix-0.27.1/src/sys/statfs.rs	1719135137.451247900
+@@ -14,6 +14,7 @@ use cfg_if::cfg_if;
+     any(
+         target_os = "dragonfly",
+         target_os = "freebsd",
++        target_os = "ios",
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "openbsd"
+@@ -457,6 +458,7 @@ impl Statfs {
+         any(
+             target_os = "dragonfly",
+             target_os = "freebsd",
++            target_os = "ios",
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd"
+@@ -704,6 +706,7 @@ impl Debug for Statfs {
+             any(
+                 target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"
+--- ./rustc-1.79.0-src/vendor/nix-0.27.1/src/sys/termios.rs	1153704088.000000000
++++ ./vendor/nix-0.27.1/src/sys/termios.rs	1719135137.518174407
+@@ -375,6 +375,7 @@ libc_enum! {
+         B4800,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -383,6 +384,7 @@ libc_enum! {
+         B9600,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -391,6 +393,7 @@ libc_enum! {
+         B19200,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -402,6 +405,7 @@ libc_enum! {
+         B57600,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -554,6 +558,7 @@ libc_enum! {
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
+                 target_os = "illumos",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd",
+@@ -584,6 +589,7 @@ libc_enum! {
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
+                 target_os = "illumos",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd",
+@@ -629,6 +635,7 @@ pub use libc::NCCS;
+     target_os = "freebsd",
+     target_os = "linux",
+     target_os = "aix",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+@@ -656,7 +663,7 @@ libc_bitflags! {
+         #[cfg(not(any(target_os = "redox", target_os = "haiku")))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         IMAXBEL;
+-        #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++        #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         IUTF8;
+     }
+@@ -817,6 +824,7 @@ libc_bitflags! {
+         OXTABS;
+         #[cfg(any(target_os = "freebsd",
+                   target_os = "dragonfly",
++                  target_os = "ios",
+                   target_os = "macos",
+                   target_os = "netbsd",
+                   target_os = "openbsd"))]
+@@ -912,6 +920,7 @@ libc_bitflags! {
+         CBAUDEX;
+         #[cfg(any(target_os = "dragonfly",
+                   target_os = "freebsd",
++                  target_os = "ios",
+                   target_os = "macos",
+                   target_os = "netbsd",
+                   target_os = "openbsd"))]
+--- ./rustc-1.79.0-src/vendor/nix-0.28.0/build.rs	1153704088.000000000
++++ ./vendor/nix-0.28.0/build.rs	1719135281.774094624
+@@ -14,8 +14,9 @@ fn main() {
+         solaris: { target_os = "solaris" },
+         watchos: { target_os = "watchos" },
+         tvos: { target_os = "tvos" },
++        visionos: { target_os = "visionos" },
+ 
+-        apple_targets: { any(ios, macos, watchos, tvos) },
++        apple_targets: { any(ios, macos, watchos, tvos, visionos) },
+         bsd: { any(freebsd, dragonfly, netbsd, openbsd, apple_targets) },
+         linux_android: { any(android, linux) },
+         freebsdlike: { any(dragonfly, freebsd) },
+--- ./rustc-1.79.0-src/vendor/notify-6.1.1/Cargo.toml	1153704088.000000000
++++ ./vendor/notify-6.1.1/Cargo.toml	1719135544.426334210
+@@ -92,18 +92,18 @@ default-features = false
+ version = "0.8"
+ features = ["os-ext"]
+ 
+-[target."cfg(target_os=\"macos\")".dependencies.bitflags]
++[target."cfg(any(target_os=\"macos\", target_os=\"ios\"))".dependencies.bitflags]
+ version = "2.3.0"
+ 
+-[target."cfg(target_os=\"macos\")".dependencies.fsevent-sys]
++[target."cfg(any(target_os=\"macos\", target_os=\"ios\"))".dependencies.fsevent-sys]
+ version = "4"
+ optional = true
+ 
+-[target."cfg(target_os=\"macos\")".dependencies.kqueue]
++[target."cfg(any(target_os=\"macos\", target_os=\"ios\"))".dependencies.kqueue]
+ version = "1.0"
+ optional = true
+ 
+-[target."cfg(target_os=\"macos\")".dependencies.mio]
++[target."cfg(any(target_os=\"macos\", target_os=\"ios\"))".dependencies.mio]
+ version = "0.8"
+ features = ["os-ext"]
+ optional = true
+--- ./rustc-1.79.0-src/vendor/notify-6.1.1/src/lib.rs	1153704088.000000000
++++ ./vendor/notify-6.1.1/src/lib.rs	1719135987.722288163
+@@ -210,7 +210,7 @@ pub(crate) fn bounded<T>(cap: usize) ->
+     return std::sync::mpsc::sync_channel(cap);
+ }
+ 
+-#[cfg(all(target_os = "macos", not(feature = "macos_kqueue")))]
++#[cfg(all(target_vendor = "apple", not(feature = "macos_kqueue")))]
+ pub use crate::fsevent::FsEventWatcher;
+ #[cfg(any(target_os = "linux", target_os = "android"))]
+ pub use crate::inotify::INotifyWatcher;
+@@ -219,7 +219,7 @@ pub use crate::inotify::INotifyWatcher;
+     target_os = "openbsd",
+     target_os = "netbsd",
+     target_os = "dragonflybsd",
+-    all(target_os = "macos", feature = "macos_kqueue")
++    all(target_vendor = "apple", feature = "macos_kqueue")
+ ))]
+ pub use crate::kqueue::KqueueWatcher;
+ pub use null::NullWatcher;
+@@ -227,7 +227,7 @@ pub use poll::PollWatcher;
+ #[cfg(target_os = "windows")]
+ pub use windows::ReadDirectoryChangesWatcher;
+ 
+-#[cfg(all(target_os = "macos", not(feature = "macos_kqueue")))]
++#[cfg(all(target_vendor = "apple", not(feature = "macos_kqueue")))]
+ pub mod fsevent;
+ #[cfg(any(target_os = "linux", target_os = "android"))]
+ pub mod inotify;
+@@ -236,7 +236,7 @@ pub mod inotify;
+     target_os = "openbsd",
+     target_os = "dragonflybsd",
+     target_os = "netbsd",
+-    all(target_os = "macos", feature = "macos_kqueue")
++    all(target_vendor = "apple", feature = "macos_kqueue")
+ ))]
+ pub mod kqueue;
+ #[cfg(target_os = "windows")]
+@@ -370,7 +370,7 @@ pub trait Watcher {
+ #[cfg(any(target_os = "linux", target_os = "android"))]
+ pub type RecommendedWatcher = INotifyWatcher;
+ /// The recommended `Watcher` implementation for the current platform
+-#[cfg(all(target_os = "macos", not(feature = "macos_kqueue")))]
++#[cfg(all(target_vendor = "apple", not(feature = "macos_kqueue")))]
+ pub type RecommendedWatcher = FsEventWatcher;
+ /// The recommended `Watcher` implementation for the current platform
+ #[cfg(target_os = "windows")]
+@@ -381,14 +381,14 @@ pub type RecommendedWatcher = ReadDirect
+     target_os = "openbsd",
+     target_os = "netbsd",
+     target_os = "dragonflybsd",
+-    all(target_os = "macos", feature = "macos_kqueue")
++    all(target_vendor = "apple", feature = "macos_kqueue")
+ ))]
+ pub type RecommendedWatcher = KqueueWatcher;
+ /// The recommended `Watcher` implementation for the current platform
+ #[cfg(not(any(
+     target_os = "linux",
+     target_os = "android",
+-    target_os = "macos",
++    target_vendor = "apple",
+     target_os = "windows",
+     target_os = "freebsd",
+     target_os = "openbsd",
+--- ./rustc-1.79.0-src/vendor/num_cpus-1.16.0/src/lib.rs	1153704088.000000000
++++ ./vendor/num_cpus-1.16.0/src/lib.rs	1719136051.611341837
+@@ -114,6 +114,7 @@ pub fn get_physical() -> usize {
+     target_os = "linux",
+     target_os = "windows",
+     target_os = "macos",
++    target_os = "ios",
+     target_os = "openbsd",
+     target_os = "aix")))]
+ #[inline]
+@@ -309,7 +310,7 @@ fn get_num_physical_cpus() -> usize {
+ }
+ 
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ fn get_num_physical_cpus() -> usize {
+     use std::ffi::CStr;
+     use std::ptr;
+--- ./rustc-1.79.0-src/vendor/object-0.30.4/src/read/mod.rs	1153704088.000000000
++++ ./vendor/object-0.30.4/src/read/mod.rs	1719136198.991768183
+@@ -106,7 +106,7 @@ impl<T> ReadError<T> for Option<T> {
+ /// The native executable file for the target platform.
+ #[cfg(all(
+     unix,
+-    not(target_os = "macos"),
++    not(target_vendor = "apple"),
+     target_pointer_width = "32",
+     feature = "elf"
+ ))]
+@@ -115,18 +115,18 @@ pub type NativeFile<'data, R = &'data [u
+ /// The native executable file for the target platform.
+ #[cfg(all(
+     unix,
+-    not(target_os = "macos"),
++    not(target_vendor = "apple"),
+     target_pointer_width = "64",
+     feature = "elf"
+ ))]
+ pub type NativeFile<'data, R = &'data [u8]> = elf::ElfFile64<'data, crate::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+-#[cfg(all(target_os = "macos", target_pointer_width = "32", feature = "macho"))]
++#[cfg(all(target_vendor = "apple", target_pointer_width = "32", feature = "macho"))]
+ pub type NativeFile<'data, R = &'data [u8]> = macho::MachOFile32<'data, crate::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+-#[cfg(all(target_os = "macos", target_pointer_width = "64", feature = "macho"))]
++#[cfg(all(target_vendor = "apple", target_pointer_width = "64", feature = "macho"))]
+ pub type NativeFile<'data, R = &'data [u8]> = macho::MachOFile64<'data, crate::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+--- ./rustc-1.79.0-src/vendor/object-0.32.2/src/read/mod.rs	1153704088.000000000
++++ ./vendor/object-0.32.2/src/read/mod.rs	1719136211.389578727
+@@ -147,7 +147,7 @@ impl<T> ReadError<T> for Option<T> {
+ /// The native executable file for the target platform.
+ #[cfg(all(
+     unix,
+-    not(target_os = "macos"),
++    not(target_vendor = "apple"),
+     target_pointer_width = "32",
+     feature = "elf"
+ ))]
+@@ -156,18 +156,18 @@ pub type NativeFile<'data, R = &'data [u
+ /// The native executable file for the target platform.
+ #[cfg(all(
+     unix,
+-    not(target_os = "macos"),
++    not(target_vendor = "apple"),
+     target_pointer_width = "64",
+     feature = "elf"
+ ))]
+ pub type NativeFile<'data, R = &'data [u8]> = elf::ElfFile64<'data, crate::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+-#[cfg(all(target_os = "macos", target_pointer_width = "32", feature = "macho"))]
++#[cfg(all(target_vendor = "apple", target_pointer_width = "32", feature = "macho"))]
+ pub type NativeFile<'data, R = &'data [u8]> = macho::MachOFile32<'data, crate::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+-#[cfg(all(target_os = "macos", target_pointer_width = "64", feature = "macho"))]
++#[cfg(all(target_vendor = "apple", target_pointer_width = "64", feature = "macho"))]
+ pub type NativeFile<'data, R = &'data [u8]> = macho::MachOFile64<'data, crate::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+--- ./rustc-1.79.0-src/vendor/object-0.33.0/src/read/mod.rs	1153704088.000000000
++++ ./vendor/object-0.33.0/src/read/mod.rs	1719136155.783279072
+@@ -147,7 +147,7 @@ impl<T> ReadError<T> for Option<T> {
+ /// The native executable file for the target platform.
+ #[cfg(all(
+     unix,
+-    not(target_os = "macos"),
++    not(target_vendor = "apple"),
+     target_pointer_width = "32",
+     feature = "elf"
+ ))]
+@@ -156,19 +156,19 @@ pub type NativeFile<'data, R = &'data [u
+ /// The native executable file for the target platform.
+ #[cfg(all(
+     unix,
+-    not(target_os = "macos"),
++    not(target_vendor = "apple"),
+     target_pointer_width = "64",
+     feature = "elf"
+ ))]
+ pub type NativeFile<'data, R = &'data [u8]> = elf::ElfFile64<'data, crate::endian::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+-#[cfg(all(target_os = "macos", target_pointer_width = "32", feature = "macho"))]
++#[cfg(all(target_vendor = "apple", target_pointer_width = "32", feature = "macho"))]
+ pub type NativeFile<'data, R = &'data [u8]> =
+     macho::MachOFile32<'data, crate::endian::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+-#[cfg(all(target_os = "macos", target_pointer_width = "64", feature = "macho"))]
++#[cfg(all(target_vendor = "apple", target_pointer_width = "64", feature = "macho"))]
+ pub type NativeFile<'data, R = &'data [u8]> =
+     macho::MachOFile64<'data, crate::endian::Endianness, R>;
+ 
+--- ./rustc-1.79.0-src/vendor/object-0.34.0/src/read/mod.rs	1153704088.000000000
++++ ./vendor/object-0.34.0/src/read/mod.rs	1719136218.169265126
+@@ -147,7 +147,7 @@ impl<T> ReadError<T> for Option<T> {
+ /// The native executable file for the target platform.
+ #[cfg(all(
+     unix,
+-    not(target_os = "macos"),
++    not(target_vendor = "apple"),
+     target_pointer_width = "32",
+     feature = "elf"
+ ))]
+@@ -156,19 +156,19 @@ pub type NativeFile<'data, R = &'data [u
+ /// The native executable file for the target platform.
+ #[cfg(all(
+     unix,
+-    not(target_os = "macos"),
++    not(target_vendor = "apple"),
+     target_pointer_width = "64",
+     feature = "elf"
+ ))]
+ pub type NativeFile<'data, R = &'data [u8]> = elf::ElfFile64<'data, crate::endian::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+-#[cfg(all(target_os = "macos", target_pointer_width = "32", feature = "macho"))]
++#[cfg(all(target_vendor = "apple", target_pointer_width = "32", feature = "macho"))]
+ pub type NativeFile<'data, R = &'data [u8]> =
+     macho::MachOFile32<'data, crate::endian::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+-#[cfg(all(target_os = "macos", target_pointer_width = "64", feature = "macho"))]
++#[cfg(all(target_vendor = "apple", target_pointer_width = "64", feature = "macho"))]
+ pub type NativeFile<'data, R = &'data [u8]> =
+     macho::MachOFile64<'data, crate::endian::Endianness, R>;
+ 
+--- ./rustc-1.79.0-src/vendor/opener-0.5.2/src/lib.rs	1153704088.000000000
++++ ./vendor/opener-0.5.2/src/lib.rs	1719136410.828219170
+@@ -26,16 +26,16 @@
+     unused_qualifications
+ )]
+ 
+-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
++#[cfg(not(any(target_os = "windows", target_vendor = "apple")))]
+ mod linux_and_more;
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ mod macos;
+ #[cfg(target_os = "windows")]
+ mod windows;
+ 
+-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
++#[cfg(not(any(target_os = "windows", target_vendor = "apple")))]
+ use crate::linux_and_more as sys;
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ use crate::macos as sys;
+ #[cfg(target_os = "windows")]
+ use crate::windows as sys;
+--- ./rustc-1.79.0-src/vendor/opener-0.6.1/src/lib.rs	1153704088.000000000
++++ ./vendor/opener-0.6.1/src/lib.rs	1719136416.424871393
+@@ -29,16 +29,16 @@
+ 
+ #[cfg(all(feature = "reveal", target_os = "linux"))]
+ mod freedesktop;
+-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
++#[cfg(not(any(target_os = "windows", target_vendor = "apple")))]
+ mod linux_and_more;
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ mod macos;
+ #[cfg(target_os = "windows")]
+ mod windows;
+ 
+-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
++#[cfg(not(any(target_os = "windows", target_vendor = "apple")))]
+ use crate::linux_and_more as sys;
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ use crate::macos as sys;
+ #[cfg(target_os = "windows")]
+ use crate::windows as sys;
+--- ./rustc-1.79.0-src/vendor/opener-0.7.0/src/lib.rs	1153704088.000000000
++++ ./vendor/opener-0.7.0/src/lib.rs	1719136421.819925781
+@@ -37,16 +37,16 @@
+ 
+ #[cfg(all(feature = "reveal", target_os = "linux"))]
+ mod freedesktop;
+-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
++#[cfg(not(any(target_os = "windows", target_vendor = "apple")))]
+ mod linux_and_more;
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ mod macos;
+ #[cfg(target_os = "windows")]
+ mod windows;
+ 
+-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
++#[cfg(not(any(target_os = "windows", target_vendor = "apple")))]
+ use crate::linux_and_more as sys;
+-#[cfg(target_os = "macos")]
++#[cfg(target_vendor = "apple")]
+ use crate::macos as sys;
+ #[cfg(target_os = "windows")]
+ use crate::windows as sys;
+--- ./rustc-1.79.0-src/vendor/openssl-sys-0.9.102/Cargo.toml	1153704088.000000000
++++ ./vendor/openssl-sys-0.9.102/Cargo.toml	1719136501.994560513
+@@ -46,11 +46,6 @@ optional = true
+ [build-dependencies.cc]
+ version = "1.0.61"
+ 
+-[build-dependencies.openssl-src]
+-version = "300.1.2"
+-features = ["legacy"]
+-optional = true
+-
+ [build-dependencies.pkg-config]
+ version = "0.3.9"
+ 
+@@ -59,4 +54,3 @@ version = "0.2.8"
+ 
+ [features]
+ unstable_boringssl = ["bssl-sys"]
+-vendored = ["openssl-src"]
+--- ./rustc-1.79.0-src/vendor/openssl-sys-0.9.92/Cargo.toml	1153704088.000000000
++++ ./vendor/openssl-sys-0.9.92/Cargo.toml	1719136483.034932634
+@@ -46,10 +46,6 @@ optional = true
+ [build-dependencies.cc]
+ version = "1.0.61"
+ 
+-[build-dependencies.openssl-src]
+-version = "111"
+-optional = true
+-
+ [build-dependencies.pkg-config]
+ version = "0.3.9"
+ 
+@@ -58,4 +54,3 @@ version = "0.2.8"
+ 
+ [features]
+ unstable_boringssl = ["bssl-sys"]
+-vendored = ["openssl-src"]
+--- ./rustc-1.79.0-src/vendor/os_info-3.8.2/src/bitness.rs	1153704088.000000000
++++ ./vendor/os_info-3.8.2/src/bitness.rs	1719136560.435158611
+@@ -7,6 +7,7 @@ use std::fmt::{self, Display, Formatter}
+     target_os = "freebsd",
+     target_os = "illumos",
+     target_os = "linux",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+@@ -40,6 +41,7 @@ impl Display for Bitness {
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "linux",
++    target_os = "ios",
+     target_os = "macos",
+ ))]
+ pub fn get() -> Bitness {
+@@ -105,6 +107,7 @@ pub fn get() -> Bitness {
+         target_os = "dragonfly",
+         target_os = "freebsd",
+         target_os = "linux",
++        target_os = "ios",
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "openbsd"
+--- ./rustc-1.79.0-src/vendor/os_info-3.8.2/src/lib.rs	1153704088.000000000
++++ ./vendor/os_info-3.8.2/src/lib.rs	1719136561.015820739
+@@ -38,7 +38,7 @@ mod imp;
+ #[path = "linux/mod.rs"]
+ mod imp;
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ #[path = "macos/mod.rs"]
+ mod imp;
+ 
+@@ -67,6 +67,7 @@ mod imp;
+     target_os = "illumos",
+     target_os = "linux",
+     target_os = "macos",
++    target_os = "ios",
+     target_os = "netbsd",
+     target_os = "openbsd",
+     target_os = "redox",
+@@ -78,6 +79,7 @@ mod imp;
+ #[cfg(any(
+     target_os = "linux",
+     target_os = "macos",
++    target_os = "ios",
+     target_os = "netbsd",
+     target_os = "openbsd"
+ ))]
+--- ./rustc-1.79.0-src/vendor/os_info-3.8.2/src/macos/mod.rs	1153704088.000000000
++++ ./vendor/os_info-3.8.2/src/macos/mod.rs	1719136561.592774121
+@@ -7,11 +7,20 @@ use crate::{architecture, bitness, match
+ pub fn current_platform() -> Info {
+     trace!("macos::current_platform is called");
+ 
++    #[cfg(target_os = "macos")]
+     let info = Info {
+         os_type: Type::Macos,
+         version: version(),
+         bitness: bitness::get(),
+         architecture: architecture::get(),
++        ..Default::default()
++    };
++    #[cfg(target_os = "ios")]
++    let info = Info {
++        os_type: Type::Ios,
++        version: version(),
++        bitness: bitness::get(),
++        architecture: architecture::get(),
+         ..Default::default()
+     };
+     trace!("Returning {:?}", info);
+--- ./rustc-1.79.0-src/vendor/os_info-3.8.2/src/os_type.rs	1153704088.000000000
++++ ./vendor/os_info-3.8.2/src/os_type.rs	1719136562.170774325
+@@ -52,6 +52,7 @@ pub enum Type {
+     Mabox,
+     /// Mac OS X/OS X/macOS (<https://en.wikipedia.org/wiki/MacOS>).
+     Macos,
++    Ios,
+     /// Manjaro (<https://en.wikipedia.org/wiki/Manjaro>).
+     Manjaro,
+     /// Mariner (<https://en.wikipedia.org/wiki/CBL-Mariner>).
+@@ -123,6 +124,7 @@ impl Display for Type {
+             Type::Illumos => write!(f, "illumos"),
+             Type::Kali => write!(f, "Kali Linux"),
+             Type::Macos => write!(f, "Mac OS"),
++            Type::Ios => write!(f, "iOS"),
+             Type::MidnightBSD => write!(f, "Midnight BSD"),
+             Type::Mint => write!(f, "Linux Mint"),
+             Type::openEuler => write!(f, "EulerOS"),
+@@ -175,6 +177,7 @@ mod tests {
+             (Type::Linux, "Linux"),
+             (Type::Mabox, "Mabox"),
+             (Type::Macos, "Mac OS"),
++            (Type::Ios, "iOS"),
+             (Type::Manjaro, "Manjaro"),
+             (Type::Mariner, "Mariner"),
+             (Type::MidnightBSD, "Midnight BSD"),
+--- ./rustc-1.79.0-src/vendor/pkg-config-0.3.28/src/lib.rs	1719049036.576942081
++++ ./vendor/pkg-config-0.3.28/src/lib.rs	1719138868.534003627
+@@ -252,7 +252,7 @@ impl fmt::Display for Error {
+                     io::ErrorKind::NotFound => {
+                         let crate_name =
+                             std::env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "sys".to_owned());
+-                        let instructions = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
++                        let instructions = if cfg!(target_os = "macos") {
+                             "Try `brew install pkg-config` if you have Homebrew.\n"
+                         } else if cfg!(unix) {
+                             "Try `apt install pkg-config`, or `yum install pkg-config`,\n\
+@@ -632,7 +632,12 @@ impl Config {
+         } else {
+             None
+         };
+-        let exe = pkg_config_exe.unwrap_or_else(|| OsString::from("pkg-config"));
++        //let exe = pkg_config_exe.unwrap_or_else(|| OsString::from("pkg-config"));
++        let exe = pkg_config_exe.unwrap_or_else(|| {
++            self.env_var_os("DEB_HOST_GNU_TYPE")
++                .map(|mut t| { t.push(OsString::from("-pkg-config")); t })
++                .unwrap_or_else(|| OsString::from("pkg-config"))
++        });
+ 
+         let mut cmd = self.command(exe, name, args);
+ 
+@@ -824,7 +829,7 @@ impl Library {
+             }
+         }
+ 
+-        let system_roots = if cfg!(target_os = "macos") {
++        let system_roots = if cfg!(target_vendor = "apple") {
+             vec![PathBuf::from("/Library"), PathBuf::from("/System")]
+         } else {
+             let sysroot = config
+--- ./rustc-1.79.0-src/vendor/pkg-config-0.3.30/src/lib.rs	1719049036.580029018
++++ ./vendor/pkg-config-0.3.30/src/lib.rs	1719387948.606223888
+@@ -274,7 +274,7 @@ impl fmt::Display for Error {
+                     io::ErrorKind::NotFound => {
+                         let crate_name =
+                             std::env::var("CARGO_PKG_NAME").unwrap_or_else(|_| "sys".to_owned());
+-                        let instructions = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
++                        let instructions = if cfg!(target_os = "macos") {
+                             "Try `brew install pkg-config` if you have Homebrew.\n"
+                         } else if cfg!(unix) {
+                             "Try `apt install pkg-config`, or `yum install pkg-config`,\n\
+@@ -654,7 +654,12 @@ impl Config {
+         } else {
+             None
+         };
+-        let exe = pkg_config_exe.unwrap_or_else(|| OsString::from("pkg-config"));
++        //let exe = pkg_config_exe.unwrap_or_else(|| OsString::from("pkg-config"));
++        let exe = pkg_config_exe.unwrap_or_else(|| {
++            self.env_var_os("DEB_HOST_GNU_TYPE")
++                .map(|mut t| { t.push(OsString::from("-pkg-config")); t })
++                .unwrap_or_else(|| OsString::from("pkg-config"))
++        });
+ 
+         let mut cmd = self.command(exe, name, args);
+ 
+@@ -850,7 +855,7 @@ impl Library {
+             }
+         }
+ 
+-        let system_roots = if cfg!(target_os = "macos") {
++        let system_roots = if cfg!(target_vendor = "apple") {
+             vec![PathBuf::from("/Library"), PathBuf::from("/System")]
+         } else {
+             let sysroot = config
+--- ./rustc-1.79.0-src/vendor/portable-atomic-1.6.0/src/imp/atomic128/aarch64.rs	1153704088.000000000
++++ ./vendor/portable-atomic-1.6.0/src/imp/atomic128/aarch64.rs	1719137041.524617326
+@@ -128,7 +128,7 @@ mod detect;
+ mod detect_aa64reg;
+ #[cfg(test)]
+ #[cfg(not(portable_atomic_no_outline_atomics))]
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ #[path = "detect/aarch64_macos.rs"]
+ mod detect_macos;
+ 
+--- ./rustc-1.79.0-src/vendor/portable-atomic-1.6.0/src/imp/atomic128/detect/common.rs	1153704088.000000000
++++ ./vendor/portable-atomic-1.6.0/src/imp/atomic128/detect/common.rs	1719137042.101022424
+@@ -157,10 +157,10 @@ mod c_types {
+     // AIX https://www.ibm.com/docs/en/xl-c-aix/13.1.2?topic=descriptions-qchars
+     // z/OS https://www.ibm.com/docs/en/zos/2.5.0?topic=specifiers-character-types
+     // (macOS is currently the only Apple target that uses this module, and Windows currently doesn't use this module)
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     pub(crate) type c_char = u8;
+     // c_char is i8 on all Apple targets
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub(crate) type c_char = i8;
+ 
+     // Static assertions for C type definitions.
+--- ./rustc-1.79.0-src/vendor/psm-0.1.21/build.rs	1153704088.000000000
++++ ./vendor/psm-0.1.21/build.rs	1719137042.683349699
+@@ -50,7 +50,7 @@ fn find_assembly(
+         ("sparc", _, _, _) => Some(("src/arch/sparc_sysv.s", true)),
+         ("riscv32", _, _, _) => Some(("src/arch/riscv.s", true)),
+         ("riscv64", _, _, _) => Some(("src/arch/riscv64.s", true)),
+-        ("wasm32", _, _, _) => Some(("src/arch/wasm32.o", true)),
++        ("wasm32", _, _, _) => Some(("src/arch/wasm32.s", true)),
+         ("loongarch64", _, _, _) => Some(("src/arch/loongarch64.s", true)),
+         _ => None,
+     }
+@@ -97,11 +97,8 @@ fn main() {
+         cfg.define(&*format!("CFG_TARGET_ENV_{}", env), None);
+     }
+ 
+-    // For wasm targets we ship a precompiled `*.o` file so we just pass that
+-    // directly to `ar` to assemble an archive. Otherwise we're actually
+-    // compiling the source assembly file.
+     if asm.ends_with(".o") {
+-        cfg.object(asm);
++        panic!("Debian does not allow embedded object files in source code")
+     } else {
+         cfg.file(asm);
+     }
+--- ./rustc-1.79.0-src/vendor/reqwest-0.11.27/Cargo.toml	1153704088.000000000
++++ ./vendor/reqwest-0.11.27/Cargo.toml	1719137043.260952783
+@@ -456,7 +456,7 @@ features = ["serde-serialize"]
+ [target."cfg(target_arch = \"wasm32\")".dev-dependencies.wasm-bindgen-test]
+ version = "0.3"
+ 
+-[target."cfg(target_os = \"macos\")".dependencies.system-configuration]
++[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.system-configuration]
+ version = "0.5.1"
+ 
+ [target."cfg(windows)".dependencies.winreg]
+--- ./rustc-1.79.0-src/vendor/reqwest-0.11.27/src/proxy.rs	1153704088.000000000
++++ ./vendor/reqwest-0.11.27/src/proxy.rs	1719137043.837458545
+@@ -13,7 +13,7 @@ use std::collections::HashMap;
+ use std::env;
+ use std::error::Error;
+ use std::net::IpAddr;
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ use system_configuration::{
+     core_foundation::{
+         base::CFType,
+@@ -863,14 +863,14 @@ static SYS_PROXIES: Lazy<Arc<SystemProxy
+ ///     {"http": Url::parse("http://127.0.0.1:80"), "https": Url::parse("https://127.0.0.1:80")}
+ fn get_sys_proxies(
+     #[cfg_attr(
+-        not(any(target_os = "windows", target_os = "macos")),
++        not(any(target_os = "windows", target_os = "macos", target_os = "ios")),
+         allow(unused_variables)
+     )]
+     platform_proxies: Option<String>,
+ ) -> SystemProxyMap {
+     let proxies = get_from_environment();
+ 
+-    #[cfg(any(target_os = "windows", target_os = "macos"))]
++    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
+     if proxies.is_empty() {
+         // if there are errors in acquiring the platform proxies,
+         // we'll just return an empty HashMap
+@@ -947,7 +947,7 @@ fn get_from_platform_impl() -> Result<Op
+     Ok((proxy_enable == 1).then_some(proxy_server))
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ fn parse_setting_from_dynamic_store(
+     proxies_map: &CFDictionary<CFString, CFType>,
+     enabled_key: CFStringRef,
+@@ -985,7 +985,7 @@ fn parse_setting_from_dynamic_store(
+     None
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ fn get_from_platform_impl() -> Result<Option<String>, Box<dyn Error>> {
+     let store = SCDynamicStoreBuilder::new("reqwest").build();
+ 
+@@ -1016,17 +1016,17 @@ fn get_from_platform_impl() -> Result<Op
+     }
+ }
+ 
+-#[cfg(any(target_os = "windows", target_os = "macos"))]
++#[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
+ fn get_from_platform() -> Option<String> {
+     get_from_platform_impl().ok().flatten()
+ }
+ 
+-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
++#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "ios")))]
+ fn get_from_platform() -> Option<String> {
+     None
+ }
+ 
+-#[cfg(any(target_os = "windows", target_os = "macos"))]
++#[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
+ fn parse_platform_values_impl(platform_values: String) -> SystemProxyMap {
+     let mut proxies = HashMap::new();
+     if platform_values.contains("=") {
+@@ -1068,7 +1068,7 @@ fn parse_platform_values_impl(platform_v
+ 
+ /// Extract the protocol from the given address, if present
+ /// For example, "https://example.com" will return Some("https")
+-#[cfg(any(target_os = "windows", target_os = "macos"))]
++#[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
+ fn extract_type_prefix(address: &str) -> Option<&str> {
+     if let Some(indice) = address.find("://") {
+         if indice == 0 {
+@@ -1088,7 +1088,7 @@ fn extract_type_prefix(address: &str) ->
+     }
+ }
+ 
+-#[cfg(any(target_os = "windows", target_os = "macos"))]
++#[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
+ fn parse_platform_values(platform_values: String) -> SystemProxyMap {
+     parse_platform_values_impl(platform_values)
+ }
+@@ -1297,7 +1297,7 @@ mod tests {
+         assert!(all_proxies.values().all(|p| p.host() == "127.0.0.2"));
+     }
+ 
+-    #[cfg(any(target_os = "windows", target_os = "macos"))]
++    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
+     #[test]
+     fn test_get_sys_proxies_registry_parsing() {
+         // Stop other threads from modifying process-global ENV while we are.
+@@ -1610,7 +1610,7 @@ mod tests {
+         drop(_lock);
+     }
+ 
+-    #[cfg(any(target_os = "windows", target_os = "macos"))]
++    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
+     #[test]
+     fn test_type_prefix_extraction() {
+         assert!(extract_type_prefix("test").is_none());
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.28/Cargo.toml	1153704088.000000000
++++ ./vendor/rustix-0.38.28/Cargo.toml	1719137117.100189977
+@@ -67,6 +67,7 @@ targets = [
+     "wasm32-unknown-emscripten",
+     "wasm32-wasi",
+ ]
++cc = []
+ 
+ [[bench]]
+ name = "mod"
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.28/src/backend/libc/fs/syscalls.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.28/src/backend/libc/fs/syscalls.rs	1719137044.416952272
+@@ -340,7 +340,7 @@ pub(crate) fn linkat(
+     flags: AtFlags,
+ ) -> io::Result<()> {
+     // macOS <= 10.9 lacks `linkat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn linkat(
+@@ -374,7 +374,7 @@ pub(crate) fn linkat(
+         ret(c::link(c_str(old_path), c_str(new_path)))
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::linkat(
+             borrowed_fd(old_dirfd),
+@@ -397,7 +397,7 @@ pub(crate) fn unlink(path: &CStr) -> io:
+ #[cfg(not(any(target_os = "espidf", target_os = "redox")))]
+ pub(crate) fn unlinkat(dirfd: BorrowedFd<'_>, path: &CStr, flags: AtFlags) -> io::Result<()> {
+     // macOS <= 10.9 lacks `unlinkat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn unlinkat(
+@@ -428,7 +428,7 @@ pub(crate) fn unlinkat(dirfd: BorrowedFd
+         }
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::unlinkat(
+             borrowed_fd(dirfd),
+@@ -450,7 +450,7 @@ pub(crate) fn renameat(
+     new_path: &CStr,
+ ) -> io::Result<()> {
+     // macOS <= 10.9 lacks `renameat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn renameat(
+@@ -476,7 +476,7 @@ pub(crate) fn renameat(
+         ret(c::rename(c_str(old_path), c_str(new_path)))
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::renameat(
+             borrowed_fd(old_dirfd),
+@@ -736,7 +736,7 @@ pub(crate) fn accessat(
+     flags: AtFlags,
+ ) -> io::Result<()> {
+     // macOS <= 10.9 lacks `faccessat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn faccessat(
+@@ -768,7 +768,7 @@ pub(crate) fn accessat(
+         ret(c::access(c_str(path), bitflags_bits!(access)))
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::faccessat(
+             borrowed_fd(dirfd),
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.28/src/backend/libc/io/syscalls.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.28/src/backend/libc/io/syscalls.rs	1719137044.993899821
+@@ -190,9 +190,9 @@ pub(crate) fn pwritev2(
+ // intentionally showing odd behavior by rejecting any read with a size larger
+ // than or equal to `INT_MAX`. To handle both of these the read size is capped
+ // on both platforms.
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ const READ_LIMIT: usize = c::c_int::MAX as usize - 1;
+-#[cfg(not(target_os = "macos"))]
++#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+ const READ_LIMIT: usize = c::ssize_t::MAX as usize;
+ 
+ pub(crate) unsafe fn close(raw_fd: RawFd) {
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.28/src/backend/libc/time/syscalls.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.28/src/backend/libc/time/syscalls.rs	1719137045.571498654
+@@ -232,7 +232,7 @@ fn clock_gettime_dynamic_old(id: c::cloc
+ #[cfg(not(any(
+     target_os = "redox",
+     target_os = "wasi",
+-    all(apple, not(target_os = "macos"))
++    all(apple, not(any(target_os = "macos", target_os = "ios")))
+ )))]
+ #[inline]
+ pub(crate) fn clock_settime(id: ClockId, timespec: Timespec) -> io::Result<()> {
+@@ -263,7 +263,7 @@ pub(crate) fn clock_settime(id: ClockId,
+ #[cfg(not(any(
+     target_os = "redox",
+     target_os = "wasi",
+-    all(apple, not(target_os = "macos"))
++    all(apple, not(any(target_os = "macos", target_os = "ios")))
+ )))]
+ #[cfg(fix_y2038)]
+ fn clock_settime_old(id: ClockId, timespec: Timespec) -> io::Result<()> {
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.28/src/time/clock.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.28/src/time/clock.rs	1719137046.147815503
+@@ -100,7 +100,7 @@ pub fn clock_gettime_dynamic(id: Dynamic
+ #[cfg(not(any(
+     target_os = "redox",
+     target_os = "wasi",
+-    all(apple, not(target_os = "macos"))
++    all(apple, not(any(target_os = "macos", target_os = "ios")))
+ )))]
+ #[inline]
+ pub fn clock_settime(id: ClockId, timespec: Timespec) -> io::Result<()> {
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.32/Cargo.toml	1153704088.000000000
++++ ./vendor/rustix-0.38.32/Cargo.toml	1719137216.771453011
+@@ -67,6 +67,7 @@ targets = [
+     "wasm32-unknown-emscripten",
+     "wasm32-wasi",
+ ]
++cc = []
+ 
+ [[bench]]
+ name = "mod"
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.32/src/backend/libc/fs/syscalls.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.32/src/backend/libc/fs/syscalls.rs	1719137216.951864201
+@@ -349,7 +349,7 @@ pub(crate) fn linkat(
+     flags: AtFlags,
+ ) -> io::Result<()> {
+     // macOS <= 10.9 lacks `linkat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn linkat(
+@@ -383,7 +383,7 @@ pub(crate) fn linkat(
+         ret(c::link(c_str(old_path), c_str(new_path)))
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::linkat(
+             borrowed_fd(old_dirfd),
+@@ -406,7 +406,7 @@ pub(crate) fn unlink(path: &CStr) -> io:
+ #[cfg(not(any(target_os = "espidf", target_os = "redox")))]
+ pub(crate) fn unlinkat(dirfd: BorrowedFd<'_>, path: &CStr, flags: AtFlags) -> io::Result<()> {
+     // macOS <= 10.9 lacks `unlinkat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn unlinkat(
+@@ -437,7 +437,7 @@ pub(crate) fn unlinkat(dirfd: BorrowedFd
+         }
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::unlinkat(
+             borrowed_fd(dirfd),
+@@ -459,7 +459,7 @@ pub(crate) fn renameat(
+     new_path: &CStr,
+ ) -> io::Result<()> {
+     // macOS <= 10.9 lacks `renameat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn renameat(
+@@ -485,7 +485,7 @@ pub(crate) fn renameat(
+         ret(c::rename(c_str(old_path), c_str(new_path)))
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::renameat(
+             borrowed_fd(old_dirfd),
+@@ -745,7 +745,7 @@ pub(crate) fn accessat(
+     flags: AtFlags,
+ ) -> io::Result<()> {
+     // macOS <= 10.9 lacks `faccessat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn faccessat(
+@@ -777,7 +777,7 @@ pub(crate) fn accessat(
+         ret(c::access(c_str(path), bitflags_bits!(access)))
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::faccessat(
+             borrowed_fd(dirfd),
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.32/src/backend/libc/io/syscalls.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.32/src/backend/libc/io/syscalls.rs	1719137217.133437896
+@@ -192,9 +192,9 @@ pub(crate) fn pwritev2(
+ // intentionally showing odd behavior by rejecting any read with a size larger
+ // than or equal to `INT_MAX`. To handle both of these the read size is capped
+ // on both platforms.
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ const READ_LIMIT: usize = c::c_int::MAX as usize - 1;
+-#[cfg(not(target_os = "macos"))]
++#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+ const READ_LIMIT: usize = c::ssize_t::MAX as usize;
+ 
+ pub(crate) unsafe fn close(raw_fd: RawFd) {
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.32/src/backend/libc/time/syscalls.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.32/src/backend/libc/time/syscalls.rs	1719137217.312706539
+@@ -232,7 +232,7 @@ fn clock_gettime_dynamic_old(id: c::cloc
+ #[cfg(not(any(
+     target_os = "redox",
+     target_os = "wasi",
+-    all(apple, not(target_os = "macos"))
++    all(apple, not(any(target_os = "macos", target_os = "ios")))
+ )))]
+ #[inline]
+ pub(crate) fn clock_settime(id: ClockId, timespec: Timespec) -> io::Result<()> {
+@@ -263,7 +263,7 @@ pub(crate) fn clock_settime(id: ClockId,
+ #[cfg(not(any(
+     target_os = "redox",
+     target_os = "wasi",
+-    all(apple, not(target_os = "macos"))
++    all(apple, not(any(target_os = "macos", target_os = "ios")))
+ )))]
+ #[cfg(fix_y2038)]
+ fn clock_settime_old(id: ClockId, timespec: Timespec) -> io::Result<()> {
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.32/src/time/clock.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.32/src/time/clock.rs	1719137217.494646986
+@@ -100,7 +100,7 @@ pub fn clock_gettime_dynamic(id: Dynamic
+ #[cfg(not(any(
+     target_os = "redox",
+     target_os = "wasi",
+-    all(apple, not(target_os = "macos"))
++    all(apple, not(any(target_os = "macos", target_os = "ios")))
+ )))]
+ #[inline]
+ pub fn clock_settime(id: ClockId, timespec: Timespec) -> io::Result<()> {
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.8/Cargo.toml	1153704088.000000000
++++ ./vendor/rustix-0.38.8/Cargo.toml	1719137217.674831758
+@@ -67,6 +67,7 @@ targets = [
+     "wasm32-unknown-emscripten",
+     "wasm32-wasi",
+ ]
++cc = []
+ 
+ [[bench]]
+ name = "mod"
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.8/src/backend/libc/fs/syscalls.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.8/src/backend/libc/fs/syscalls.rs	1719137217.856942789
+@@ -321,7 +321,7 @@ pub(crate) fn linkat(
+     flags: AtFlags,
+ ) -> io::Result<()> {
+     // macOS <= 10.9 lacks `linkat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn linkat(
+@@ -355,7 +355,7 @@ pub(crate) fn linkat(
+         ret(c::link(c_str(old_path), c_str(new_path)))
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::linkat(
+             borrowed_fd(old_dirfd),
+@@ -378,7 +378,7 @@ pub(crate) fn unlink(path: &CStr) -> io:
+ #[cfg(not(any(target_os = "espidf", target_os = "redox")))]
+ pub(crate) fn unlinkat(dirfd: BorrowedFd<'_>, path: &CStr, flags: AtFlags) -> io::Result<()> {
+     // macOS <= 10.9 lacks `unlinkat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn unlinkat(
+@@ -409,7 +409,7 @@ pub(crate) fn unlinkat(dirfd: BorrowedFd
+         }
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::unlinkat(
+             borrowed_fd(dirfd),
+@@ -431,7 +431,7 @@ pub(crate) fn renameat(
+     new_path: &CStr,
+ ) -> io::Result<()> {
+     // macOS <= 10.9 lacks `renameat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn renameat(
+@@ -457,7 +457,7 @@ pub(crate) fn renameat(
+         ret(c::rename(c_str(old_path), c_str(new_path)))
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::renameat(
+             borrowed_fd(old_dirfd),
+@@ -690,7 +690,7 @@ pub(crate) fn accessat(
+     flags: AtFlags,
+ ) -> io::Result<()> {
+     // macOS <= 10.9 lacks `faccessat`.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     unsafe {
+         weak! {
+             fn faccessat(
+@@ -722,7 +722,7 @@ pub(crate) fn accessat(
+         ret(c::access(c_str(path), bitflags_bits!(access)))
+     }
+ 
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     unsafe {
+         ret(c::faccessat(
+             borrowed_fd(dirfd),
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.8/src/backend/libc/io/syscalls.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.8/src/backend/libc/io/syscalls.rs	1719137218.038465109
+@@ -194,9 +194,9 @@ pub(crate) fn pwritev2(
+ // intentionally showing odd behavior by rejecting any read with a size larger
+ // than or equal to `INT_MAX`. To handle both of these the read size is capped
+ // on both platforms.
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ const READ_LIMIT: usize = c::c_int::MAX as usize - 1;
+-#[cfg(not(target_os = "macos"))]
++#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+ const READ_LIMIT: usize = c::ssize_t::MAX as usize;
+ 
+ pub(crate) unsafe fn close(raw_fd: RawFd) {
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.8/src/backend/libc/time/syscalls.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.8/src/backend/libc/time/syscalls.rs	1719137218.218711757
+@@ -232,7 +232,7 @@ fn clock_gettime_dynamic_old(id: c::cloc
+ #[cfg(not(any(
+     target_os = "redox",
+     target_os = "wasi",
+-    all(apple, not(target_os = "macos"))
++    all(apple, not(any(target_os = "macos", target_os = "ios")))
+ )))]
+ #[inline]
+ pub(crate) fn clock_settime(id: ClockId, timespec: Timespec) -> io::Result<()> {
+@@ -263,7 +263,7 @@ pub(crate) fn clock_settime(id: ClockId,
+ #[cfg(not(any(
+     target_os = "redox",
+     target_os = "wasi",
+-    all(apple, not(target_os = "macos"))
++    all(apple, not(any(target_os = "macos", target_os = "ios")))
+ )))]
+ #[cfg(fix_y2038)]
+ fn clock_settime_old(id: ClockId, timespec: Timespec) -> io::Result<()> {
+--- ./rustc-1.79.0-src/vendor/rustix-0.38.8/src/time/clock.rs	1153704088.000000000
++++ ./vendor/rustix-0.38.8/src/time/clock.rs	1719137218.398129442
+@@ -100,7 +100,7 @@ pub fn clock_gettime_dynamic(id: Dynamic
+ #[cfg(not(any(
+     target_os = "redox",
+     target_os = "wasi",
+-    all(apple, not(target_os = "macos"))
++    all(apple, not(any(target_os = "macos", target_os = "ios")))
+ )))]
+ #[inline]
+ pub fn clock_settime(id: ClockId, timespec: Timespec) -> io::Result<()> {
+--- ./rustc-1.79.0-src/vendor/security-framework-sys-2.10.0/src/certificate.rs	1153704088.000000000
++++ ./vendor/security-framework-sys-2.10.0/src/certificate.rs	1719137337.456096319
+@@ -1,7 +1,7 @@
+ use core_foundation_sys::array::CFArrayRef;
+ use core_foundation_sys::base::{CFAllocatorRef, CFTypeID, OSStatus};
+ use core_foundation_sys::data::CFDataRef;
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ use core_foundation_sys::dictionary::CFDictionaryRef;
+ #[cfg(any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "watchos"))]
+ use core_foundation_sys::error::CFErrorRef;
+@@ -12,28 +12,28 @@ use crate::base::SecKeyRef;
+ use crate::base::SecKeychainRef;
+ 
+ extern "C" {
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyKeyType: CFStringRef;
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyKeyLabel: CFStringRef;
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyKeyLocalizedLabel: CFStringRef;
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyKeyValue: CFStringRef;
+ 
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyTypeWarning: CFStringRef;
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyTypeSuccess: CFStringRef;
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyTypeSection: CFStringRef;
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyTypeData: CFStringRef;
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyTypeString: CFStringRef;
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyTypeURL: CFStringRef;
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub static kSecPropertyTypeDate: CFStringRef;
+ 
+     pub fn SecCertificateGetTypeID() -> CFTypeID;
+@@ -60,8 +60,7 @@ extern "C" {
+     #[cfg(any(feature = "OSX_10_12", target_os = "ios", target_os = "tvos", target_os = "watchos"))]
+     pub fn SecCertificateCopyNormalizedSubjectSequence(certificate: SecCertificateRef)
+         -> CFDataRef;
+-    #[cfg(target_os = "macos")]
+-    #[cfg_attr(target_arch = "aarch64", link_name = "SecCertificateCopyPublicKey$LEGACYMAC")]
++
+     #[deprecated(note = "Deprecated by Apple. May not work any more. Use SecCertificateCopyKey")]
+     pub fn SecCertificateCopyPublicKey(
+         certificate: SecCertificateRef,
+--- ./rustc-1.79.0-src/vendor/security-framework-sys-2.10.0/src/secure_transport.rs	1153704088.000000000
++++ ./vendor/security-framework-sys-2.10.0/src/secure_transport.rs	1719137338.041081628
+@@ -1,6 +1,5 @@
+ use core_foundation_sys::array::CFArrayRef;
+ use core_foundation_sys::base::CFAllocatorRef;
+-#[cfg(target_os = "macos")]
+ use core_foundation_sys::base::CFTypeRef;
+ use core_foundation_sys::base::{Boolean, OSStatus};
+ use std::os::raw::{c_char, c_int, c_void};
+@@ -137,10 +136,12 @@ extern "C" {
+         protocolSide: SSLProtocolSide,
+         connectionType: SSLConnectionType,
+     ) -> SSLContextRef;
+-    #[cfg(target_os = "macos")]
++
++    #[cfg_attr(target_os = "ios", link_name = "_SSLNewContext")]
+     pub fn SSLNewContext(isServer: Boolean, contextPtr: *mut SSLContextRef) -> OSStatus;
+-    #[cfg(target_os = "macos")]
++    #[cfg_attr(target_os = "ios", link_name = "_SSLDisposeContext")]
+     pub fn SSLDisposeContext(context: SSLContextRef) -> OSStatus;
++
+     pub fn SSLSetConnection(context: SSLContextRef, connection: SSLConnectionRef) -> OSStatus;
+     pub fn SSLGetConnection(context: SSLContextRef, connection: *mut SSLConnectionRef) -> OSStatus;
+     pub fn SSLSetIOFuncs(
+@@ -219,18 +220,20 @@ extern "C" {
+     ) -> OSStatus;
+     pub fn SSLGetNegotiatedCipher(context: SSLContextRef, cipher: *mut SSLCipherSuite) -> OSStatus;
+     pub fn SSLSetClientSideAuthenticate(context: SSLContextRef, auth: SSLAuthenticate) -> OSStatus;
+-    #[cfg(target_os = "macos")]
++
++    #[cfg_attr(target_os = "ios", link_name = "_SSLSetDiffieHellmanParams")]
+     pub fn SSLSetDiffieHellmanParams(
+         context: SSLContextRef,
+         dhParams: *const c_void,
+         dhParamsLen: usize,
+     ) -> OSStatus;
+-    #[cfg(target_os = "macos")]
++    #[cfg_attr(target_os = "ios", link_name = "_SSLGetDiffieHellmanParams")]
+     pub fn SSLGetDiffieHellmanParams(
+         context: SSLContextRef,
+         dhParams: *mut *const c_void,
+         dhParamsLen: *mut usize,
+     ) -> OSStatus;
++
+     pub fn SSLSetPeerID(
+         context: SSLContextRef,
+         peerID: *const c_void,
+@@ -260,12 +263,14 @@ extern "C" {
+     ) -> OSStatus;
+     pub fn SSLSetProtocolVersionMax(context: SSLContextRef, maxVersion: SSLProtocol) -> OSStatus;
+     pub fn SSLSetProtocolVersionMin(context: SSLContextRef, minVersion: SSLProtocol) -> OSStatus;
+-    #[cfg(target_os = "macos")]
++
++    #[cfg_attr(target_os = "ios", link_name = "_SSLSetProtocolVersionEnabled")]
+     pub fn SSLSetProtocolVersionEnabled(
+         context: SSLContextRef,
+         protocol: SSLProtocol,
+         enable: Boolean,
+     ) -> OSStatus;
++
+     #[cfg(feature = "OSX_10_13")]
+     pub fn SSLSetALPNProtocols(context: SSLContextRef, protocols: CFArrayRef) -> OSStatus;
+     #[cfg(feature = "OSX_10_13")]
+--- ./rustc-1.79.0-src/vendor/socket2-0.5.6/src/sys/unix.rs	1153704088.000000000
++++ ./vendor/socket2-0.5.6/src/sys/unix.rs	1719137361.956019954
+@@ -2672,6 +2672,7 @@ impl crate::Socket {
+             target_os = "freebsd",
+             target_os = "fuchsia",
+             target_os = "linux",
++            target_os = "ios",
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd"
+@@ -2687,6 +2688,7 @@ impl crate::Socket {
+                 target_os = "freebsd",
+                 target_os = "fuchsia",
+                 target_os = "linux",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"
+@@ -2712,6 +2714,7 @@ impl crate::Socket {
+             target_os = "freebsd",
+             target_os = "fuchsia",
+             target_os = "linux",
++            target_os = "ios",
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd"
+@@ -2727,6 +2730,7 @@ impl crate::Socket {
+                 target_os = "freebsd",
+                 target_os = "fuchsia",
+                 target_os = "linux",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"
+--- ./rustc-1.79.0-src/vendor/stacker-0.1.15/src/lib.rs	1153704088.000000000
++++ ./vendor/stacker-0.1.15/src/lib.rs	1719137395.601442070
+@@ -442,7 +442,7 @@ cfg_if! {
+             assert_eq!(libc::pthread_stackseg_np(libc::pthread_self(), stackinfo.as_mut_ptr()), 0);
+             Some(stackinfo.assume_init().ss_sp as usize - stackinfo.assume_init().ss_size)
+         }
+-    } else if #[cfg(target_os = "macos")] {
++    } else if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+         unsafe fn guess_os_stack_limit() -> Option<usize> {
+             Some(libc::pthread_get_stackaddr_np(libc::pthread_self()) as usize -
+                 libc::pthread_get_stacksize_np(libc::pthread_self()) as usize)
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.5/src/unix/apple/cpu.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.5/src/unix/apple/cpu.rs	1719137396.181911192
+@@ -184,11 +184,11 @@ pub(crate) unsafe fn get_cpu_frequency()
+         return speed / 1_000_000;
+     }
+ 
+-    #[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
++    #[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+     {
+         return 0;
+     }
+-    #[cfg(not(any(target_os = "ios", feature = "apple-sandbox")))]
++    #[cfg(not(all(target_os = "ios", feature = "apple-sandbox")))]
+     {
+         crate::sys::inner::cpu::get_cpu_frequency()
+     }
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.5/src/unix/apple/disk.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.5/src/unix/apple/disk.rs	1719137396.760438639
+@@ -258,7 +258,7 @@ fn get_available_volume_space(disk_props
+ 
+ pub(super) enum DictKey {
+     Extern(CFStringRef),
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     Defined(&'static str),
+ }
+ 
+@@ -267,11 +267,11 @@ unsafe fn get_dict_value<T, F: FnOnce(*c
+     key: DictKey,
+     callback: F,
+ ) -> Option<T> {
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     let _defined;
+     let key = match key {
+         DictKey::Extern(val) => val,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         DictKey::Defined(val) => {
+             _defined = CFReleaser::new(cfs::CFStringCreateWithBytesNoCopy(
+                 kCFAllocatorDefault,
+@@ -352,9 +352,9 @@ unsafe fn new_disk(
+     // Due to this, we can't query the medium type. All iOS devices use flash-based storage
+     // so we just assume the disk type is an SSD until Rust has a way to conditionally link to
+     // IOKit in more recent deployment versions.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     let type_ = crate::sys::inner::disk::get_disk_type(&c_disk).unwrap_or(DiskKind::Unknown(-1));
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     let type_ = DiskKind::SSD;
+ 
+     // Note: Since we requested these properties from the system, we don't expect
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.5/src/unix/apple/ffi.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.5/src/unix/apple/ffi.rs	1719137397.368152717
+@@ -6,7 +6,6 @@ use core_foundation_sys::{
+ };
+ 
+ // Reexport items defined in either macos or ios ffi module.
+-#[cfg(not(target_os = "ios"))]
+ pub use crate::sys::inner::ffi::*;
+ 
+ #[link(name = "CoreFoundation", kind = "framework")]
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.5/src/unix/apple/mod.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.5/src/unix/apple/mod.rs	1719137397.965311748
+@@ -1,17 +1,17 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", all(target_os = "ios", not(feature = "apple-sandbox"))))]
+ pub(crate) mod macos;
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", all(target_os = "ios", not(feature = "apple-sandbox"))))]
+ pub(crate) use self::macos as inner;
+ 
+-#[cfg(target_os = "ios")]
++#[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+ pub(crate) mod ios;
+-#[cfg(target_os = "ios")]
++#[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+ pub(crate) use self::ios as inner;
+ 
+-#[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
++#[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+ pub(crate) mod app_store;
+ 
+ pub mod component;
+@@ -35,7 +35,7 @@ pub(crate) use crate::unix::DisksInner;
+ 
+ use std::time::Duration;
+ 
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(not(feature = "apple-sandbox"))]
+ declare_signals! {
+     libc::c_int,
+     Signal::Hangup => libc::SIGHUP,
+@@ -73,7 +73,7 @@ declare_signals! {
+     Signal::Sys => libc::SIGSYS,
+     _ => None,
+ }
+-#[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
++#[cfg(feature = "apple-sandbox")]
+ declare_signals! {
+     libc::c_int,
+     _ => None,
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.5/src/unix/apple/system.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.5/src/unix/apple/system.rs	1719137398.561229107
+@@ -1,7 +1,7 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+ use crate::sys::cpu::*;
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+ use crate::sys::process::*;
+ use crate::sys::utils::{get_sys_value, get_sys_value_by_name};
+ 
+@@ -11,7 +11,7 @@ use std::cell::UnsafeCell;
+ use std::collections::HashMap;
+ use std::ffi::CStr;
+ use std::mem;
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+ use std::time::SystemTime;
+ 
+ use libc::{
+@@ -29,7 +29,7 @@ pub(crate) struct SystemInner {
+     swap_free: u64,
+     page_size_b: u64,
+     port: mach_port_t,
+-    #[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++    #[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+     clock_info: Option<crate::sys::macos::system::SystemTimeInfo>,
+     cpus: CpusWrapper,
+ }
+@@ -64,7 +64,7 @@ fn boot_time() -> u64 {
+     }
+ }
+ 
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+ fn get_now() -> u64 {
+     SystemTime::now()
+         .duration_since(SystemTime::UNIX_EPOCH)
+@@ -87,7 +87,7 @@ impl SystemInner {
+                 swap_free: 0,
+                 page_size_b: sysconf(_SC_PAGESIZE) as _,
+                 port,
+-                #[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++                #[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+                 clock_info: crate::sys::macos::system::SystemTimeInfo::new(port),
+                 cpus: CpusWrapper::new(),
+             }
+@@ -165,7 +165,7 @@ impl SystemInner {
+         self.cpus.refresh(refresh_kind, self.port);
+     }
+ 
+-    #[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
++    #[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+     pub(crate) fn refresh_processes_specifics(
+         &mut self,
+         _filter: Option<&[Pid]>,
+@@ -173,7 +173,7 @@ impl SystemInner {
+     ) {
+     }
+ 
+-    #[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++    #[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+     pub(crate) fn refresh_processes_specifics(
+         &mut self,
+         filter: Option<&[Pid]>,
+@@ -237,7 +237,7 @@ impl SystemInner {
+         }
+     }
+ 
+-    #[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
++    #[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+     pub(crate) fn refresh_process_specifics(
+         &mut self,
+         _pid: Pid,
+@@ -246,7 +246,7 @@ impl SystemInner {
+         false
+     }
+ 
+-    #[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++    #[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+     pub(crate) fn refresh_process_specifics(
+         &mut self,
+         pid: Pid,
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.5/src/utils.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.5/src/utils.rs	1719137399.160709482
+@@ -4,10 +4,10 @@
+ /// Uses the `rayon::iter::IntoParallelIterator` trait.
+ #[cfg(all(
+     all(
+-        any(target_os = "macos", target_os = "windows", target_os = "freebsd",),
++        any(target_os = "macos", target_os = "ios", target_os = "windows", target_os = "freebsd",),
+         feature = "multithread"
+     ),
+-    not(all(target_os = "macos", feature = "apple-sandbox")),
++    not(all(any(target_os = "macos", target_os = "ios"), feature = "apple-sandbox")),
+     not(feature = "unknown-ci")
+ ))]
+ pub(crate) fn into_iter<T>(val: T) -> T::Iter
+@@ -21,11 +21,11 @@ where
+ /// Uses the `std::iter::IntoIterator` trait.
+ #[cfg(all(
+     all(
+-        any(target_os = "macos", target_os = "windows", target_os = "freebsd",),
++        any(target_os = "macos", target_os = "ios", target_os = "windows", target_os = "freebsd",),
+         not(feature = "multithread")
+     ),
+     not(feature = "unknown-ci"),
+-    not(all(target_os = "macos", feature = "apple-sandbox"))
++    not(all(any(target_os = "macos", target_os = "ios"), feature = "apple-sandbox"))
+ ))]
+ pub(crate) fn into_iter<T>(val: T) -> T::IntoIter
+ where
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.8/src/unix/apple/cpu.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.8/src/unix/apple/cpu.rs	1719137485.927645987
+@@ -195,11 +195,11 @@ pub(crate) unsafe fn get_cpu_frequency()
+         return speed / 1_000_000;
+     }
+ 
+-    #[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
++    #[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+     {
+         return 0;
+     }
+-    #[cfg(not(any(target_os = "ios", feature = "apple-sandbox")))]
++    #[cfg(not(all(target_os = "ios", feature = "apple-sandbox")))]
+     {
+         crate::sys::inner::cpu::get_cpu_frequency()
+     }
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.8/src/unix/apple/disk.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.8/src/unix/apple/disk.rs	1719137486.522654258
+@@ -258,7 +258,7 @@ fn get_available_volume_space(disk_props
+ 
+ pub(super) enum DictKey {
+     Extern(CFStringRef),
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     Defined(&'static str),
+ }
+ 
+@@ -267,11 +267,11 @@ unsafe fn get_dict_value<T, F: FnOnce(*c
+     key: DictKey,
+     callback: F,
+ ) -> Option<T> {
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     let _defined;
+     let key = match key {
+         DictKey::Extern(val) => val,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         DictKey::Defined(val) => {
+             _defined = CFReleaser::new(cfs::CFStringCreateWithBytesNoCopy(
+                 kCFAllocatorDefault,
+@@ -352,9 +352,9 @@ unsafe fn new_disk(
+     // Due to this, we can't query the medium type. All iOS devices use flash-based storage
+     // so we just assume the disk type is an SSD until Rust has a way to conditionally link to
+     // IOKit in more recent deployment versions.
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     let type_ = crate::sys::inner::disk::get_disk_type(&c_disk).unwrap_or(DiskKind::Unknown(-1));
+-    #[cfg(not(target_os = "macos"))]
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+     let type_ = DiskKind::SSD;
+ 
+     // Note: Since we requested these properties from the system, we don't expect
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.8/src/unix/apple/ffi.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.8/src/unix/apple/ffi.rs	1719137487.115084309
+@@ -6,7 +6,6 @@ use core_foundation_sys::{
+ };
+ 
+ // Reexport items defined in either macos or ios ffi module.
+-#[cfg(not(target_os = "ios"))]
+ pub use crate::sys::inner::ffi::*;
+ 
+ #[link(name = "CoreFoundation", kind = "framework")]
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.8/src/unix/apple/mod.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.8/src/unix/apple/mod.rs	1719137487.709715412
+@@ -1,17 +1,17 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", all(target_os = "ios", not(feature = "apple-sandbox"))))]
+ pub(crate) mod macos;
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", all(target_os = "ios", not(feature = "apple-sandbox"))))]
+ pub(crate) use self::macos as inner;
+ 
+-#[cfg(target_os = "ios")]
++#[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+ pub(crate) mod ios;
+-#[cfg(target_os = "ios")]
++#[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+ pub(crate) use self::ios as inner;
+ 
+-#[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
++#[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+ pub(crate) mod app_store;
+ 
+ pub mod component;
+@@ -37,7 +37,7 @@ pub(crate) use crate::unix::DisksInner;
+ 
+ use std::time::Duration;
+ 
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(not(feature = "apple-sandbox"))]
+ declare_signals! {
+     libc::c_int,
+     Signal::Hangup => libc::SIGHUP,
+@@ -75,7 +75,7 @@ declare_signals! {
+     Signal::Sys => libc::SIGSYS,
+     _ => None,
+ }
+-#[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
++#[cfg(feature = "apple-sandbox")]
+ declare_signals! {
+     libc::c_int,
+     _ => None,
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.8/src/unix/apple/system.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.8/src/unix/apple/system.rs	1719137488.301667753
+@@ -1,18 +1,18 @@
+ // Take a look at the license at the top of the repository in the LICENSE file.
+ 
+ use crate::sys::cpu::*;
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+ use crate::sys::process::*;
+ use crate::sys::utils::{get_sys_value, get_sys_value_by_name};
+ 
+ use crate::{Cpu, CpuRefreshKind, LoadAvg, MemoryRefreshKind, Pid, Process, ProcessRefreshKind};
+ 
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+ use std::cell::UnsafeCell;
+ use std::collections::HashMap;
+ use std::ffi::CStr;
+ use std::mem;
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+ use std::time::SystemTime;
+ 
+ use libc::{
+@@ -30,17 +30,17 @@ pub(crate) struct SystemInner {
+     swap_free: u64,
+     page_size_b: u64,
+     port: mach_port_t,
+-    #[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++    #[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+     clock_info: Option<crate::sys::macos::system::SystemTimeInfo>,
+     cpus: CpusWrapper,
+ }
+ 
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+ pub(crate) struct Wrap<'a>(pub UnsafeCell<&'a mut HashMap<Pid, Process>>);
+ 
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+ unsafe impl<'a> Send for Wrap<'a> {}
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+ unsafe impl<'a> Sync for Wrap<'a> {}
+ 
+ fn boot_time() -> u64 {
+@@ -68,7 +68,7 @@ fn boot_time() -> u64 {
+     }
+ }
+ 
+-#[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+ fn get_now() -> u64 {
+     SystemTime::now()
+         .duration_since(SystemTime::UNIX_EPOCH)
+@@ -91,7 +91,7 @@ impl SystemInner {
+                 swap_free: 0,
+                 page_size_b: sysconf(_SC_PAGESIZE) as _,
+                 port,
+-                #[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++                #[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+                 clock_info: crate::sys::macos::system::SystemTimeInfo::new(port),
+                 cpus: CpusWrapper::new(),
+             }
+@@ -169,7 +169,7 @@ impl SystemInner {
+         self.cpus.refresh(refresh_kind, self.port);
+     }
+ 
+-    #[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
++    #[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+     pub(crate) fn refresh_processes_specifics(
+         &mut self,
+         _filter: Option<&[Pid]>,
+@@ -177,7 +177,7 @@ impl SystemInner {
+     ) {
+     }
+ 
+-    #[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++    #[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+     pub(crate) fn refresh_processes_specifics(
+         &mut self,
+         filter: Option<&[Pid]>,
+@@ -241,7 +241,7 @@ impl SystemInner {
+         }
+     }
+ 
+-    #[cfg(any(target_os = "ios", feature = "apple-sandbox"))]
++    #[cfg(all(target_os = "ios", feature = "apple-sandbox"))]
+     pub(crate) fn refresh_process_specifics(
+         &mut self,
+         _pid: Pid,
+@@ -250,7 +250,7 @@ impl SystemInner {
+         false
+     }
+ 
+-    #[cfg(all(target_os = "macos", not(feature = "apple-sandbox")))]
++    #[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "apple-sandbox")))]
+     pub(crate) fn refresh_process_specifics(
+         &mut self,
+         pid: Pid,
+--- ./rustc-1.79.0-src/vendor/sysinfo-0.30.8/src/utils.rs	1153704088.000000000
++++ ./vendor/sysinfo-0.30.8/src/utils.rs	1719137618.116712518
+@@ -5,7 +5,7 @@
+ #[cfg(all(
+     feature = "multithread",
+     not(feature = "unknown-ci"),
+-    not(all(target_os = "macos", feature = "apple-sandbox")),
++    not(all(target_vendor = "apple", feature = "apple-sandbox")),
+ ))]
+ #[allow(dead_code)]
+ pub(crate) fn into_iter<T>(val: T) -> T::Iter
+@@ -20,7 +20,7 @@ where
+ #[cfg(any(
+     not(feature = "multithread"),
+     feature = "unknown-ci",
+-    all(target_os = "macos", feature = "apple-sandbox")
++    all(target_vendor = "apple", feature = "apple-sandbox")
+ ))]
+ #[allow(dead_code)]
+ pub(crate) fn into_iter<T>(val: T) -> T::IntoIter
+@@ -35,7 +35,7 @@ where
+ #[cfg(all(
+     feature = "multithread",
+     not(feature = "unknown-ci"),
+-    not(all(target_os = "macos", feature = "apple-sandbox")),
++    not(all(target_vendor = "apple", feature = "apple-sandbox")),
+ ))]
+ pub(crate) fn into_iter_mut<'a, T>(
+     val: &'a mut T,
+@@ -55,7 +55,7 @@ where
+ #[cfg(any(
+     not(feature = "multithread"),
+     feature = "unknown-ci",
+-    all(target_os = "macos", feature = "apple-sandbox")
++    all(target_vendor = "apple", feature = "apple-sandbox")
+ ))]
+ pub(crate) fn into_iter_mut<T>(val: T) -> T::IntoIter
+ where
+--- ./rustc-1.79.0-src/vendor/tikv-jemalloc-ctl-0.5.4/src/macros.rs	1153704088.000000000
++++ ./vendor/tikv-jemalloc-ctl-0.5.4/src/macros.rs	1719137676.847810999
+@@ -69,7 +69,7 @@ macro_rules! r {
+                 match stringify!($id) {
+                     "background_thread" |
+                     "max_background_threads"
+-                    if cfg!(target_os = "macos") => return,
++                    if cfg!(any(target_os = "macos", target_os = "ios")) => return,
+                     _ => (),
+                 }
+ 
+@@ -117,7 +117,7 @@ macro_rules! w {
+                 match stringify!($id) {
+                     "background_thread" |
+                     "max_background_threads"
+-                        if cfg!(target_os = "macos") => return,
++                        if cfg!(any(target_os = "macos", target_os = "ios")) => return,
+                     _ => (),
+                 }
+ 
+@@ -167,7 +167,7 @@ macro_rules! u {
+                 match stringify!($id) {
+                     "background_thread" |
+                     "max_background_threads"
+-                        if cfg!(target_os = "macos") => return,
++                        if cfg!(any(target_os = "macos", target_os = "ios")) => return,
+                     _ => (),
+                 }
+ 
+--- ./rustc-1.79.0-src/vendor/tikv-jemalloc-sys-0.5.4+5.3.0-patched/build.rs	1153704088.000000000
++++ ./vendor/tikv-jemalloc-sys-0.5.4+5.3.0-patched/build.rs	1719137708.352494320
+@@ -34,8 +34,7 @@ fn read_and_watch_env(name: &str) -> Res
+ }
+ 
+ fn read_and_watch_env_os(name: &str) -> Option<OsString> {
+-    println!("cargo:rerun-if-env-changed={name}");
+-    env::var_os(name)
++    target_env(name)
+ }
+ 
+ fn copy_recursively(src: &Path, dst: &Path) -> io::Result<()> {
+@@ -55,6 +54,24 @@ fn copy_recursively(src: &Path, dst: &Pa
+     Ok(())
+ }
+ 
++fn env_inner(name: &str) -> Option<OsString> {
++    let var = env::var_os(name);
++    println!("cargo:rerun-if-env-changed={}", name);
++
++    match var {
++        Some(ref v) => println!("{} = {}", name, v.to_string_lossy()),
++        None => println!("{} unset", name),
++    }
++
++    var
++}
++
++fn target_env(name: &str) -> Option<OsString> {
++    let prefix = env::var("TARGET").unwrap().to_uppercase().replace('-', "_");
++    let prefixed = format!("{}_{}", prefix, name);
++    env_inner(&prefixed).or_else(|| env_inner(name))
++}
++
+ // TODO: split main functions and remove following allow.
+ #[allow(clippy::cognitive_complexity)]
+ fn main() {
+@@ -174,11 +191,9 @@ fn main() {
+     .arg("--enable-doc=no")
+     .arg("--enable-shared=no");
+ 
+-    if target.contains("ios") {
+-        // newer iOS deviced have 16kb page sizes:
+-        // closed: https://github.com/gnzlbg/jemallocator/issues/68
+-        cmd.arg("--with-lg-page=14");
+-    }
++    // newer iOS deviced have 16kb page sizes:
++    // closed: https://github.com/gnzlbg/jemallocator/issues/68
++    cmd.arg("--with-lg-page=14");
+ 
+     // collect `malloc_conf` string:
+     let mut malloc_conf = String::new();
+@@ -235,11 +250,13 @@ fn main() {
+         cmd.arg(format!("--with-lg-vaddr={lg_vaddr}"));
+     }
+ 
++    #[cfg(not(target_vendor = "apple"))]
+     if use_prefix {
+         cmd.arg("--with-jemalloc-prefix=_rjem_");
+         info!("--with-jemalloc-prefix=_rjem_");
+     }
+ 
++    #[cfg(not(target_vendor = "apple"))]
+     cmd.arg("--with-private-namespace=_rjem_");
+ 
+     if env::var("CARGO_FEATURE_DEBUG").is_ok() {
+--- ./rustc-1.79.0-src/vendor/tikv-jemalloc-sys-0.5.4+5.3.0-patched/src/env.rs	1153704088.000000000
++++ ./vendor/tikv-jemalloc-sys-0.5.4+5.3.0-patched/src/env.rs	1719137708.934677158
+@@ -22,4 +22,4 @@ pub static NO_BG_THREAD_TARGETS: &[&str]
+ // https://github.com/rust-lang/rust/commit/536011d929ecbd1170baf34e09580e567c971f95
+ // https://github.com/rust-lang/rust/commit/9f3de647326fbe50e0e283b9018ab7c41abccde3
+ // https://github.com/rust-lang/rust/commit/ed015456a114ae907a36af80c06f81ea93182a24
+-pub static NO_UNPREFIXED_MALLOC_TARGETS: &[&str] = &["android", "dragonfly", "musl", "darwin"];
++pub static NO_UNPREFIXED_MALLOC_TARGETS: &[&str] = &["android", "dragonfly", "musl"];

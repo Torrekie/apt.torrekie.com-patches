@@ -1,0 +1,2 @@
+# We will need some wrapper tools
+PATH=$(srcroot)/altbin:$PATH

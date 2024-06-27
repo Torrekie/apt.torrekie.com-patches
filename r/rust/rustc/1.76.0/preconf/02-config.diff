@@ -1,0 +1,49 @@
+--- /dev/null	1712303651.774773000
++++ b/config.toml	1712303627.163968545
+@@ -0,0 +1,46 @@
++changelog-seen = 2
++
++[build]
++submodules = false
++vendor = true
++locked-deps = false
++
++cargo = "@CARGO@"
++rustc = "@RUSTC@"
++rustfmt = "@RUSTFMT@"
++
++build = "@RUST_BUILD_TRIPLE@"
++target = ["@RUST_TARGET_TRIPLE@"]
++
++docs = false
++
++extended = true
++# Torrekie: We do the same as Debian, only main tools here
++tools = ["clippy", "rustfmt", "rustdoc", "rust-analyzer-proc-macro-srv"]
++
++[install]
++prefix = "@DSTROOT@/usr"
++
++[target.aarch64-apple-ios]
++llvm-config = "@FAKE_LLVM_CONFIG@"
++
++[target.wasm32-wasi]
++wasi-root = "/usr"
++
++[llvm]
++link-shared = true
++#optimize = true
++ccache = true
++#targets = "all"
++
++[rust]
++jemalloc = true
++optimize = false
++dist-src = false
++incremental = true
++parallel-compiler = true
++default-linker = "clang"
++# In the normal scene this should be "stable", but we are targeting iOS which hack arounds
++# This is not a environment for distribution tho
++channel = "nightly"
++description = "Torrekie <me@torrekie.dev> maintained version, with iOS dynamic linking support"

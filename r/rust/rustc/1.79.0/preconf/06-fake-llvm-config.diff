@@ -1,0 +1,205 @@
+--- /dev/null	1712307565.478258000
++++ ./ios-llvm-config	1712307519.860793994
+@@ -0,0 +1,202 @@
++#!/usr/bin/env bash
++
++# Torrekie: This is basically how llvm-config returns, but the original one was
++# not a script, which made cross-compile cases impossible.
++# So here this script mimics the logics of the original llvm-config,
++# take it easy, I checked every return values here.
++
++# Function to print usage information
++print_usage() {
++    echo "usage: llvm-config <OPTION>... [<COMPONENT>...]"
++    echo ""
++    echo "Get various configuration information needed to compile programs which use LLVM. Typically called from 'configure' scripts. Examples:"
++    echo "  llvm-config --cxxflags"
++    echo "  llvm-config --ldflags"
++    echo "  llvm-config --libs engine bcreader scalaropts"
++    echo ""
++    echo "Options:"
++    echo "  --assertion-mode  Print assertion mode of LLVM tree (ON or OFF)."
++    echo "  --bindir          Directory containing LLVM executables."
++    echo "  --build-mode      Print build mode of LLVM tree (e.g. Debug or Release)."
++    echo "  --build-system    Print the build system used to build LLVM (e.g. 'cmake' or 'gn')."
++    echo "  --cflags          C compiler flags for files that include LLVM headers."
++    echo "  --cmakedir        Directory containing LLVM CMake modules."
++    echo "  --components      List of all possible components."
++    echo "  --cppflags        C preprocessor flags for files that include LLVM headers."
++    echo "  --cxxflags        C++ compiler flags for files that include LLVM headers."
++    echo "  --has-rtti        Print whether or not LLVM was built with rtti (YES or NO)."
++    echo "  --help            Print a summary of llvm-config arguments."
++    echo "  --host-target     Target triple used to configure LLVM."
++    echo "  --ignore-libllvm  Ignore libLLVM and link component libraries instead."
++    echo "  --includedir      Directory containing LLVM headers."
++    echo "  --ldflags         Print Linker flags."
++    echo "  --libdir          Directory containing LLVM libraries."
++    echo "  --libfiles        Fully qualified library filenames for makefile depends."
++    echo "  --libnames        Bare library names for in-tree builds."
++    echo "  --libs            Libraries needed to link against LLVM components."
++    echo "  --link-shared     Link the components as shared libraries."
++    echo "  --link-static     Link the component libraries statically."
++    echo "  --obj-root        Print the object root used to build LLVM."
++    echo "  --prefix          Print the installation prefix."
++    echo "  --shared-mode     Print how the provided components can be collectively linked ('shared' or 'static')."
++    echo "  --src-root        Print the source root LLVM was built from."
++    echo "  --system-libs     System Libraries needed to link against LLVM components."
++    echo "  --targets-built   List of all targets currently built."
++    echo "  --version         Print LLVM version."
++    echo "Typical components:"
++    echo "  all               All LLVM libraries (default)."
++    echo "  engine            Either a native JIT or a bitcode interpreter."
++}
++
++LINK_SHARED=0
++SHARED_MODE=shared
++LIBFILES_STATIC=""
++LIBFILES_SHARED=""
++LIBNAMES_STATIC=""
++LIBNAMES_SHARED=""
++LIBS_STATIC=""
++LIBS_SHARED=""
++PENDING_LIB=""
++PENDING_ECHO=""
++# Main script logic
++if [ $# -eq 0 ]; then
++    print_usage
++    exit 1
++fi
++
++while [[ $# -gt 0 ]]; do
++    option="$1"
++    case $option in
++        --version)
++            # Apple LLVM is not telling us the real version number
++            # (they are also smashing parts of 15 and 17 into one)
++            # So normally we should version this by revision, which
++            # should be (swift-5.9.2-RELEASE).
++            # But, this is llvm-config.
++            PENDING_ECHO="16.0.0"
++            shift
++            ;;
++        --help)
++            print_usage
++            exit 0
++            ;;
++        --bindir)
++            PENDING_ECHO=/usr/lib/llvm-16/bin
++            shift
++            ;;
++        --buildmode)
++            PENDING_ECHO="RelWithDebInfo"
++            shift
++            ;;
++        --build-system)
++            PENDING_ECHO="cmake"
++            shift
++            ;;
++        --cflags)
++            PENDING_ECHO="-I/usr/lib/llvm-16/include  -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
++            shift
++            ;;
++        --cmakedir)
++            PENDING_ECHO="/usr/lib/llvm-16/lib/cmake/llvm"
++            shift
++            ;;
++        --components)
++            PENDING_ECHO="aarch64 aarch64asmparser aarch64codegen aarch64desc aarch64disassembler aarch64info aarch64utils aggressiveinstcombine all all-targets amdgpu amdgpuasmparser amdgpucodegen amdgpudesc amdgpudisassembler amdgpuinfo amdgputargetmca amdgpuutils analysis arm armasmparser armcodegen armdesc armdisassembler arminfo armutils asmparser asmprinter avr avrasmparser avrcodegen avrdesc avrdisassembler avrinfo binaryformat bitreader bitstreamreader bitwriter bpf bpfasmparser bpfcodegen bpfdesc bpfdisassembler bpfinfo cas cfguard codegen core coroutines coverage debuginfocodeview debuginfodwarf debuginfogsym debuginfomsf debuginfopdb demangle dlltooldriver dwarflinker dwp engine executionengine extensions filecheck frontendopenacc frontendopenmp fuzzercli fuzzmutate globalisel hexagon hexagonasmparser hexagoncodegen hexagondesc hexagondisassembler hexagoninfo instcombine instrumentation interfacestub interpreter ipo irreader jitlink lanai lanaiasmparser lanaicodegen lanaidesc lanaidisassembler lanaiinfo libdriver lineeditor linker lto mc mca mcdisassembler mcjit mcparser mips mipsasmparser mipscodegen mipsdesc mipsdisassembler mipsinfo mirparser msp430 msp430asmparser msp430codegen msp430desc msp430disassembler msp430info native nativecodegen nvptx nvptxcodegen nvptxdesc nvptxinfo objcarcopts objcopy object objectyaml option orcjit orcshared orctargetprocess passes powerpc powerpcasmparser powerpccodegen powerpcdesc powerpcdisassembler powerpcinfo profiledata remarks remotecachingservice remotenullservice riscv riscvasmparser riscvcodegen riscvdesc riscvdisassembler riscvinfo runtimedyld scalaropts selectiondag sparc sparcasmparser sparccodegen sparcdesc sparcdisassembler sparcinfo support symbolize systemz systemzasmparser systemzcodegen systemzdesc systemzdisassembler systemzinfo tablegen target textapi transformutils ve veasmparser vecodegen vectorize vedesc vedisassembler veinfo webassembly webassemblyasmparser webassemblycodegen webassemblydesc webassemblydisassembler webassemblyinfo webassemblyutils windowsdriver windowsmanifest x86 x86asmparser x86codegen x86desc x86disassembler x86info x86targetmca xcore xcorecodegen xcoredesc xcoredisassembler xcoreinfo xray"
++            shift
++            ;;
++        --cppflags)
++            PENDING_ECHO="-I/usr/lib/llvm-16/include -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
++            shift
++            ;;
++        --cxxflags)
++            PENDING_ECHO="-I/usr/lib/llvm-16/include -std=c++17   -fno-exceptions -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
++            shift
++            ;;
++        --has-rtti)
++            PENDING_ECHO="YES"
++            shift
++            ;;
++        --host-target)
++            PENDING_ECHO="arm64-apple-ios13.0"
++            shift
++            ;;
++        --includedir)
++            PENDING_ECHO="/usr/lib/llvm-16/include"
++            shift
++            ;;
++        --ldflags)
++            PENDING_ECHO="-L/usr/lib/llvm-16/lib -Wl,-search_paths_first -Wl,-headerpad_max_install_names"
++            shift
++            ;;
++        --libdir)
++            PENDING_ECHO="/usr/lib/llvm-16/lib"
++            shift
++            ;;
++        --libfiles)
++            LIBFILES_STATIC="/usr/lib/llvm-16/lib/libLLVMWindowsManifest.a /usr/lib/llvm-16/lib/libLLVMXRay.a /usr/lib/llvm-16/lib/libLLVMLibDriver.a /usr/lib/llvm-16/lib/libLLVMDlltoolDriver.a /usr/lib/llvm-16/lib/libLLVMCoverage.a /usr/lib/llvm-16/lib/libLLVMLineEditor.a /usr/lib/llvm-16/lib/libLLVMXCoreDisassembler.a /usr/lib/llvm-16/lib/libLLVMXCoreCodeGen.a /usr/lib/llvm-16/lib/libLLVMXCoreDesc.a /usr/lib/llvm-16/lib/libLLVMXCoreInfo.a /usr/lib/llvm-16/lib/libLLVMX86TargetMCA.a /usr/lib/llvm-16/lib/libLLVMX86Disassembler.a /usr/lib/llvm-16/lib/libLLVMX86AsmParser.a /usr/lib/llvm-16/lib/libLLVMX86CodeGen.a /usr/lib/llvm-16/lib/libLLVMX86Desc.a /usr/lib/llvm-16/lib/libLLVMX86Info.a /usr/lib/llvm-16/lib/libLLVMWebAssemblyDisassembler.a /usr/lib/llvm-16/lib/libLLVMWebAssemblyAsmParser.a /usr/lib/llvm-16/lib/libLLVMWebAssemblyCodeGen.a /usr/lib/llvm-16/lib/libLLVMWebAssemblyDesc.a /usr/lib/llvm-16/lib/libLLVMWebAssemblyUtils.a /usr/lib/llvm-16/lib/libLLVMWebAssemblyInfo.a /usr/lib/llvm-16/lib/libLLVMVEDisassembler.a /usr/lib/llvm-16/lib/libLLVMVEAsmParser.a /usr/lib/llvm-16/lib/libLLVMVECodeGen.a /usr/lib/llvm-16/lib/libLLVMVEDesc.a /usr/lib/llvm-16/lib/libLLVMVEInfo.a /usr/lib/llvm-16/lib/libLLVMSystemZDisassembler.a /usr/lib/llvm-16/lib/libLLVMSystemZAsmParser.a /usr/lib/llvm-16/lib/libLLVMSystemZCodeGen.a /usr/lib/llvm-16/lib/libLLVMSystemZDesc.a /usr/lib/llvm-16/lib/libLLVMSystemZInfo.a /usr/lib/llvm-16/lib/libLLVMSparcDisassembler.a /usr/lib/llvm-16/lib/libLLVMSparcAsmParser.a /usr/lib/llvm-16/lib/libLLVMSparcCodeGen.a /usr/lib/llvm-16/lib/libLLVMSparcDesc.a /usr/lib/llvm-16/lib/libLLVMSparcInfo.a /usr/lib/llvm-16/lib/libLLVMRISCVDisassembler.a /usr/lib/llvm-16/lib/libLLVMRISCVAsmParser.a /usr/lib/llvm-16/lib/libLLVMRISCVCodeGen.a /usr/lib/llvm-16/lib/libLLVMRISCVDesc.a /usr/lib/llvm-16/lib/libLLVMRISCVInfo.a /usr/lib/llvm-16/lib/libLLVMPowerPCDisassembler.a /usr/lib/llvm-16/lib/libLLVMPowerPCAsmParser.a /usr/lib/llvm-16/lib/libLLVMPowerPCCodeGen.a /usr/lib/llvm-16/lib/libLLVMPowerPCDesc.a /usr/lib/llvm-16/lib/libLLVMPowerPCInfo.a /usr/lib/llvm-16/lib/libLLVMNVPTXCodeGen.a /usr/lib/llvm-16/lib/libLLVMNVPTXDesc.a /usr/lib/llvm-16/lib/libLLVMNVPTXInfo.a /usr/lib/llvm-16/lib/libLLVMMSP430Disassembler.a /usr/lib/llvm-16/lib/libLLVMMSP430AsmParser.a /usr/lib/llvm-16/lib/libLLVMMSP430CodeGen.a /usr/lib/llvm-16/lib/libLLVMMSP430Desc.a /usr/lib/llvm-16/lib/libLLVMMSP430Info.a /usr/lib/llvm-16/lib/libLLVMMipsDisassembler.a /usr/lib/llvm-16/lib/libLLVMMipsAsmParser.a /usr/lib/llvm-16/lib/libLLVMMipsCodeGen.a /usr/lib/llvm-16/lib/libLLVMMipsDesc.a /usr/lib/llvm-16/lib/libLLVMMipsInfo.a /usr/lib/llvm-16/lib/libLLVMLanaiDisassembler.a /usr/lib/llvm-16/lib/libLLVMLanaiCodeGen.a /usr/lib/llvm-16/lib/libLLVMLanaiAsmParser.a /usr/lib/llvm-16/lib/libLLVMLanaiDesc.a /usr/lib/llvm-16/lib/libLLVMLanaiInfo.a /usr/lib/llvm-16/lib/libLLVMHexagonDisassembler.a /usr/lib/llvm-16/lib/libLLVMHexagonCodeGen.a /usr/lib/llvm-16/lib/libLLVMHexagonAsmParser.a /usr/lib/llvm-16/lib/libLLVMHexagonDesc.a /usr/lib/llvm-16/lib/libLLVMHexagonInfo.a /usr/lib/llvm-16/lib/libLLVMBPFDisassembler.a /usr/lib/llvm-16/lib/libLLVMBPFAsmParser.a /usr/lib/llvm-16/lib/libLLVMBPFCodeGen.a /usr/lib/llvm-16/lib/libLLVMBPFDesc.a /usr/lib/llvm-16/lib/libLLVMBPFInfo.a /usr/lib/llvm-16/lib/libLLVMAVRDisassembler.a /usr/lib/llvm-16/lib/libLLVMAVRAsmParser.a /usr/lib/llvm-16/lib/libLLVMAVRCodeGen.a /usr/lib/llvm-16/lib/libLLVMAVRDesc.a /usr/lib/llvm-16/lib/libLLVMAVRInfo.a /usr/lib/llvm-16/lib/libLLVMARMDisassembler.a /usr/lib/llvm-16/lib/libLLVMARMAsmParser.a /usr/lib/llvm-16/lib/libLLVMARMCodeGen.a /usr/lib/llvm-16/lib/libLLVMARMDesc.a /usr/lib/llvm-16/lib/libLLVMARMUtils.a /usr/lib/llvm-16/lib/libLLVMARMInfo.a /usr/lib/llvm-16/lib/libLLVMAMDGPUTargetMCA.a /usr/lib/llvm-16/lib/libLLVMAMDGPUDisassembler.a /usr/lib/llvm-16/lib/libLLVMAMDGPUAsmParser.a /usr/lib/llvm-16/lib/libLLVMAMDGPUCodeGen.a /usr/lib/llvm-16/lib/libLLVMAMDGPUDesc.a /usr/lib/llvm-16/lib/libLLVMAMDGPUUtils.a /usr/lib/llvm-16/lib/libLLVMAMDGPUInfo.a /usr/lib/llvm-16/lib/libLLVMAArch64Disassembler.a /usr/lib/llvm-16/lib/libLLVMAArch64AsmParser.a /usr/lib/llvm-16/lib/libLLVMAArch64CodeGen.a /usr/lib/llvm-16/lib/libLLVMAArch64Desc.a /usr/lib/llvm-16/lib/libLLVMAArch64Utils.a /usr/lib/llvm-16/lib/libLLVMAArch64Info.a /usr/lib/llvm-16/lib/libLLVMOrcJIT.a /usr/lib/llvm-16/lib/libLLVMWindowsDriver.a /usr/lib/llvm-16/lib/libLLVMMCJIT.a /usr/lib/llvm-16/lib/libLLVMJITLink.a /usr/lib/llvm-16/lib/libLLVMInterpreter.a /usr/lib/llvm-16/lib/libLLVMExecutionEngine.a /usr/lib/llvm-16/lib/libLLVMRuntimeDyld.a /usr/lib/llvm-16/lib/libLLVMOrcTargetProcess.a /usr/lib/llvm-16/lib/libLLVMOrcShared.a /usr/lib/llvm-16/lib/libLLVMDWP.a /usr/lib/llvm-16/lib/libLLVMDebugInfoGSYM.a /usr/lib/llvm-16/lib/libLLVMOption.a /usr/lib/llvm-16/lib/libLLVMObjectYAML.a /usr/lib/llvm-16/lib/libLLVMObjCopy.a /usr/lib/llvm-16/lib/libLLVMMCA.a /usr/lib/llvm-16/lib/libLLVMMCDisassembler.a /usr/lib/llvm-16/lib/libLLVMLTO.a /usr/lib/llvm-16/lib/libLLVMRemoteCachingService.a /usr/lib/llvm-16/lib/libLLVMRemoteNullService.a /usr/lib/llvm-16/lib/libLLVMCFGuard.a /usr/lib/llvm-16/lib/libLLVMFrontendOpenACC.a /usr/lib/llvm-16/lib/libLLVMExtensions.a /usr/lib/llvm-16/lib/libPolly.a /usr/lib/llvm-16/lib/libPollyISL.a /usr/lib/llvm-16/lib/libLLVMPasses.a /usr/lib/llvm-16/lib/libLLVMObjCARCOpts.a /usr/lib/llvm-16/lib/libLLVMCoroutines.a /usr/lib/llvm-16/lib/libLLVMipo.a /usr/lib/llvm-16/lib/libLLVMInstrumentation.a /usr/lib/llvm-16/lib/libLLVMVectorize.a /usr/lib/llvm-16/lib/libLLVMLinker.a /usr/lib/llvm-16/lib/libLLVMFrontendOpenMP.a /usr/lib/llvm-16/lib/libLLVMDWARFLinker.a /usr/lib/llvm-16/lib/libLLVMGlobalISel.a /usr/lib/llvm-16/lib/libLLVMMIRParser.a /usr/lib/llvm-16/lib/libLLVMAsmPrinter.a /usr/lib/llvm-16/lib/libLLVMSelectionDAG.a /usr/lib/llvm-16/lib/libLLVMCodeGen.a /usr/lib/llvm-16/lib/libLLVMCAS.a /usr/lib/llvm-16/lib/libLLVMInterfaceStub.a /usr/lib/llvm-16/lib/libLLVMFileCheck.a /usr/lib/llvm-16/lib/libLLVMFuzzMutate.a /usr/lib/llvm-16/lib/libLLVMTarget.a /usr/lib/llvm-16/lib/libLLVMScalarOpts.a /usr/lib/llvm-16/lib/libLLVMInstCombine.a /usr/lib/llvm-16/lib/libLLVMAggressiveInstCombine.a /usr/lib/llvm-16/lib/libLLVMTransformUtils.a /usr/lib/llvm-16/lib/libLLVMBitWriter.a /usr/lib/llvm-16/lib/libLLVMAnalysis.a /usr/lib/llvm-16/lib/libLLVMProfileData.a /usr/lib/llvm-16/lib/libLLVMSymbolize.a /usr/lib/llvm-16/lib/libLLVMDebugInfoPDB.a /usr/lib/llvm-16/lib/libLLVMDebugInfoMSF.a /usr/lib/llvm-16/lib/libLLVMDebugInfoDWARF.a /usr/lib/llvm-16/lib/libLLVMObject.a /usr/lib/llvm-16/lib/libLLVMTextAPI.a /usr/lib/llvm-16/lib/libLLVMMCParser.a /usr/lib/llvm-16/lib/libLLVMIRReader.a /usr/lib/llvm-16/lib/libLLVMAsmParser.a /usr/lib/llvm-16/lib/libLLVMMC.a /usr/lib/llvm-16/lib/libLLVMDebugInfoCodeView.a /usr/lib/llvm-16/lib/libLLVMBitReader.a /usr/lib/llvm-16/lib/libLLVMFuzzerCLI.a /usr/lib/llvm-16/lib/libLLVMCore.a /usr/lib/llvm-16/lib/libLLVMRemarks.a /usr/lib/llvm-16/lib/libLLVMBitstreamReader.a /usr/lib/llvm-16/lib/libLLVMBinaryFormat.a /usr/lib/llvm-16/lib/libLLVMTableGen.a /usr/lib/llvm-16/lib/libLLVMSupport.a /usr/lib/llvm-16/lib/libLLVMDemangle.a"
++            LIBFILES_SHARED="/usr/lib/llvm-16/lib/libLLVM-16.dylib"
++            PENDING_LIB="files"
++            shift
++            ;;
++        --libnames)
++            LIBNAMES_STATIC="libLLVMWindowsManifest.a libLLVMXRay.a libLLVMLibDriver.a libLLVMDlltoolDriver.a libLLVMCoverage.a libLLVMLineEditor.a libLLVMXCoreDisassembler.a libLLVMXCoreCodeGen.a libLLVMXCoreDesc.a libLLVMXCoreInfo.a libLLVMX86TargetMCA.a libLLVMX86Disassembler.a libLLVMX86AsmParser.a libLLVMX86CodeGen.a libLLVMX86Desc.a libLLVMX86Info.a libLLVMWebAssemblyDisassembler.a libLLVMWebAssemblyAsmParser.a libLLVMWebAssemblyCodeGen.a libLLVMWebAssemblyDesc.a libLLVMWebAssemblyUtils.a libLLVMWebAssemblyInfo.a libLLVMVEDisassembler.a libLLVMVEAsmParser.a libLLVMVECodeGen.a libLLVMVEDesc.a libLLVMVEInfo.a libLLVMSystemZDisassembler.a libLLVMSystemZAsmParser.a libLLVMSystemZCodeGen.a libLLVMSystemZDesc.a libLLVMSystemZInfo.a libLLVMSparcDisassembler.a libLLVMSparcAsmParser.a libLLVMSparcCodeGen.a libLLVMSparcDesc.a libLLVMSparcInfo.a libLLVMRISCVDisassembler.a libLLVMRISCVAsmParser.a libLLVMRISCVCodeGen.a libLLVMRISCVDesc.a libLLVMRISCVInfo.a libLLVMPowerPCDisassembler.a libLLVMPowerPCAsmParser.a libLLVMPowerPCCodeGen.a libLLVMPowerPCDesc.a libLLVMPowerPCInfo.a libLLVMNVPTXCodeGen.a libLLVMNVPTXDesc.a libLLVMNVPTXInfo.a libLLVMMSP430Disassembler.a libLLVMMSP430AsmParser.a libLLVMMSP430CodeGen.a libLLVMMSP430Desc.a libLLVMMSP430Info.a libLLVMMipsDisassembler.a libLLVMMipsAsmParser.a libLLVMMipsCodeGen.a libLLVMMipsDesc.a libLLVMMipsInfo.a libLLVMLanaiDisassembler.a libLLVMLanaiCodeGen.a libLLVMLanaiAsmParser.a libLLVMLanaiDesc.a libLLVMLanaiInfo.a libLLVMHexagonDisassembler.a libLLVMHexagonCodeGen.a libLLVMHexagonAsmParser.a libLLVMHexagonDesc.a libLLVMHexagonInfo.a libLLVMBPFDisassembler.a libLLVMBPFAsmParser.a libLLVMBPFCodeGen.a libLLVMBPFDesc.a libLLVMBPFInfo.a libLLVMAVRDisassembler.a libLLVMAVRAsmParser.a libLLVMAVRCodeGen.a libLLVMAVRDesc.a libLLVMAVRInfo.a libLLVMARMDisassembler.a libLLVMARMAsmParser.a libLLVMARMCodeGen.a libLLVMARMDesc.a libLLVMARMUtils.a libLLVMARMInfo.a libLLVMAMDGPUTargetMCA.a libLLVMAMDGPUDisassembler.a libLLVMAMDGPUAsmParser.a libLLVMAMDGPUCodeGen.a libLLVMAMDGPUDesc.a libLLVMAMDGPUUtils.a libLLVMAMDGPUInfo.a libLLVMAArch64Disassembler.a libLLVMAArch64AsmParser.a libLLVMAArch64CodeGen.a libLLVMAArch64Desc.a libLLVMAArch64Utils.a libLLVMAArch64Info.a libLLVMOrcJIT.a libLLVMWindowsDriver.a libLLVMMCJIT.a libLLVMJITLink.a libLLVMInterpreter.a libLLVMExecutionEngine.a libLLVMRuntimeDyld.a libLLVMOrcTargetProcess.a libLLVMOrcShared.a libLLVMDWP.a libLLVMDebugInfoGSYM.a libLLVMOption.a libLLVMObjectYAML.a libLLVMObjCopy.a libLLVMMCA.a libLLVMMCDisassembler.a libLLVMLTO.a libLLVMRemoteCachingService.a libLLVMRemoteNullService.a libLLVMCFGuard.a libLLVMFrontendOpenACC.a libLLVMExtensions.a libPolly.a libPollyISL.a libLLVMPasses.a libLLVMObjCARCOpts.a libLLVMCoroutines.a libLLVMipo.a libLLVMInstrumentation.a libLLVMVectorize.a libLLVMLinker.a libLLVMFrontendOpenMP.a libLLVMDWARFLinker.a libLLVMGlobalISel.a libLLVMMIRParser.a libLLVMAsmPrinter.a libLLVMSelectionDAG.a libLLVMCodeGen.a libLLVMCAS.a libLLVMInterfaceStub.a libLLVMFileCheck.a libLLVMFuzzMutate.a libLLVMTarget.a libLLVMScalarOpts.a libLLVMInstCombine.a libLLVMAggressiveInstCombine.a libLLVMTransformUtils.a libLLVMBitWriter.a libLLVMAnalysis.a libLLVMProfileData.a libLLVMSymbolize.a libLLVMDebugInfoPDB.a libLLVMDebugInfoMSF.a libLLVMDebugInfoDWARF.a libLLVMObject.a libLLVMTextAPI.a libLLVMMCParser.a libLLVMIRReader.a libLLVMAsmParser.a libLLVMMC.a libLLVMDebugInfoCodeView.a libLLVMBitReader.a libLLVMFuzzerCLI.a libLLVMCore.a libLLVMRemarks.a libLLVMBitstreamReader.a libLLVMBinaryFormat.a libLLVMTableGen.a libLLVMSupport.a libLLVMDemangle.a"
++            LIBNAMES_SHARED="libLLVM-16.dylib"
++            PENDING_LIB="names"
++            shift
++            ;;
++        --libs)
++            LIBS_STATIC="-lLLVMWindowsManifest -lLLVMXRay -lLLVMLibDriver -lLLVMDlltoolDriver -lLLVMCoverage -lLLVMLineEditor -lLLVMXCoreDisassembler -lLLVMXCoreCodeGen -lLLVMXCoreDesc -lLLVMXCoreInfo -lLLVMX86TargetMCA -lLLVMX86Disassembler -lLLVMX86AsmParser -lLLVMX86CodeGen -lLLVMX86Desc -lLLVMX86Info -lLLVMWebAssemblyDisassembler -lLLVMWebAssemblyAsmParser -lLLVMWebAssemblyCodeGen -lLLVMWebAssemblyDesc -lLLVMWebAssemblyUtils -lLLVMWebAssemblyInfo -lLLVMVEDisassembler -lLLVMVEAsmParser -lLLVMVECodeGen -lLLVMVEDesc -lLLVMVEInfo -lLLVMSystemZDisassembler -lLLVMSystemZAsmParser -lLLVMSystemZCodeGen -lLLVMSystemZDesc -lLLVMSystemZInfo -lLLVMSparcDisassembler -lLLVMSparcAsmParser -lLLVMSparcCodeGen -lLLVMSparcDesc -lLLVMSparcInfo -lLLVMRISCVDisassembler -lLLVMRISCVAsmParser -lLLVMRISCVCodeGen -lLLVMRISCVDesc -lLLVMRISCVInfo -lLLVMPowerPCDisassembler -lLLVMPowerPCAsmParser -lLLVMPowerPCCodeGen -lLLVMPowerPCDesc -lLLVMPowerPCInfo -lLLVMNVPTXCodeGen -lLLVMNVPTXDesc -lLLVMNVPTXInfo -lLLVMMSP430Disassembler -lLLVMMSP430AsmParser -lLLVMMSP430CodeGen -lLLVMMSP430Desc -lLLVMMSP430Info -lLLVMMipsDisassembler -lLLVMMipsAsmParser -lLLVMMipsCodeGen -lLLVMMipsDesc -lLLVMMipsInfo -lLLVMLanaiDisassembler -lLLVMLanaiCodeGen -lLLVMLanaiAsmParser -lLLVMLanaiDesc -lLLVMLanaiInfo -lLLVMHexagonDisassembler -lLLVMHexagonCodeGen -lLLVMHexagonAsmParser -lLLVMHexagonDesc -lLLVMHexagonInfo -lLLVMBPFDisassembler -lLLVMBPFAsmParser -lLLVMBPFCodeGen -lLLVMBPFDesc -lLLVMBPFInfo -lLLVMAVRDisassembler -lLLVMAVRAsmParser -lLLVMAVRCodeGen -lLLVMAVRDesc -lLLVMAVRInfo -lLLVMARMDisassembler -lLLVMARMAsmParser -lLLVMARMCodeGen -lLLVMARMDesc -lLLVMARMUtils -lLLVMARMInfo -lLLVMAMDGPUTargetMCA -lLLVMAMDGPUDisassembler -lLLVMAMDGPUAsmParser -lLLVMAMDGPUCodeGen -lLLVMAMDGPUDesc -lLLVMAMDGPUUtils -lLLVMAMDGPUInfo -lLLVMAArch64Disassembler -lLLVMAArch64AsmParser -lLLVMAArch64CodeGen -lLLVMAArch64Desc -lLLVMAArch64Utils -lLLVMAArch64Info -lLLVMOrcJIT -lLLVMWindowsDriver -lLLVMMCJIT -lLLVMJITLink -lLLVMInterpreter -lLLVMExecutionEngine -lLLVMRuntimeDyld -lLLVMOrcTargetProcess -lLLVMOrcShared -lLLVMDWP -lLLVMDebugInfoGSYM -lLLVMOption -lLLVMObjectYAML -lLLVMObjCopy -lLLVMMCA -lLLVMMCDisassembler -lLLVMLTO -lLLVMRemoteCachingService -lLLVMRemoteNullService -lLLVMCFGuard -lLLVMFrontendOpenACC -lLLVMExtensions -lPolly -lPollyISL -lLLVMPasses -lLLVMObjCARCOpts -lLLVMCoroutines -lLLVMipo -lLLVMInstrumentation -lLLVMVectorize -lLLVMLinker -lLLVMFrontendOpenMP -lLLVMDWARFLinker -lLLVMGlobalISel -lLLVMMIRParser -lLLVMAsmPrinter -lLLVMSelectionDAG -lLLVMCodeGen -lLLVMCAS -lLLVMInterfaceStub -lLLVMFileCheck -lLLVMFuzzMutate -lLLVMTarget -lLLVMScalarOpts -lLLVMInstCombine -lLLVMAggressiveInstCombine -lLLVMTransformUtils -lLLVMBitWriter -lLLVMAnalysis -lLLVMProfileData -lLLVMSymbolize -lLLVMDebugInfoPDB -lLLVMDebugInfoMSF -lLLVMDebugInfoDWARF -lLLVMObject -lLLVMTextAPI -lLLVMMCParser -lLLVMIRReader -lLLVMAsmParser -lLLVMMC -lLLVMDebugInfoCodeView -lLLVMBitReader -lLLVMFuzzerCLI -lLLVMCore -lLLVMRemarks -lLLVMBitstreamReader -lLLVMBinaryFormat -lLLVMTableGen -lLLVMSupport -lLLVMDemangle"
++            LIBS_SHARED="-lLLVM-16"
++            PENDING_LIB="s"
++            shift
++            ;;
++        --link-shared)
++            LINK_SHARED=1
++            SHARED_MODE=shared
++            shift
++            ;;
++        --link-static)
++            LINK_SHARED=0
++            SHARED_MODE=static
++            shift
++            ;;
++        --obj-root|--prefix)
++            PENDING_ECHO="/usr/lib/llvm-16"
++            shift
++            ;;
++        --shared-mode)
++            PENDING_ECHO="$SHARED_MODE"
++            shift
++            ;;
++        --srcroot)
++            PENDING_ECHO="/buildroot/Apple-LLVM/llvm-project/llvm"
++            shift
++            ;;
++        --system-libs)
++            # There is an existing bug which causing llvm returns "libz3.dylib" instead of -lz3
++            # I didn't take time to investigate this
++            PENDING_ECHO="-lm -lz3 -lz -lzstd -lcurses -lxml2"
++            if [ $LINK_SHARED == 1]; then PENDING_ECHO=""; fi
++            shift
++            ;;
++        --targets-built)
++            PENDING_ECHO="AArch64 AMDGPU ARM AVR BPF Hexagon Lanai Mips MSP430 NVPTX PowerPC RISCV Sparc SystemZ VE WebAssembly X86 XCore"
++            shift
++            ;;
++        *)  # For any other option, just ignore
++            shift
++            ;;
++    esac
++done
++
++if [[ $LINK_SHARED == 1 ]]; then
++    if [[ $PENDING_LIB == "files" ]]; then PENDING_ECHO="$LIBFILES_SHARED"; fi
++    if [[ $PENDING_LIB == "names" ]]; then PENDING_ECHO="$LIBNAMES_SHARED"; fi
++    if [[ $PENDING_LIB == "s" ]]; then PENDING_ECHO="$LIBS_SHARED"; fi
++else
++    if [[ $PENDING_LIB == "files" ]]; then PENDING_ECHO="$LIBFILES_STATIC"; fi
++    if [[ $PENDING_LIB == "names" ]]; then PENDING_ECHO="$LIBNAMES_STATIC"; fi
++    if [[ $PENDING_LIB == "s" ]]; then PENDING_ECHO="$LIBS_STATIC"; fi
++fi
++
++echo "$PENDING_ECHO"
