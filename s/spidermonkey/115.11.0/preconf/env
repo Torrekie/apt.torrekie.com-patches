@@ -1,0 +1,6 @@
+STRIP=/usr/bin/true
+SHELL=/bin/bash
+PYTHON3=python3
+MOZ_CONFIGURE_TRACE=yes
+CARGO_HOME=$(srcroot)/obj-build/cargo-home
+BUILDDIR=$(srcroot)/obj-build

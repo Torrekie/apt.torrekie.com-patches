@@ -1,0 +1,1545 @@
+--- ./firefox-115.11.0/build/moz.configure/pkg.configure	1715703530.000000000
++++ ./build/moz.configure/pkg.configure	1719489039.549044665
+@@ -16,7 +16,7 @@ pkg_config = check_prog(
+     bootstrap=depends(when=target_sysroot.bootstrapped)(lambda: "pkgconf"),
+     allow_missing=True,
+     when=compile_environment
+-    & depends(target.os)(lambda os: os not in ("WINNT", "OSX", "Android")),
++    & depends(target.os)(lambda os: os not in ("WINNT", "Android")),
+ )
+ 
+ 
+--- ./firefox-115.11.0/build/moz.configure/rust.configure	1719659590.047592298
++++ ./build/moz.configure/rust.configure	1719489359.876010947
+@@ -486,33 +486,7 @@ def assert_rust_compile(host_or_target,
+ def rust_host_triple(
+     rustc, host, compiler_info, rustc_host, rust_supported_targets, arm_target
+ ):
+-    rustc_target = detect_rustc_target(
+-        host, compiler_info, arm_target, rust_supported_targets
+-    )
+-    if rustc_target != rustc_host:
+-        if host.alias == rustc_target:
+-            configure_host = host.alias
+-        else:
+-            configure_host = "{}/{}".format(host.alias, rustc_target)
+-        die(
+-            dedent(
+-                """\
+-        The rust compiler host ({rustc}) is not suitable for the configure host ({configure}).
+-
+-        You can solve this by:
+-        * Set your configure host to match the rust compiler host by editing your
+-        mozconfig and adding "ac_add_options --host={rustc}".
+-        * Or, install the rust toolchain for {configure}, if supported, by running
+-        "rustup default stable-{rustc_target}"
+-        """.format(
+-                    rustc=rustc_host,
+-                    configure=configure_host,
+-                    rustc_target=rustc_target,
+-                )
+-            )
+-        )
+-    assert_rust_compile(host, rustc_target, rustc)
+-    return rustc_target
++    return "aarch64-apple-ios"
+ 
+ 
+ @depends(
+@@ -522,11 +496,7 @@ def rust_host_triple(
+ def rust_target_triple(
+     rustc, target, compiler_info, rust_supported_targets, arm_target
+ ):
+-    rustc_target = detect_rustc_target(
+-        target, compiler_info, arm_target, rust_supported_targets
+-    )
+-    assert_rust_compile(target, rustc_target, rustc)
+-    return rustc_target
++    return "aarch64-apple-ios"
+ 
+ 
+ set_config("RUST_TARGET", rust_target_triple)
+--- ./firefox-115.11.0/build/moz.configure/toolchain.configure	1715703530.000000000
++++ ./build/moz.configure/toolchain.configure	1719570262.952581243
+@@ -113,7 +113,7 @@ with only_when(host_is_osx | target_is_o
+         if bootstrapped:
+             sdk = [bootstrapped]
+         if sdk:
+-            sdk = sdk[0]
++            return sdk[0]
+             try:
+                 version = get_sdk_version(sdk)
+             except Exception as e:
+@@ -452,35 +452,7 @@ def check_compiler(configure_cache, comp
+     else:
+         toolchain = target.toolchain
+ 
+-    if info.type == "clang":
+-        # Add the target explicitly when the target is aarch64 macosx, because
+-        # the Xcode clang target is named differently, and we need to work around
+-        # https://github.com/rust-lang/rust-bindgen/issues/1871 and
+-        # https://github.com/alexcrichton/cc-rs/issues/542 so we always want
+-        # the target on the command line, even if the compiler would default to
+-        # that.
+-        if info.xcode and target.os == "OSX" and target.cpu == "aarch64":
+-            if "--target=arm64-apple-darwin" not in compiler:
+-                flags.append("--target=arm64-apple-darwin")
+-            has_target = True
+-
+-        elif (
+-            not info.kernel
+-            or info.kernel != target.kernel
+-            or not info.endianness
+-            or info.endianness != target.endianness
+-        ):
+-            flags.append("--target=%s" % toolchain)
+-            has_target = True
+-
+-        # Add target flag when there is an OS mismatch (e.g. building for Android on
+-        # Linux). However, only do this if the target OS is in our whitelist, to
+-        # keep things the same on other platforms.
+-        elif target.os in OS_preprocessor_checks and (
+-            not info.os or info.os != target.os
+-        ):
+-            flags.append("--target=%s" % toolchain)
+-            has_target = True
++    has_target = True
+ 
+     if not has_target and (not info.cpu or info.cpu != target.cpu):
+         same_arch = same_arch_different_bits()
+@@ -1087,7 +1059,7 @@ def sysroot(host_or_target, target_sysro
+             log.info("Using %s sysroot in %s", host_or_target_str, path)
+         return namespace(
+             path=path,
+-            bootstrapped=bool(path and not sysroot_input),
++            bootstrapped=False,
+             stdcxx_version=version,
+         )
+ 
+@@ -1263,8 +1235,6 @@ def compiler(
+                 flags.extend(("-isysroot", sysroot.path))
+             else:
+                 flags.extend(("--sysroot", sysroot.path))
+-        if host_or_target.os == "OSX" and macos_target:
+-            flags.append("-mmacosx-version-min=%s" % macos_target)
+         if provided_compiler:
+             wrapper.extend(provided_compiler.wrapper)
+             flags.extend(provided_compiler.flags)
+--- ./firefox-115.11.0/js/src/threading/posix/PosixThread.cpp	1715703532.000000000
++++ ./js/src/threading/posix/PosixThread.cpp	1719658039.486857944
+@@ -50,6 +50,13 @@ bool Thread::create(void* (*aMain)(void*
+   int r = pthread_attr_init(&attrs);
+   MOZ_RELEASE_ASSERT(!r);
+   if (options_.stackSize()) {
++#ifdef __APPLE__
++    // Torrekie: They won't find any problem before they actually tried on iOS
++    // See implementation of pthread_attr_setstacksize
++    if (options_.stackSize() % 0x1000 == 0) {
++      options_.setStackSize(round_page(options_.stackSize()));
++    }
++#endif
+     r = pthread_attr_setstacksize(&attrs, options_.stackSize());
+     MOZ_RELEASE_ASSERT(!r);
+   }
+--- ./firefox-115.11.0/mozglue/misc/AwakeTimeStamp.cpp	1715703532.000000000
++++ ./mozglue/misc/AwakeTimeStamp.cpp	1717919369.607072322
+@@ -56,6 +56,9 @@ void AwakeTimeStamp::operator-=(const Aw
+ #  include <sys/time.h>
+ #  include <sys/types.h>
+ #  include <mach/mach_time.h>
++#endif
++
++#if defined(__APPLE__) && defined(__MACH__) && defined(CLOCK_UPTIME_RAW)
+ 
+ AwakeTimeStamp AwakeTimeStamp::NowLoRes() {
+   return AwakeTimeStamp(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / kNSperUS);
+--- ./firefox-115.11.0/mozglue/misc/Uptime.cpp	1715703532.000000000
++++ ./mozglue/misc/Uptime.cpp	1717919369.608214633
+@@ -31,7 +31,9 @@ static Maybe<uint64_t> mStartIncludingSu
+ #  include <sys/time.h>
+ #  include <sys/types.h>
+ #  include <mach/mach_time.h>
++#endif
+ 
++#if defined(__APPLE__) && defined(__MACH__) && defined(CLOCK_UPTIME_RAW) && defined(CLOCK_MONOTONIC_RAW)
+ const uint64_t kNSperMS = 1000000;
+ 
+ Maybe<uint64_t> NowExcludingSuspendMs() {
+--- ./firefox-115.11.0/nsprpub/pr/include/md/_darwin.h	1715703532.000000000
++++ ./nsprpub/pr/include/md/_darwin.h	1717919516.236427850
+@@ -61,19 +61,8 @@
+  */
+ #define _PR_GHBA_DISALLOW_V4MAPPED
+ #ifdef __APPLE__
+-#if !defined(MAC_OS_X_VERSION_10_3) || \
+-    MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_3
+-/*
+- * socket(AF_INET6) fails with EPROTONOSUPPORT on Mac OS X 10.1.
+- * IPv6 under OS X 10.2 and below is not complete (see bug 222031).
+- */
+-#define _PR_INET6_PROBE
+-#endif /* DT < 10.3 */
+-#if defined(MAC_OS_X_VERSION_10_2) && \
+-    MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_2
+ /* Mac OS X 10.2 has inet_ntop and inet_pton. */
+ #define _PR_HAVE_INET_NTOP
+-#endif /* DT >= 10.2 */
+ #endif /* __APPLE__ */
+ #define _PR_IPV6_V6ONLY_PROBE
+ /* The IPV6_V6ONLY socket option is not defined on Mac OS X 10.1. */
+--- ./firefox-115.11.0/third_party/rust/audio_thread_priority/Cargo.toml	1715703533.000000000
++++ ./third_party/rust/audio_thread_priority/Cargo.toml	1717930996.869021265
+@@ -45,9 +45,13 @@ optional = true
+ version = "0.2"
+ [target."cfg(target_os = \"macos\")".dependencies.libc]
+ version = "0.2"
++[target."cfg(target_os = \"ios\")".dependencies.libc]
++version = "0.2"
+ 
+ [target."cfg(target_os = \"macos\")".dependencies.mach]
+ version = "0.3"
++[target."cfg(target_os = \"ios\")".dependencies.mach]
++version = "0.3"
+ [target."cfg(target_os = \"windows\")".dependencies.winapi]
+ version = "0.3"
+ features = ["avrt", "errhandlingapi", "minwindef"]
+--- ./firefox-115.11.0/third_party/rust/audio_thread_priority/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/audio_thread_priority/src/lib.rs	1717931011.224771541
+@@ -85,7 +85,7 @@ impl Error for AudioThreadPriorityError
+ }
+ 
+ cfg_if! {
+-    if #[cfg(target_os = "macos")] {
++    if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+         mod rt_mach;
+ #[allow(unused, non_camel_case_types, non_snake_case, non_upper_case_globals)]
+         mod mach_sys;
+--- ./firefox-115.11.0/third_party/rust/audioipc2/src/shm.rs	1715703533.000000000
++++ ./third_party/rust/audioipc2/src/shm.rs	1718003798.435204153
+@@ -160,7 +160,7 @@ mod unix {
+         }
+ 
+         // Try macOS-specific fcntl.
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         {
+             let params = libc::fstore_t {
+                 fst_flags: libc::F_ALLOCATEALL,
+--- ./firefox-115.11.0/third_party/rust/authenticator/Cargo.toml	1715703533.000000000
++++ ./third_party/rust/authenticator/Cargo.toml	1718004126.038421868
+@@ -150,7 +150,7 @@ version = "0.3"
+ [target."cfg(target_os = \"linux\")".dependencies.libudev]
+ version = "^0.2"
+ 
+-[target."cfg(target_os = \"macos\")".dependencies.core-foundation]
++[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.core-foundation]
+ version = "0.9"
+ 
+ [target."cfg(target_os = \"windows\")".dependencies.memoffset]
+--- ./firefox-115.11.0/third_party/rust/authenticator/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/authenticator/src/lib.rs	1718004250.453110797
+@@ -15,7 +15,7 @@ extern crate libudev;
+ #[cfg(any(target_os = "freebsd"))]
+ extern crate devd_rs;
+ 
+-#[cfg(any(target_os = "macos"))]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ extern crate core_foundation;
+ 
+ extern crate libc;
+--- ./firefox-115.11.0/third_party/rust/authenticator/src/transport/mod.rs	1715703533.000000000
++++ ./third_party/rust/authenticator/src/transport/mod.rs	1718004238.780784539
+@@ -46,7 +46,7 @@ pub mod platform;
+ #[path = "openbsd/mod.rs"]
+ pub mod platform;
+ 
+-#[cfg(all(target_os = "macos", not(test)))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(test)))]
+ #[path = "macos/mod.rs"]
+ pub mod platform;
+ 
+@@ -60,6 +60,7 @@ pub mod platform;
+     target_os = "openbsd",
+     target_os = "netbsd",
+     target_os = "macos",
++    target_os = "ios",
+     target_os = "windows",
+     test
+ )))]
+--- ./firefox-115.11.0/third_party/rust/cc/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/cc/src/lib.rs	1719489630.529247415
+@@ -2131,7 +2131,6 @@ impl Build {
+         let sdk_path = self.apple_sdk_root(sdk)?;
+         cmd.args.push("-isysroot".into());
+         cmd.args.push(sdk_path);
+-        cmd.args.push("-fembed-bitcode".into());
+         /*
+          * TODO we probably ultimately want the -fembed-bitcode-marker flag
+          * but can't have it now because of an issue in LLVM:
+--- ./firefox-115.11.0/third_party/rust/clang-sys/build/common.rs	1715703533.000000000
++++ ./third_party/rust/clang-sys/build/common.rs	1717931551.677297995
+@@ -311,7 +311,7 @@ pub fn search_libclang_directories(filen
+     // Determine the `libclang` directory patterns.
+     let directories: Vec<&str> = if target_os!("haiku") {
+         DIRECTORIES_HAIKU.into()
+-    } else if target_os!("linux") || target_os!("freebsd") {
++    } else if target_os!("linux") || target_os!("ios") || target_os!("freebsd") {
+         DIRECTORIES_LINUX.into()
+     } else if target_os!("macos") {
+         DIRECTORIES_MACOS.into()
+--- ./firefox-115.11.0/third_party/rust/clang-sys/build/static.rs	1715703533.000000000
++++ ./third_party/rust/clang-sys/build/static.rs	1717931495.422291782
+@@ -132,7 +132,7 @@ pub fn link() {
+         println!("cargo:rustc-flags=-l ffi -l ncursesw -l c++ -l z");
+     } else if cfg!(any(target_os = "haiku", target_os = "linux")) {
+         println!("cargo:rustc-flags=-l ffi -l ncursesw -l stdc++ -l z");
+-    } else if cfg!(target_os = "macos") {
++    } else if cfg!(any(target_os = "macos", target_os = "ios")) {
+         println!("cargo:rustc-flags=-l ffi -l ncurses -l c++ -l z");
+     }
+ 
+--- ./firefox-115.11.0/third_party/rust/cpufeatures/src/aarch64.rs	1715703533.000000000
++++ ./third_party/rust/cpufeatures/src/aarch64.rs	1717931440.160901855
+@@ -38,7 +38,7 @@ pub fn getauxval_hwcap() -> u64 {
+ }
+ 
+ // MacOS runtime detection of target CPU features using `sysctlbyname`.
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ #[macro_export]
+ #[doc(hidden)]
+ macro_rules! __detect_target_features {
+@@ -98,7 +98,7 @@ pub mod hwcaps {
+ //
+ // See discussion on this issue for more information:
+ // <https://github.com/RustCrypto/utils/issues/378>
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ #[macro_export]
+ #[doc(hidden)]
+ macro_rules! check {
+@@ -118,7 +118,7 @@ macro_rules! check {
+ }
+ 
+ /// macOS helper function for calling `sysctlbyname`.
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ pub unsafe fn sysctlbyname(name: &[u8]) -> bool {
+     assert_eq!(
+         name.last().cloned(),
+@@ -143,29 +143,6 @@ pub unsafe fn sysctlbyname(name: &[u8])
+     value != 0
+ }
+ 
+-// iOS `check!` macro.
+-//
+-// Unfortunately iOS does not provide access to the `sysctl(3)` API which means
+-// we can only return static values for CPU features which  can be assumed to
+-// be present on all Apple ARM64 hardware.
+-//
+-// See discussion on this issue for more information:
+-// <https://github.com/RustCrypto/utils/issues/378>
+-#[cfg(target_os = "ios")]
+-#[macro_export]
+-#[doc(hidden)]
+-macro_rules! check {
+-    ("aes") => {
+-        true
+-    };
+-    ("sha2") => {
+-        true
+-    };
+-    ("sha3") => {
+-        false
+-    };
+-}
+-
+ // On other targets, runtime CPU feature detection is unavailable
+ #[cfg(not(any(
+     target_os = "ios",
+--- ./firefox-115.11.0/third_party/rust/crash-context/Cargo.toml	1715703533.000000000
++++ ./third_party/rust/crash-context/Cargo.toml	1718003430.220927100
+@@ -38,5 +38,5 @@ version = "1.0"
+ [target."cfg(any(target_os = \"linux\", target_os = \"android\"))".dependencies.libc]
+ version = "0.2"
+ 
+-[target."cfg(target_os = \"macos\")".dependencies.mach2]
++[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.mach2]
+ version = "0.4"
+--- ./firefox-115.11.0/third_party/rust/crash-context/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/crash-context/src/lib.rs	1718003441.898700366
+@@ -31,7 +31,7 @@ cfg_if::cfg_if! {
+     } else if #[cfg(target_os = "windows")] {
+         mod windows;
+         pub use windows::*;
+-    } else if #[cfg(target_os = "macos")] {
++    } else if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+         mod mac;
+         pub use mac::*;
+     }
+--- ./firefox-115.11.0/third_party/rust/cty/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/cty/src/lib.rs	1718003836.647552966
+@@ -16,7 +16,7 @@ pub use od::*;
+ // PWD = Pointer Width Dependent
+ pub use pwd::*;
+ 
+-#[cfg(any(all(target_arch = "aarch64", not(target_os = "macos")),
++#[cfg(any(all(target_arch = "aarch64", not(any(target_os = "macos", target_os = "ios"))),
+           target_arch = "arm",
+           target_arch = "asmjs",
+           target_arch = "wasm32",
+@@ -35,7 +35,7 @@ mod ad {
+ 
+ // TODO: Once https://github.com/rust-lang/rfcs/pull/2992 lands,
+ // this should be extended to cover `aarch64-apple-ios-macabi`.
+-#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
++#[cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "ios")))]
+ mod ad {
+     pub type c_char = ::c_schar;
+ 
+--- ./firefox-115.11.0/third_party/rust/cubeb-sys/libcubeb/src/cubeb_aaudio.cpp	1715703533.000000000
++++ ./third_party/rust/cubeb-sys/libcubeb/src/cubeb_aaudio.cpp	1718005834.372926004
+@@ -1471,7 +1471,11 @@ aaudio_init(cubeb ** context, char const
+   // load api
+   void * libaaudio = NULL;
+ #ifndef DISABLE_LIBAAUDIO_DLOPEN
++#ifndef __APPLE__
+   libaaudio = dlopen("libaaudio.so", RTLD_NOW);
++#else
++  libaaudio = dlopen("/usr/lib/libaaudio.dylib", RTLD_NOW);
++#endif
+   if (!libaaudio) {
+     return CUBEB_ERROR;
+   }
+--- ./firefox-115.11.0/third_party/rust/cubeb-sys/libcubeb/src/cubeb_alsa.c	1715703533.000000000
++++ ./third_party/rust/cubeb-sys/libcubeb/src/cubeb_alsa.c	1718006015.927698486
+@@ -834,9 +834,17 @@ alsa_init(cubeb ** context, char const *
+   *context = NULL;
+ 
+ #ifndef DISABLE_LIBASOUND_DLOPEN
++#ifndef __APPLE__
+   libasound = dlopen("libasound.so.2", RTLD_LAZY);
++#else
++  libasound = dlopen("/usr/lib/libasound.2.dylib", RTLD_LAZY);
++#endif
+   if (!libasound) {
++#ifndef __APPLE__
+     libasound = dlopen("libasound.so", RTLD_LAZY);
++#else
++    libasound = dlopen("/usr/lib/libasound.dylib", RTLD_LAZY);
++#endif
+     if (!libasound) {
+       return CUBEB_ERROR;
+     }
+--- ./firefox-115.11.0/third_party/rust/cubeb-sys/libcubeb/src/cubeb_jack.cpp	1715703533.000000000
++++ ./third_party/rust/cubeb-sys/libcubeb/src/cubeb_jack.cpp	1718005950.927368036
+@@ -244,7 +244,7 @@ load_jack_lib(cubeb * context)
+ #ifndef DISABLE_LIBJACK_DLOPEN
+ #ifdef __APPLE__
+   context->libjack = dlopen("libjack.0.dylib", RTLD_LAZY);
+-  context->libjack = dlopen("/usr/local/lib/libjack.0.dylib", RTLD_LAZY);
++  context->libjack = dlopen("/usr/lib/libjack.0.dylib", RTLD_LAZY);
+ #elif defined(__WIN32__)
+ #ifdef _WIN64
+   context->libjack = LoadLibrary("libjack64.dll");
+--- ./firefox-115.11.0/third_party/rust/cubeb-sys/libcubeb/src/cubeb_pulse.c	1715703533.000000000
++++ ./third_party/rust/cubeb-sys/libcubeb/src/cubeb_pulse.c	1718006069.689419047
+@@ -655,9 +655,17 @@ pulse_init(cubeb ** context, char const
+   *context = NULL;
+ 
+ #ifndef DISABLE_LIBPULSE_DLOPEN
++#ifndef __APPLE__
+   libpulse = dlopen("libpulse.so.0", RTLD_LAZY);
++#else
++  libpulse = dlopen("/usr/lib/libpulse.0.dylib", RTLD_LAZY);
++#endif
+   if (!libpulse) {
++#ifndef __APPLE__
+     libpulse = dlopen("libpulse.so", RTLD_LAZY);
++#else
++    libpulse = dlopen("/usr/lib/libpulse.dylib", RTLD_LAZY);
++#endif
+     if (!libpulse) {
+       return CUBEB_ERROR;
+     }
+--- ./firefox-115.11.0/third_party/rust/cubeb-sys/libcubeb/src/cubeb_sndio.c	1715703533.000000000
++++ ./third_party/rust/cubeb-sys/libcubeb/src/cubeb_sndio.c	1718005921.313259664
+@@ -319,11 +319,19 @@ sndio_init(cubeb ** context, char const
+   assert(context);
+ 
+ #ifndef DISABLE_LIBSNDIO_DLOPEN
++#ifndef __APPLE__
+   libsndio = dlopen("libsndio.so.7.0", RTLD_LAZY);
++#else
++  libsndio = dlopen("/usr/lib/libsndio.7.0.dylib", RTLD_LAZY);
++#endif
+   if (!libsndio) {
++#ifndef __APPLE__
+     libsndio = dlopen("libsndio.so", RTLD_LAZY);
++#else
++    libsndio = dlopen("/usr/lib/libsndio.dylib", RTLD_LAZY);
++#endif
+     if (!libsndio) {
+-      DPR("sndio_init(%s) failed dlopen(libsndio.so)\n", context_name);
++      DPR("sndio_init(%s) failed dlopen(libsndio)\n", context_name);
+       return CUBEB_ERROR;
+     }
+   }
+--- ./firefox-115.11.0/third_party/rust/dirs-sys/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/dirs-sys/src/lib.rs	1718004459.089750273
+@@ -34,11 +34,11 @@ pub fn home_dir() -> Option<PathBuf> {
+         .or_else(|| unsafe { fallback() })
+         .map(PathBuf::from);
+ 
+-    #[cfg(any(target_os = "android", target_os = "ios", target_os = "emscripten"))]
++    #[cfg(any(target_os = "android", target_os = "emscripten"))]
+     unsafe fn fallback() -> Option<OsString> {
+         None
+     }
+-    #[cfg(not(any(target_os = "android", target_os = "ios", target_os = "emscripten")))]
++    #[cfg(not(any(target_os = "android", target_os = "emscripten")))]
+     unsafe fn fallback() -> Option<OsString> {
+         let amt = match libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) {
+             n if n < 0 => 512 as usize,
+--- ./firefox-115.11.0/third_party/rust/fluent-testing/resources/browser/en-US/browser/browserContext.ftl	1715703533.000000000
++++ ./third_party/rust/fluent-testing/resources/browser/en-US/browser/browserContext.ftl	1718004084.701520150
+@@ -4,6 +4,7 @@
+ 
+ navbar-tooltip-instruction =
+     .value = { PLATFORM() ->
++        [ios] Pull down to show history
+         [macos] Pull down to show history
+        *[other] Right-click or pull down to show history
+     }
+--- ./firefox-115.11.0/third_party/rust/fluent-testing/resources/browser/en-US/browser/preferences/colors.ftl	1715703533.000000000
++++ ./third_party/rust/fluent-testing/resources/browser/en-US/browser/preferences/colors.ftl	1718003999.464804382
+@@ -6,6 +6,7 @@ colors-window =
+     .title = Colors
+     .style =
+         { PLATFORM() ->
++            [ios] width: 41em
+             [macos] width: 41em
+            *[other] width: 38em
+         }
+--- ./firefox-115.11.0/third_party/rust/fluent-testing/resources/browser/en-US/browser/preferences/connection.ftl	1715703533.000000000
++++ ./third_party/rust/fluent-testing/resources/browser/en-US/browser/preferences/connection.ftl	1718004011.752958686
+@@ -6,6 +6,7 @@ connection-window =
+     .title = Connection Settings
+     .style =
+         { PLATFORM() ->
++            [ios] width: 44em
+             [macos] width: 44em
+            *[other] width: 49em
+         }
+--- ./firefox-115.11.0/third_party/rust/fluent-testing/resources/browser/en-US/browser/preferences/preferences.ftl	1715703533.000000000
++++ ./third_party/rust/fluent-testing/resources/browser/en-US/browser/preferences/preferences.ftl	1718004051.386264520
+@@ -313,11 +313,13 @@ download-save-to =
+ download-choose-folder =
+     .label =
+         { PLATFORM() ->
++            [ios] Choose…
+             [macos] Choose…
+            *[other] Browse…
+         }
+     .accesskey =
+         { PLATFORM() ->
++            [ios] e
+             [macos] e
+            *[other] o
+         }
+@@ -360,6 +362,7 @@ applications-use-app-default =
+ applications-use-os-default =
+     .label =
+         { PLATFORM() ->
++            [ios] Use iOS default application
+             [macos] Use macOS default application
+             [windows] Use Windows default application
+            *[other] Use system default application
+--- ./firefox-115.11.0/third_party/rust/fluent-testing/resources/browser/pl/browser/browserContext.ftl	1715703533.000000000
++++ ./third_party/rust/fluent-testing/resources/browser/pl/browser/browserContext.ftl	1718003986.705310783
+@@ -5,6 +5,7 @@
+ navbar-tooltip-instruction =
+     .value =
+         { PLATFORM() ->
++            [ios] Rozwiń, by wyświetlić historię
+             [macos] Rozwiń, by wyświetlić historię
+            *[other] Kliknij prawym przyciskiem lub rozwiń, by wyświetlić historię
+         }
+--- ./firefox-115.11.0/third_party/rust/fluent-testing/resources/browser/pl/browser/downloads.ftl	1715703533.000000000
++++ ./third_party/rust/fluent-testing/resources/browser/pl/browser/downloads.ftl	1718003974.140875959
+@@ -51,6 +51,7 @@ downloads-cmd-always-use-system-default
+ downloads-cmd-show-button =
+     .tooltiptext =
+         { PLATFORM() ->
++            [ios] Pokaż w Finderze
+             [macos] Pokaż w Finderze
+            *[other] Otwórz folder nadrzędny
+         }
+@@ -58,12 +59,14 @@ downloads-cmd-show-button =
+ downloads-cmd-show-panel =
+     .aria-label =
+         { PLATFORM() ->
++            [ios] Pokaż w Finderze
+             [macos] Pokaż w Finderze
+            *[other] Otwórz folder nadrzędny
+         }
+ downloads-cmd-show-description =
+     .value =
+         { PLATFORM() ->
++            [ios] Pokaż w Finderze
+             [macos] Pokaż w Finderze
+            *[other] Otwórz folder nadrzędny
+         }
+--- ./firefox-115.11.0/third_party/rust/fluent-testing/resources/browser/pl/browser/preferences/colors.ftl	1715703533.000000000
++++ ./third_party/rust/fluent-testing/resources/browser/pl/browser/preferences/colors.ftl	1718003862.456451074
+@@ -6,6 +6,7 @@ colors-window =
+     .title = Kolory
+     .style =
+         { PLATFORM() ->
++            [ios] width: 41em
+             [macos] width: 41em
+            *[other] width: 38em
+         }
+--- ./firefox-115.11.0/third_party/rust/fluent-testing/resources/browser/pl/browser/preferences/connection.ftl	1715703533.000000000
++++ ./third_party/rust/fluent-testing/resources/browser/pl/browser/preferences/connection.ftl	1718003876.588121867
+@@ -6,6 +6,7 @@ connection-window =
+     .title = Ustawienia połączenia
+     .style =
+         { PLATFORM() ->
++            [ios] width: 45em
+             [macos] width: 45em
+            *[other] width: 49em
+         }
+--- ./firefox-115.11.0/third_party/rust/fluent-testing/resources/browser/pl/browser/preferences/preferences.ftl	1715703533.000000000
++++ ./third_party/rust/fluent-testing/resources/browser/pl/browser/preferences/preferences.ftl	1718003935.263041485
+@@ -261,11 +261,13 @@ download-save-to =
+ download-choose-folder =
+     .label =
+         { PLATFORM() ->
++            [ios] Wybierz…
+             [macos] Wybierz…
+            *[other] Przeglądaj…
+         }
+     .accesskey =
+         { PLATFORM() ->
++            [ios] y
+             [macos] y
+            *[other] g
+         }
+@@ -298,6 +300,7 @@ applications-use-app-default =
+ applications-use-os-default =
+     .label =
+         { PLATFORM() ->
++            [ios] Użyj domyślnej aplikacji systemu iOS
+             [macos] Użyj domyślnej aplikacji systemu macOS
+             [windows] Użyj domyślnej aplikacji systemu Windows
+            *[other] Użyj domyślnej aplikacji systemu
+--- ./firefox-115.11.0/third_party/rust/getrandom/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/getrandom/src/lib.rs	1717931297.925990849
+@@ -235,9 +235,9 @@ cfg_if! {
+         #[path = "dragonfly.rs"] mod imp;
+     } else if #[cfg(target_os = "fuchsia")] {
+         #[path = "fuchsia.rs"] mod imp;
+-    } else if #[cfg(any(target_os = "ios", target_os = "watchos", target_os = "tvos"))] {
++    } else if #[cfg(any(target_os = "watchos", target_os = "tvos"))] {
+         #[path = "apple-other.rs"] mod imp;
+-    } else if #[cfg(target_os = "macos")] {
++    } else if #[cfg(any(target_os = "ios", target_os = "macos"))] {
+         mod util_libc;
+         mod use_file;
+         #[path = "macos.rs"] mod imp;
+--- ./firefox-115.11.0/third_party/rust/getrandom/src/use_file.rs	1715703533.000000000
++++ ./third_party/rust/getrandom/src/use_file.rs	1717931272.424329527
+@@ -31,6 +31,7 @@ const FILE_PATH: &str = "/dev/random\0";
+     target_os = "redox",
+     target_os = "dragonfly",
+     target_os = "haiku",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "nto",
+ ))]
+--- ./firefox-115.11.0/third_party/rust/getrandom/src/util_libc.rs	1715703533.000000000
++++ ./third_party/rust/getrandom/src/util_libc.rs	1717931260.138857139
+@@ -23,7 +23,7 @@ cfg_if! {
+         use libc::__errno_location as errno_location;
+     } else if #[cfg(any(target_os = "solaris", target_os = "illumos"))] {
+         use libc::___errno as errno_location;
+-    } else if #[cfg(any(target_os = "macos", target_os = "freebsd"))] {
++    } else if #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))] {
+         use libc::__error as errno_location;
+     } else if #[cfg(target_os = "haiku")] {
+         use libc::_errnop as errno_location;
+--- ./firefox-115.11.0/third_party/rust/glean/src/system.rs	1715703533.000000000
++++ ./third_party/rust/glean/src/system.rs	1718003561.092264822
+@@ -55,13 +55,13 @@ pub const ARCH: &str = "x86_64";
+ /// `target_arch` when building this crate: unknown!
+ pub const ARCH: &str = "Unknown";
+ 
+-#[cfg(any(target_os = "macos", target_os = "windows"))]
++#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
+ /// Returns Darwin kernel version for MacOS, or NT Kernel version for Windows
+ pub fn get_os_version() -> String {
+     whatsys::kernel_version().unwrap_or_else(|| "Unknown".to_owned())
+ }
+ 
+-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
++#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios", target_os = "windows")))]
+ /// Returns "Unknown" for platforms other than Linux, MacOS or Windows
+ pub fn get_os_version() -> String {
+     "Unknown".to_owned()
+--- ./firefox-115.11.0/third_party/rust/hyper/Cargo.toml	1715703533.000000000
++++ ./third_party/rust/hyper/Cargo.toml	1718004304.943389317
+@@ -324,5 +324,5 @@ tcp = [
+     "tokio/time",
+ ]
+ 
+-[target."cfg(any(target_os = \"linux\", target_os = \"macos\"))".dev-dependencies.pnet_datalink]
++[target."cfg(any(target_os = \"linux\", target_os = \"macos\", target_os = \"ios\"))".dev-dependencies.pnet_datalink]
+ version = "0.27.2"
+--- ./firefox-115.11.0/third_party/rust/hyper/src/client/connect/http.rs	1715703533.000000000
++++ ./third_party/rust/hyper/src/client/connect/http.rs	1718004325.603787468
+@@ -739,7 +739,7 @@ mod tests {
+         assert_eq!(&*err.msg, super::INVALID_NOT_HTTP);
+     }
+ 
+-    #[cfg(any(target_os = "linux", target_os = "macos"))]
++    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
+     fn get_local_ips() -> (Option<std::net::Ipv4Addr>, Option<std::net::Ipv6Addr>) {
+         use std::net::{IpAddr, TcpListener};
+ 
+@@ -776,7 +776,7 @@ mod tests {
+     }
+ 
+     // NOTE: pnet crate that we use in this test doesn't compile on Windows
+-    #[cfg(any(target_os = "linux", target_os = "macos"))]
++    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
+     #[tokio::test]
+     async fn local_address() {
+         use std::net::{IpAddr, TcpListener};
+--- ./firefox-115.11.0/third_party/rust/ioctl-sys/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/ioctl-sys/src/lib.rs	1717931047.862872307
+@@ -1,10 +1,10 @@
+ use std::os::raw::{c_int, c_ulong};
+ 
+-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
++#[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios", target_os = "android"))]
+ #[macro_use]
+ mod platform;
+ 
+-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
++#[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios", target_os = "android"))]
+ pub use platform::*;
+ 
+ extern "C" {
+@@ -21,7 +21,7 @@ pub fn check_res(res: c_int) -> std::io:
+     }
+ }
+ 
+-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "android")))]
++#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios", target_os = "android")))]
+ use platform_not_supported;
+ 
+ #[cfg(doctest)]
+--- ./firefox-115.11.0/third_party/rust/ioctl-sys/src/platform/mod.rs	1715703533.000000000
++++ ./third_party/rust/ioctl-sys/src/platform/mod.rs	1717931064.144866336
+@@ -7,7 +7,7 @@ pub const TYPEBITS: u32 = 8;
+ #[path = "linux.rs"]
+ mod consts;
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ #[path = "macos.rs"]
+ mod consts;
+ 
+--- ./firefox-115.11.0/third_party/rust/khronos-egl/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/khronos-egl/src/lib.rs	1718006654.300016099
+@@ -1980,7 +1980,11 @@ macro_rules! api {
+ 			/// ## Safety
+ 			/// This is fundamentally unsafe since there are no guaranties the found library complies to the EGL API.
+ 			pub unsafe fn load() -> Result<DynamicInstance<EGL1_0>, libloading::Error> {
++				#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+ 				Self::load_from_filename("libEGL.so.1").or(Self::load_from_filename("libEGL.so"))
++				#[cfg(any(target_os = "macos", target_os = "ios"))]
++				Self::load_from_filename("libEGL.1.dylib").or(Self::load_from_filename("libEGL.dylib"))
++                                
+ 			}
+ 		}
+ 	};
+@@ -2201,7 +2205,10 @@ macro_rules! api {
+ 			/// ## Safety
+ 			/// This is fundamentally unsafe since there are no guaranties the found library complies to the EGL API.
+ 			pub unsafe fn load_required() -> Result<DynamicInstance<$id>, LoadError<libloading::Error>> {
++			    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+ 			    Self::load_required_from_filename("libEGL.so.1").or(Self::load_required_from_filename("libEGL.so"))
++			    #[cfg(any(target_os = "macos", target_os = "ios"))]
++			    Self::load_required_from_filename("libEGL.1.dylib").or(Self::load_required_from_filename("libEGL.dylib"))
+ 			}
+ 		}
+ 	}
+--- ./firefox-115.11.0/third_party/rust/libc/src/unix/bsd/apple/mod.rs	1715703533.000000000
++++ ./third_party/rust/libc/src/unix/bsd/apple/mod.rs	1717929417.233740505
+@@ -5498,6 +5498,7 @@ extern "C" {
+     #[deprecated(since = "0.2.55", note = "Use the `mach2` crate instead")]
+     pub fn _dyld_get_image_name(image_index: u32) -> *const ::c_char;
+ 
++    #[cfg_attr(link_name = "ie_posix_spawn")]
+     pub fn posix_spawn(
+         pid: *mut ::pid_t,
+         path: *const ::c_char,
+@@ -5506,6 +5507,7 @@ extern "C" {
+         argv: *const *mut ::c_char,
+         envp: *const *mut ::c_char,
+     ) -> ::c_int;
++    #[cfg_attr(link_name = "ie_posix_spawnp")]
+     pub fn posix_spawnp(
+         pid: *mut ::pid_t,
+         file: *const ::c_char,
+@@ -5575,6 +5577,7 @@ extern "C" {
+         fd: ::c_int,
+         newfd: ::c_int,
+     ) -> ::c_int;
++    #[cfg_attr(link_name = "ie_uname")]
+     pub fn uname(buf: *mut ::utsname) -> ::c_int;
+ 
+     pub fn connectx(
+@@ -5880,7 +5883,7 @@ pub unsafe fn mach_task_self() -> ::mach
+ }
+ 
+ cfg_if! {
+-    if #[cfg(target_os = "macos")] {
++    if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+         extern "C" {
+             pub fn clock_settime(clock_id: ::clockid_t, tp: *const ::timespec) -> ::c_int;
+         }
+--- ./firefox-115.11.0/third_party/rust/libc/src/unix/mod.rs	1715703533.000000000
++++ ./third_party/rust/libc/src/unix/mod.rs	1717929562.230134826
+@@ -874,15 +874,21 @@ extern "C" {
+     pub fn close(fd: ::c_int) -> ::c_int;
+     pub fn dup(fd: ::c_int) -> ::c_int;
+     pub fn dup2(src: ::c_int, dst: ::c_int) -> ::c_int;
++    #[cfg_attr(link_name = "ie_execl")]
+     pub fn execl(path: *const c_char, arg0: *const c_char, ...) -> ::c_int;
++    #[cfg_attr(link_name = "ie_execle")]
+     pub fn execle(path: *const ::c_char, arg0: *const ::c_char, ...) -> ::c_int;
++    #[cfg_attr(link_name = "ie_execlp")]
+     pub fn execlp(file: *const ::c_char, arg0: *const ::c_char, ...) -> ::c_int;
++    #[cfg_attr(link_name = "ie_execv")]
+     pub fn execv(prog: *const c_char, argv: *const *const c_char) -> ::c_int;
++    #[cfg_attr(link_name = "ie_execve")]
+     pub fn execve(
+         prog: *const c_char,
+         argv: *const *const c_char,
+         envp: *const *const c_char,
+     ) -> ::c_int;
++    #[cfg_attr(link_name = "ie_execvp")]
+     pub fn execvp(c: *const c_char, argv: *const *const c_char) -> ::c_int;
+     pub fn fork() -> pid_t;
+     pub fn fpathconf(filedes: ::c_int, name: ::c_int) -> c_long;
+--- ./firefox-115.11.0/third_party/rust/libloading/tests/library_filename.rs	1715703533.000000000
++++ ./third_party/rust/libloading/tests/library_filename.rs	1717931316.973904853
+@@ -6,7 +6,7 @@ use std::path::Path;
+ const EXPECTED: &str = "audioengine.dll";
+ #[cfg(target_os = "linux")]
+ const EXPECTED: &str = "libaudioengine.so";
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ const EXPECTED: &str = "libaudioengine.dylib";
+ 
+ #[test]
+--- ./firefox-115.11.0/third_party/rust/metal/examples/caps/main.rs	1715703533.000000000
++++ ./third_party/rust/metal/examples/caps/main.rs	1717930843.897064625
+@@ -19,7 +19,7 @@ fn main() {
+         "Max threads per threadgroup: {:?}",
+         device.max_threads_per_threadgroup()
+     );
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     {
+         println!("Integrated GPU: {:?}", device.is_low_power());
+         println!("Headless: {:?}", device.is_headless());
+--- ./firefox-115.11.0/third_party/rust/midir/Cargo.toml	1715703533.000000000
++++ ./third_party/rust/midir/Cargo.toml	1717931207.980326347
+@@ -80,7 +80,7 @@ wasm-bindgen-test = "0.2"
+ alsa = "0.7"
+ libc = "0.2.21"
+ 
+-[target."cfg(target_os = \"macos\")".dependencies]
++[target."cfg(any(target_os = \"ios\", target_os = \"macos\"))".dependencies]
+ coremidi = "0.6.0"
+ 
+ [target."cfg(windows)".dependencies.winapi]
+--- ./firefox-115.11.0/third_party/rust/midir/src/backend/mod.rs	1715703533.000000000
++++ ./third_party/rust/midir/src/backend/mod.rs	1717931242.015233885
+@@ -9,8 +9,8 @@
+ #[cfg(all(target_os="windows", feature = "winrt"))] mod winrt;
+ #[cfg(all(target_os="windows", feature = "winrt"))] pub use self::winrt::*;
+ 
+-#[cfg(all(target_os="macos", not(feature = "jack")))] mod coremidi;
+-#[cfg(all(target_os="macos", not(feature = "jack")))] pub use self::coremidi::*;
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "jack")))] mod coremidi;
++#[cfg(all(any(target_os = "macos", target_os = "ios"), not(feature = "jack")))] pub use self::coremidi::*;
+ 
+ #[cfg(all(target_os="linux", not(feature = "jack")))] mod alsa;
+ #[cfg(all(target_os="linux", not(feature = "jack")))] pub use self::alsa::*;
+--- ./firefox-115.11.0/third_party/rust/minidump-writer/Cargo.toml	1715703533.000000000
++++ ./third_party/rust/minidump-writer/Cargo.toml	1717931622.331655682
+@@ -64,21 +64,21 @@ features = [
+ ]
+ default-features = false
+ 
+-[target."cfg(target_os = \"macos\")".dependencies.mach2]
++[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dependencies.mach2]
+ version = "0.4"
+ 
+-[target."cfg(target_os = \"macos\")".dev-dependencies.dump_syms]
++[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dev-dependencies.dump_syms]
+ version = "2.0.0"
+ default-features = false
+ 
+-[target."cfg(target_os = \"macos\")".dev-dependencies.minidump-processor]
++[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dev-dependencies.minidump-processor]
+ version = "0.15"
+ default-features = false
+ 
+-[target."cfg(target_os = \"macos\")".dev-dependencies.similar-asserts]
++[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dev-dependencies.similar-asserts]
+ version = "1.2"
+ 
+-[target."cfg(target_os = \"macos\")".dev-dependencies.uuid]
++[target."cfg(any(target_os = \"macos\", target_os = \"ios\"))".dev-dependencies.uuid]
+ version = "1.0"
+ 
+ [target."cfg(target_os = \"windows\")".dependencies.bitflags]
+--- ./firefox-115.11.0/third_party/rust/minidump-writer/src/bin/test.rs	1715703533.000000000
++++ ./third_party/rust/minidump-writer/src/bin/test.rs	1717931646.099508388
+@@ -342,7 +342,7 @@ mod windows {
+     }
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ mod mac {
+     use super::*;
+     use std::time::Duration;
+@@ -408,7 +408,7 @@ fn main() -> Result<()> {
+             linux::real_main(args)
+         } else if #[cfg(target_os = "windows")] {
+             windows::real_main(args)
+-        } else if #[cfg(target_os = "macos")] {
++        } else if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+             mac::real_main(args)
+         } else {
+             unimplemented!();
+--- ./firefox-115.11.0/third_party/rust/minidump-writer/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/minidump-writer/src/lib.rs	1717931655.205484685
+@@ -7,7 +7,7 @@ cfg_if::cfg_if! {
+         mod windows;
+ 
+         pub use windows::*;
+-    } else if #[cfg(target_os = "macos")] {
++    } else if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+         mod mac;
+ 
+         pub use mac::*;
+--- ./firefox-115.11.0/third_party/rust/naga/Makefile	1715703533.000000000
++++ ./third_party/rust/naga/Makefile	1717931091.792904827
+@@ -19,10 +19,10 @@ bench:
+ 	cargo run --features wgsl-in,msl-out -- $< $@
+ 
+ %.air: %.metal
+-	xcrun -sdk macosx metal -c $< -mmacosx-version-min=10.11
++	metal -c $<
+ 
+ %.metallib: %.air
+-	xcrun -sdk macosx metallib $< -o $@
++	metallib $< -o $@
+ 
+ %.dot: $(SNAPSHOTS_BASE_IN)/%.wgsl $(wildcard src/*.rs src/front/wgsl/*.rs src/back/dot/*.rs bin/naga.rs)
+ 	cargo run --features wgsl-in,dot-out -- $< $@
+@@ -42,7 +42,7 @@ validate-msl: $(SNAPSHOTS_BASE_OUT)/msl/
+ 	@set -e && for file in $^ ; do \
+ 		echo "Validating" $${file#"$(SNAPSHOTS_BASE_OUT)/"};	\
+ 		header=$$(head -n1 $${file});	\
+-		cat $${file} | xcrun -sdk macosx metal -mmacosx-version-min=10.11 -std=macos-$${header:13:8} -x metal - -o /dev/null; \
++		cat $${file} | metal -std=macos-$${header:13:8} -x metal - -o /dev/null; \
+ 	done
+ 
+ validate-glsl: $(SNAPSHOTS_BASE_OUT)/glsl/*.glsl
+--- ./firefox-115.11.0/third_party/rust/neqo-common/src/hrtime.rs	1715703533.000000000
++++ ./third_party/rust/neqo-common/src/hrtime.rs	1717930836.199628727
+@@ -29,7 +29,7 @@ impl Period {
+         UINT::from(self.0)
+     }
+ 
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     fn scaled(&self, scale: f64) -> f64 {
+         scale * f64::from(self.0)
+     }
+@@ -77,7 +77,7 @@ impl PeriodSet {
+     }
+ }
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ #[allow(non_camel_case_types)]
+ mod mac {
+     use std::mem::size_of;
+@@ -266,9 +266,9 @@ pub struct Time {
+     periods: PeriodSet,
+     active: Option<Period>,
+ 
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     scale: f64,
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     deflt: mac::thread_time_constraint_policy,
+ }
+ impl Time {
+@@ -277,16 +277,16 @@ impl Time {
+             periods: PeriodSet::default(),
+             active: None,
+ 
+-            #[cfg(target_os = "macos")]
++            #[cfg(any(target_os = "macos", target_os = "ios"))]
+             scale: mac::get_scale(),
+-            #[cfg(target_os = "macos")]
++            #[cfg(any(target_os = "macos", target_os = "ios"))]
+             deflt: mac::get_default_policy(),
+         }
+     }
+ 
+     #[allow(clippy::unused_self)] // Only on some platforms is it unused.
+     fn start(&self) {
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         {
+             if let Some(p) = self.active {
+                 mac::set_realtime(p.scaled(self.scale));
+@@ -360,7 +360,7 @@ impl Drop for Time {
+     fn drop(&mut self) {
+         self.stop();
+ 
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         {
+             if self.active.is_some() {
+                 mac::set_thread_policy(self.deflt);
+--- ./firefox-115.11.0/third_party/rust/neqo-crypto/build.rs	1715703533.000000000
++++ ./third_party/rust/neqo-crypto/build.rs	1718003664.314212818
+@@ -198,7 +198,7 @@ fn static_link() {
+         "softokn_static",
+         "ssl",
+     ];
+-    if env::consts::OS != "macos" {
++    if env::consts::OS != "macos" && env::consts::OS != "ios" {
+         static_libs.push("sqlite");
+     }
+     for lib in static_libs {
+@@ -210,7 +210,7 @@ fn static_link() {
+     if env::consts::OS != "windows" {
+         other_libs.extend_from_slice(&["pthread", "dl", "c", "z"]);
+     }
+-    if env::consts::OS == "macos" {
++    if env::consts::OS == "macos" || env::consts::OS == "ios" {
+         other_libs.push("sqlite3");
+     }
+     dynamic_link_both(&other_libs);
+@@ -244,7 +244,7 @@ fn build_bindings(base: &str, bindings:
+         builder = builder.clang_arg("-DNO_NSPR_10_SUPPORT");
+         if env::consts::OS == "windows" {
+             builder = builder.clang_arg("-DWIN");
+-        } else if env::consts::OS == "macos" {
++        } else if env::consts::OS == "macos" || env::consts::OS == "ios" {
+             builder = builder.clang_arg("-DDARWIN");
+         } else if env::consts::OS == "linux" {
+             builder = builder.clang_arg("-DLINUX");
+--- ./firefox-115.11.0/third_party/rust/nix/src/mount/bsd.rs	1715703533.000000000
++++ ./third_party/rust/nix/src/mount/bsd.rs	1717930720.689028142
+@@ -33,7 +33,7 @@ libc_bitflags!(
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         MNT_GJOURNAL;
+         /// MAC support for objects.
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         MNT_MULTILABEL;
+         /// Disable read clustering.
+@@ -66,7 +66,7 @@ libc_bitflags!(
+         /// Create a snapshot of the file system.
+         ///
+         /// See [mksnap_ffs(8)](https://www.freebsd.org/cgi/man.cgi?query=mksnap_ffs)
+-        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
++        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         MNT_SNAPSHOT;
+         /// Using soft updates.
+@@ -88,6 +88,7 @@ libc_bitflags!(
+         /// Union with underlying fs.
+         #[cfg(any(
+                 target_os = "macos",
++                target_os = "ios",
+                 target_os = "freebsd",
+                 target_os = "netbsd"
+         ))]
+--- ./firefox-115.11.0/third_party/rust/nix/src/mount/mod.rs	1715703533.000000000
++++ ./third_party/rust/nix/src/mount/mod.rs	1717930685.158166777
+@@ -9,6 +9,7 @@ pub use self::linux::*;
+ #[cfg(any(
+     target_os = "dragonfly",
+     target_os = "freebsd",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+@@ -19,6 +20,7 @@ mod bsd;
+ #[cfg(any(
+     target_os = "dragonfly",
+     target_os = "freebsd",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+--- ./firefox-115.11.0/third_party/rust/nix/src/net/if_.rs	1715703533.000000000
++++ ./third_party/rust/nix/src/net/if_.rs	1717930171.231495408
+@@ -103,6 +103,7 @@ libc_bitflags!(
+         #[cfg(any(target_os = "dragonfly",
+                   target_os = "freebsd",
+                   target_os = "macos",
++                  target_os = "ios",
+                   target_os = "netbsd",
+                   target_os = "openbsd"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+--- ./firefox-115.11.0/third_party/rust/nix/src/sys/mod.rs	1715703533.000000000
++++ ./third_party/rust/nix/src/sys/mod.rs	1717930383.384690190
+@@ -78,6 +78,7 @@ feature! {
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "linux",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+--- ./firefox-115.11.0/third_party/rust/nix/src/sys/ptrace/bsd.rs	1715703533.000000000
++++ ./third_party/rust/nix/src/sys/ptrace/bsd.rs	1717930323.786091167
+@@ -11,6 +11,7 @@ pub type RequestType = c_int;
+ cfg_if! {
+     if #[cfg(any(target_os = "dragonfly",
+                  target_os = "freebsd",
++                 target_os = "ios",
+                  target_os = "macos",
+                  target_os = "openbsd"))] {
+         #[doc(hidden)]
+@@ -29,18 +30,19 @@ libc_enum! {
+         PT_TRACE_ME,
+         PT_READ_I,
+         PT_READ_D,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_READ_U,
+         PT_WRITE_I,
+         PT_WRITE_D,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_WRITE_U,
+         PT_CONTINUE,
+         PT_KILL,
+         #[cfg(any(any(target_os = "dragonfly",
+                   target_os = "freebsd",
++                  target_os = "ios",
+                   target_os = "macos"),
+                   all(target_os = "openbsd", target_arch = "x86_64"),
+                   all(target_os = "netbsd", any(target_arch = "x86_64",
+@@ -48,13 +50,13 @@ libc_enum! {
+         PT_STEP,
+         PT_ATTACH,
+         PT_DETACH,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_SIGEXC,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_THUPDATE,
+-        #[cfg(target_os = "macos")]
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         PT_ATTACHEXC
+     }
+@@ -157,7 +159,7 @@ pub fn kill(pid: Pid) -> Result<()> {
+ /// }
+ /// ```
+ #[cfg(any(
+-    any(target_os = "dragonfly", target_os = "freebsd", target_os = "macos"),
++    any(target_os = "dragonfly", target_os = "freebsd", target_os = "macos", target_os = "ios"),
+     all(target_os = "openbsd", target_arch = "x86_64"),
+     all(
+         target_os = "netbsd",
+--- ./firefox-115.11.0/third_party/rust/nix/src/sys/ptrace/mod.rs	1715703533.000000000
++++ ./third_party/rust/nix/src/sys/ptrace/mod.rs	1717930250.061111510
+@@ -9,6 +9,7 @@ pub use self::linux::*;
+ #[cfg(any(
+     target_os = "dragonfly",
+     target_os = "freebsd",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+@@ -19,6 +20,7 @@ mod bsd;
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "macos",
++    target_os = "ios",
+     target_os = "netbsd",
+     target_os = "openbsd"
+ ))]
+--- ./firefox-115.11.0/third_party/rust/nix/src/sys/socket/addr.rs	1715703533.000000000
++++ ./third_party/rust/nix/src/sys/socket/addr.rs	1717930625.150245704
+@@ -419,7 +419,7 @@ impl AddressFamily {
+             libc::AF_INET6 => Some(AddressFamily::Inet6),
+             #[cfg(any(target_os = "android", target_os = "linux"))]
+             libc::AF_NETLINK => Some(AddressFamily::Netlink),
+-            #[cfg(any(target_os = "macos", target_os = "macos"))]
++            #[cfg(any(target_os = "ios", target_os = "macos"))]
+             libc::AF_SYSTEM => Some(AddressFamily::System),
+             #[cfg(any(target_os = "android", target_os = "linux"))]
+             libc::AF_PACKET => Some(AddressFamily::Packet),
+--- ./firefox-115.11.0/third_party/rust/nix/src/sys/statfs.rs	1715703533.000000000
++++ ./third_party/rust/nix/src/sys/statfs.rs	1717930429.982075008
+@@ -14,6 +14,7 @@ use cfg_if::cfg_if;
+     any(
+         target_os = "dragonfly",
+         target_os = "freebsd",
++        target_os = "ios",
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "openbsd"
+@@ -457,6 +458,7 @@ impl Statfs {
+         any(
+             target_os = "dragonfly",
+             target_os = "freebsd",
++            target_os = "ios",
+             target_os = "macos",
+             target_os = "netbsd",
+             target_os = "openbsd"
+@@ -704,6 +706,7 @@ impl Debug for Statfs {
+             any(
+                 target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"
+--- ./firefox-115.11.0/third_party/rust/nix/src/sys/termios.rs	1715703533.000000000
++++ ./third_party/rust/nix/src/sys/termios.rs	1717930537.908528747
+@@ -375,6 +375,7 @@ libc_enum! {
+         B4800,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -383,6 +384,7 @@ libc_enum! {
+         B9600,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -391,6 +393,7 @@ libc_enum! {
+         B19200,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -400,6 +403,7 @@ libc_enum! {
+         B57600,
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd"))]
+@@ -546,6 +550,7 @@ libc_enum! {
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
+                 target_os = "illumos",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd",
+@@ -575,6 +580,7 @@ libc_enum! {
+         #[cfg(any(target_os = "dragonfly",
+                 target_os = "freebsd",
+                 target_os = "illumos",
++                target_os = "ios",
+                 target_os = "macos",
+                 target_os = "netbsd",
+                 target_os = "openbsd",
+@@ -616,6 +622,7 @@ pub use libc::NCCS;
+     target_os = "dragonfly",
+     target_os = "freebsd",
+     target_os = "linux",
++    target_os = "ios",
+     target_os = "macos",
+     target_os = "netbsd",
+     target_os = "openbsd"
+@@ -643,7 +650,7 @@ libc_bitflags! {
+         #[cfg(not(any(target_os = "redox", target_os = "haiku")))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         IMAXBEL;
+-        #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos"))]
++        #[cfg(any(target_os = "android", target_os = "linux", target_os = "macos", target_os = "ios"))]
+         #[cfg_attr(docsrs, doc(cfg(all())))]
+         IUTF8;
+     }
+@@ -804,6 +811,7 @@ libc_bitflags! {
+         OXTABS;
+         #[cfg(any(target_os = "freebsd",
+                   target_os = "dragonfly",
++                  target_os = "ios",
+                   target_os = "macos",
+                   target_os = "netbsd",
+                   target_os = "openbsd"))]
+@@ -899,6 +907,7 @@ libc_bitflags! {
+         CBAUDEX;
+         #[cfg(any(target_os = "dragonfly",
+                   target_os = "freebsd",
++                  target_os = "ios",
+                   target_os = "macos",
+                   target_os = "netbsd",
+                   target_os = "openbsd"))]
+--- ./firefox-115.11.0/third_party/rust/nss-gk-api/build.rs	1715703533.000000000
++++ ./third_party/rust/nss-gk-api/build.rs	1717931182.726269963
+@@ -199,7 +199,7 @@ fn static_link() {
+         "softokn_static",
+         "ssl",
+     ];
+-    if env::consts::OS != "macos" {
++    if (env::consts::OS != "macos" || env::consts::OS != "ios") {
+         static_libs.push("sqlite");
+     }
+     for lib in static_libs {
+@@ -211,7 +211,7 @@ fn static_link() {
+     if env::consts::OS != "windows" {
+         other_libs.extend_from_slice(&["pthread", "dl", "c", "z"]);
+     }
+-    if env::consts::OS == "macos" {
++    if env::consts::OS == "macos" || env::consts::OS == "ios" {
+         other_libs.push("sqlite3");
+     }
+     dynamic_link_both(&other_libs);
+@@ -245,7 +245,7 @@ fn build_bindings(base: &str, bindings:
+         builder = builder.clang_arg("-DNO_NSPR_10_SUPPORT");
+         if env::consts::OS == "windows" {
+             builder = builder.clang_arg("-DWIN");
+-        } else if env::consts::OS == "macos" {
++        } else if env::consts::OS == "macos" || env::consts::OS == "ios" {
+             builder = builder.clang_arg("-DDARWIN");
+         } else if env::consts::OS == "linux" {
+             builder = builder.clang_arg("-DLINUX");
+--- ./firefox-115.11.0/third_party/rust/nss_build_common/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/nss_build_common/src/lib.rs	1718003474.231949092
+@@ -38,7 +38,7 @@ pub fn link_nss() -> Result<(), NoNssDir
+             .as_ref()
+             .map(std::string::String::as_str)
+         {
+-            Ok("android") | Ok("macos") => vec!["nss3"],
++            Ok("android") | Ok("macos") | Ok("ios") => vec!["nss3"],
+             _ => vec!["nssutil3", "nss3", "plds4", "plc4", "nspr4"],
+         };
+         for lib in &libs {
+--- ./firefox-115.11.0/third_party/rust/num_cpus/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/num_cpus/src/lib.rs	1717930102.659142425
+@@ -110,7 +110,7 @@ pub fn get_physical() -> usize {
+ }
+ 
+ 
+-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os="macos", target_os="openbsd")))]
++#[cfg(not(any(target_os = "linux", target_os = "windows", target_os="macos", target_os="ios", target_os="openbsd")))]
+ #[inline]
+ fn get_num_physical_cpus() -> usize {
+     // Not implemented, fall back
+@@ -304,7 +304,7 @@ fn get_num_physical_cpus() -> usize {
+ }
+ 
+ 
+-#[cfg(target_os = "macos")]
++#[cfg(any(target_os = "macos", target_os = "ios"))]
+ fn get_num_physical_cpus() -> usize {
+     use std::ffi::CStr;
+     use std::ptr;
+--- ./firefox-115.11.0/third_party/rust/object/src/read/mod.rs	1715703533.000000000
++++ ./third_party/rust/object/src/read/mod.rs	1718003452.338336993
+@@ -106,7 +106,7 @@ impl<T> ReadError<T> for Option<T> {
+ /// The native executable file for the target platform.
+ #[cfg(all(
+     unix,
+-    not(target_os = "macos"),
++    not(any(target_os = "macos", target_os = "ios")),
+     target_pointer_width = "32",
+     feature = "elf"
+ ))]
+@@ -115,18 +115,18 @@ pub type NativeFile<'data, R = &'data [u
+ /// The native executable file for the target platform.
+ #[cfg(all(
+     unix,
+-    not(target_os = "macos"),
++    not(any(target_os = "macos", target_os = "ios")),
+     target_pointer_width = "64",
+     feature = "elf"
+ ))]
+ pub type NativeFile<'data, R = &'data [u8]> = elf::ElfFile64<'data, crate::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+-#[cfg(all(target_os = "macos", target_pointer_width = "32", feature = "macho"))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), target_pointer_width = "32", feature = "macho"))]
+ pub type NativeFile<'data, R = &'data [u8]> = macho::MachOFile32<'data, crate::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+-#[cfg(all(target_os = "macos", target_pointer_width = "64", feature = "macho"))]
++#[cfg(all(any(target_os = "macos", target_os = "ios"), target_pointer_width = "64", feature = "macho"))]
+ pub type NativeFile<'data, R = &'data [u8]> = macho::MachOFile64<'data, crate::Endianness, R>;
+ 
+ /// The native executable file for the target platform.
+--- ./firefox-115.11.0/third_party/rust/ohttp/build.rs	1715703533.000000000
++++ ./third_party/rust/ohttp/build.rs	1718003731.275103451
+@@ -170,7 +170,7 @@ mod nss {
+             "smime",
+             "softokn_static",
+         ];
+-        if env::consts::OS != "macos" {
++        if env::consts::OS != "macos" && env::consts::OS != "ios" {
+             static_libs.push("sqlite");
+         }
+         for lib in static_libs {
+@@ -182,7 +182,7 @@ mod nss {
+         if env::consts::OS != "windows" {
+             other_libs.extend_from_slice(&["pthread", "dl", "c", "z"]);
+         }
+-        if env::consts::OS == "macos" {
++        if env::consts::OS == "macos" || env::consts::OS == "ios" {
+             other_libs.push("sqlite3");
+         }
+         dynamic_link_both(&other_libs);
+@@ -215,7 +215,7 @@ mod nss {
+         builder = builder.clang_arg("-DNO_NSPR_10_SUPPORT");
+         if env::consts::OS == "windows" {
+             builder = builder.clang_arg("-DWIN");
+-        } else if env::consts::OS == "macos" {
++        } else if env::consts::OS == "macos" || env::consts::OS == "ios" {
+             builder = builder.clang_arg("-DDARWIN");
+         } else if env::consts::OS == "linux" {
+             builder = builder.clang_arg("-DLINUX");
+--- ./firefox-115.11.0/third_party/rust/pkg-config/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/pkg-config/src/lib.rs	1717929281.627025303
+@@ -641,7 +641,7 @@ impl Library {
+             }
+         }
+ 
+-        let system_roots = if cfg!(target_os = "macos") {
++        let system_roots = if cfg!(target_os = "macos") || cfg!(target_os = "ios") {
+             vec![PathBuf::from("/Library"), PathBuf::from("/System")]
+         } else {
+             let sysroot = config
+@@ -875,7 +875,7 @@ mod tests {
+     use super::*;
+ 
+     #[test]
+-    #[cfg(target_os = "macos")]
++    #[cfg(any(target_os = "macos", target_os = "ios"))]
+     fn system_library_mac_test() {
+         use std::path::Path;
+ 
+--- ./firefox-115.11.0/third_party/rust/pulse-ffi/src/ffi_funcs.rs	1715703533.000000000
++++ ./third_party/rust/pulse-ffi/src/ffi_funcs.rs	1718006469.045604503
+@@ -253,7 +253,10 @@ mod dynamic_fns {
+ 
+     impl LibLoader {
+         pub unsafe fn open() -> Option<LibLoader> {
++            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+             let h = dlopen(cstr!("libpulse.so.0"), RTLD_LAZY);
++            #[cfg(any(target_os = "macos", target_os = "ios")))]
++            let h = dlopen(cstr!("/usr/lib/libpulse.dylib"), RTLD_LAZY);
+             if h.is_null() {
+                 return None;
+             }
+--- ./firefox-115.11.0/third_party/rust/tokio/src/signal/unix.rs	1715703533.000000000
++++ ./third_party/rust/tokio/src/signal/unix.rs	1717931465.472927891
+@@ -115,6 +115,7 @@ impl SignalKind {
+     #[cfg(any(
+         target_os = "dragonfly",
+         target_os = "freebsd",
++        target_os = "ios",
+         target_os = "macos",
+         target_os = "netbsd",
+         target_os = "openbsd"
+--- ./firefox-115.11.0/third_party/rust/wgpu-hal/src/gles/egl.rs	1715703533.000000000
++++ ./third_party/rust/wgpu-hal/src/gles/egl.rs	1718005370.100517830
+@@ -115,6 +115,9 @@ unsafe extern "system" fn egl_debug_proc
+ fn open_x_display() -> Option<(ptr::NonNull<raw::c_void>, libloading::Library)> {
+     log::info!("Loading X11 library to get the current display");
+     unsafe {
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
++        let library = libloading::Library::new("libX11.dylib").ok()?;
++        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+         let library = libloading::Library::new("libX11.so").ok()?;
+         let func: libloading::Symbol<XOpenDisplayFun> = library.get(b"XOpenDisplay").unwrap();
+         let result = func(ptr::null());
+@@ -138,6 +141,9 @@ fn test_wayland_display() -> Option<libl
+      */
+     log::info!("Loading Wayland library to get the current display");
+     let library = unsafe {
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
++        let client_library = find_library(&["libwayland-client.0.dylib", "libwayland-client.dylib"])?;
++        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+         let client_library = find_library(&["libwayland-client.so.0", "libwayland-client.so"])?;
+         let wl_display_connect: libloading::Symbol<WlDisplayConnectFun> =
+             client_library.get(b"wl_display_connect").unwrap();
+@@ -145,6 +151,9 @@ fn test_wayland_display() -> Option<libl
+             client_library.get(b"wl_display_disconnect").unwrap();
+         let display = ptr::NonNull::new(wl_display_connect(ptr::null()))?;
+         wl_display_disconnect(display.as_ptr());
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
++        find_library(&["libwayland-egl.1.dylib", "libwayland-egl.dylib"])?
++        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+         find_library(&["libwayland-egl.so.1", "libwayland-egl.so"])?
+     };
+     Some(library)
+@@ -786,7 +795,7 @@ impl crate::Instance<super::Api> for Ins
+         })
+     }
+ 
+-    #[cfg_attr(target_os = "macos", allow(unused, unused_mut, unreachable_code))]
++    #[cfg_attr(any(target_os = "macos", target_os = "ios"), allow(unused, unused_mut, unreachable_code))]
+     unsafe fn create_surface(
+         &self,
+         display_handle: raw_window_handle::RawDisplayHandle,
+@@ -1143,7 +1152,7 @@ impl crate::Surface<super::Api> for Surf
+                     // We don't want any of the buffering done by the driver, because we
+                     // manage a swapchain on our side.
+                     // Some drivers just fail on surface creation seeing `EGL_SINGLE_BUFFER`.
+-                    if cfg!(any(target_os = "android", target_os = "macos"))
++                    if cfg!(any(target_os = "android", any(target_os = "macos", target_os = "ios")))
+                         || cfg!(windows)
+                         || self.wsi.kind == WindowKind::AngleX11
+                     {
+--- ./firefox-115.11.0/third_party/rust/whatsys/src/lib.rs	1715703533.000000000
++++ ./third_party/rust/whatsys/src/lib.rs	1718004268.644310298
+@@ -31,7 +31,7 @@
+ #![deny(rustdoc::broken_intra_doc_links)]
+ 
+ cfg_if::cfg_if! {
+-    if #[cfg(target_os = "macos")] {
++    if #[cfg(any(target_os = "macos", target_os = "ios"))] {
+         mod apple;
+         use apple as system;
+ 

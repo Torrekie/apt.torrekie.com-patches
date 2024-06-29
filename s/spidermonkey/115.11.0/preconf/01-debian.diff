@@ -1,0 +1,594 @@
+--- ./firefox-115.11.0/build/moz.configure/rust.configure	1715703530.000000000
++++ ./build/moz.configure/rust.configure	1717918027.397684596
+@@ -180,7 +180,7 @@ def rust_compiler(rustc_info, cargo_info
+             )
+         )
+     rustc_min_version = Version(MINIMUM_RUST_VERSION)
+-    cargo_min_version = rustc_min_version
++    cargo_min_version = Version("1.56.0")
+ 
+     version = rustc_info.version
+     is_nightly = "nightly" in version.version
+--- ./firefox-115.11.0/config/gcc_hidden.h	1715703530.000000000
++++ ./config/gcc_hidden.h	1717918286.025588354
+@@ -3,4 +3,4 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ /* Begin all files as hidden visibility */
+-#pragma GCC visibility push(hidden)
++#pragma GCC visibility push(default)
+--- ./firefox-115.11.0/intl/icu/source/common/unicode/std_string.h	1715020055.000000000
++++ ./intl/icu/source/common/unicode/std_string.h	1717918027.961073656
+@@ -29,11 +29,6 @@
+ 
+ #if U_SHOW_CPLUSPLUS_API
+ 
+-// Workaround for a libstdc++ bug before libstdc++4.6 (2011).
+-// https://bugs.llvm.org/show_bug.cgi?id=13364
+-#if defined(__GLIBCXX__)
+-namespace std { class type_info; }
+-#endif
+ #include <string>
+ 
+ #endif /* U_SHOW_CPLUSPLUS_API */
+--- ./firefox-115.11.0/intl/icu/source/common/utypeinfo.h	1715020056.000000000
++++ ./intl/icu/source/common/utypeinfo.h	1717918027.962194841
+@@ -24,9 +24,6 @@
+ #include <exception>
+ using std::exception;
+ #endif
+-#if defined(__GLIBCXX__)
+-namespace std { class type_info; } // WORKAROUND: http://llvm.org/bugs/show_bug.cgi?id=13364
+-#endif
+ #include <typeinfo>  // for 'typeid' to work
+ 
+ #endif
+--- ./firefox-115.11.0/intl/icu/source/io/unicode/ustream.h	1715020056.000000000
++++ ./intl/icu/source/io/unicode/ustream.h	1717918027.962909243
+@@ -34,10 +34,6 @@
+  * C++ I/O stream API.
+  */
+ 
+-#if defined(__GLIBCXX__)
+-namespace std { class type_info; } // WORKAROUND: http://llvm.org/bugs/show_bug.cgi?id=13364
+-#endif
+-
+ #include <iostream>
+ 
+ U_NAMESPACE_BEGIN
+--- ./firefox-115.11.0/js/moz.configure	1715703530.000000000
++++ ./js/moz.configure	1717918029.618434314
+@@ -175,20 +175,23 @@ set_define("ENABLE_DECORATORS", enable_d
+ 
+ # JIT support
+ # =======================================================
+-@depends(target, "--enable-record-tuple")
+-def jit_default(target, enable_record_tuple):
++@depends(target, arm_target, "--enable-record-tuple")
++def jit_default(target, arm_target, enable_record_tuple):
+     if enable_record_tuple:
+         return False
+     if target.cpu in (
+         "x86",
+         "x86_64",
+-        "arm",
+         "aarch64",
+         "mips32",
+         "mips64",
+         "loongarch64",
+     ):
+         return True
++
++    if target.cpu == "arm" and arm_target.arm_arch >= 7:
++        return True
++
+     return False
+ 
+ 
+@@ -606,7 +609,7 @@ option(
+ def rust_simd(value, target):
+     # As of 2019-09-17, the simd-accel feature of encoding_rs has not
+     # been properly set up outside aarch64, armv7, x86 and x86_64.
+-    if target.cpu in ("aarch64", "arm", "x86", "x86_64") and value:
++    if target.cpu in ("aarch64", "x86_64") and value:
+         return True
+ 
+ 
+--- ./firefox-115.11.0/js/public/Value.h	1715703530.000000000
++++ ./js/public/Value.h	1717918032.944460652
+@@ -445,7 +445,7 @@ constexpr uint64_t CanonicalizedNaNSigni
+ #endif
+ 
+ #if defined(JS_RUNTIME_CANONICAL_NAN)
+-extern uint64_t CanonicalizedNaNBits;
++extern JS_PUBLIC_DATA uint64_t CanonicalizedNaNBits;
+ #else
+ constexpr uint64_t CanonicalizedNaNBits =
+     mozilla::SpecificNaNBits<double, detail::CanonicalizedNaNSignBit,
+--- ./firefox-115.11.0/js/src/Makefile.in	1715703530.000000000
++++ ./js/src/Makefile.in	1717918311.073897807
+@@ -53,7 +53,7 @@ check:: check-js-msg
+ 
+ check-jstests:
+ 	$(wildcard $(RUN_TEST_PROGRAM)) $(PYTHON3) -u $(srcdir)/tests/jstests.py \
+-		--no-progress --format=automation --timeout 300 \
++		--no-progress --format=automation --timeout 600 \
+ 		$(JSTESTS_EXTRA_ARGS) \
+ 		$(DIST)/bin/js$(BIN_SUFFIX)
+ 
+@@ -106,7 +106,7 @@ endif
+ 
+ install::
+ 	$(MAKE) -C build install
+-	$(MAKE) -C shell install
++#	$(MAKE) -C shell install
+ 
+ ifdef HAVE_DTRACE
+ javascript-trace.h: $(srcdir)/devtools/javascript-trace.d
+--- ./firefox-115.11.0/js/src/jit/GenerateAtomicOperations.py	1715703530.000000000
++++ ./js/src/jit/GenerateAtomicOperations.py	1717918028.523352255
+@@ -858,9 +858,9 @@ def generate_atomics_header(c_out):
+             "constexpr size_t JS_GENERATED_ATOMICS_WORDSIZE = " + str(wordsize) + ";\n"
+         )
+ 
+-        # Work around a GCC issue on 32-bit x86 by adding MOZ_NEVER_INLINE.
+-        # See bug 1756347.
+-        if is_gcc and cpu_arch == "x86":
++        # Work around a GCC issue on some 32-bit architectures by adding
++        # MOZ_NEVER_INLINE. See bugs 1756347, 1761665.
++        if is_gcc and cpu_arch in ("x86", 'arm'):
+             contents = contents.replace("INLINE_ATTR", "MOZ_NEVER_INLINE inline")
+         else:
+             contents = contents.replace("INLINE_ATTR", "inline")
+--- ./firefox-115.11.0/js/src/jit/ProcessExecutableMemory.cpp	1715703530.000000000
++++ ./js/src/jit/ProcessExecutableMemory.cpp	1717918021.102555349
+@@ -489,9 +489,21 @@ static void* ReserveProcessExecutableMem
+   void* p = MozTaggedAnonymousMmap(randomAddr, bytes, PROT_NONE,
+                                    MAP_NORESERVE | MAP_PRIVATE | MAP_ANON, -1,
+                                    0, "js-executable-memory");
++
++#ifndef __ia64__
+   if (p == MAP_FAILED) {
+     return nullptr;
+   }
++#else
++  if (p == MAP_FAILED) {
++    // the comment above appears to be incorrect on ia64, so retry without the hint
++    p = MozTaggedAnonymousMmap(NULL, bytes, PROT_NONE, MAP_PRIVATE | MAP_ANON,
++                               -1, 0, "js-executable-memory");
++    if (p == MAP_FAILED) {
++      return nullptr;
++    }
++  }
++#endif
+   return p;
+ }
+ 
+--- ./firefox-115.11.0/js/src/jit/shared/AtomicOperations-shared-jit.cpp	1715703530.000000000
++++ ./js/src/jit/shared/AtomicOperations-shared-jit.cpp	1717918030.159241222
+@@ -6,12 +6,12 @@
+ 
+ #include "jit/AtomicOperations.h"
+ 
++#ifdef JS_HAVE_GENERATED_ATOMIC_OPS
++
+ #if defined(__arm__)
+ #  include "jit/arm/Architecture-arm.h"
+ #endif
+ 
+-#ifdef JS_HAVE_GENERATED_ATOMIC_OPS
+-
+ #  include <atomic>
+ 
+ #  include "js/GCAPI.h"
+--- ./firefox-115.11.0/js/src/tests/jstests.list	1715703530.000000000
++++ ./js/src/tests/jstests.list	1717918026.848153787
+@@ -612,6 +612,37 @@ skip script test262/built-ins/AsyncGener
+ # https://github.com/tc39/proposal-intl-numberformat-v3/pull/107
+ skip script test262/intl402/NumberFormat/test-option-useGrouping.js
+ 
++############################
++# Tests disabled by Debian #
++############################
++
++# https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=907363
++# We build without SSE because it isn't in our i386 baseline, which means
++# floating-point arithmetic is in i387 extended precision and the rounding
++# is not what these tests expect
++fails-if(xulRuntime.debian.DEB_HOST_ARCH_CPU.match(/^i386$/)) script non262/Date/timeclip.js
++fails-if(xulRuntime.debian.DEB_HOST_ARCH_CPU.match(/^i386$/)) script test262/language/types/number/S8.5_A2.1.js
++fails-if(xulRuntime.debian.DEB_HOST_ARCH_CPU.match(/^i386$/)) script test262/language/types/number/S8.5_A2.2.js
++
++# https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=908481
++# Floating-point corner cases are different on ARM softfloat
++fails-if(xulRuntime.debian.DEB_HOST_ARCH.match(/^armel$/)) script non262/TypedArray/sort_modifications_concurrent.js
++fails-if(xulRuntime.debian.DEB_HOST_ARCH.match(/^armel$/)) script non262/TypedArray/sort_modifications_concurrent_radixsort.js
++fails-if(xulRuntime.debian.DEB_HOST_ARCH.match(/^armel$/)) script test262/language/expressions/division/S11.5.2_A4_T10.js
++
++# Assumes little-endian IEEE representation of floating point numbers
++fails-if(xulRuntime.debian.DEB_HOST_ARCH_ENDIAN=="big") script test262/built-ins/TypedArray/prototype/set/typedarray-arg-set-values-same-buffer-other-type.js
++
++# This test fails with both System and embedded ICU version
++skip script non262/Date/time-zones-imported.js
++
++# ToNumber isn't working in the same way in all the archs for unsafe integers:
++# https://bugzilla.mozilla.org/show_bug.cgi?id=1755531
++skip-if(xulRuntime.debian.DEB_HOST_ARCH_CPU.match(/i386|s390x|arm64|ppc64|riscv64/)) script test262/built-ins/Date/UTC/fp-evaluation-order.js
++
++# This test fails with the embedded ICU version (only)
++skip script non262/Intl/DateTimeFormat/timeZone_version.js
++
+ ###########################################################
+ # Tests disabled due to issues in test262 importer script #
+ ###########################################################
+--- ./firefox-115.11.0/js/src/tests/lib/manifest.py	1715703530.000000000
++++ ./js/src/tests/lib/manifest.py	1717918022.243170173
+@@ -3,6 +3,7 @@
+ # This includes classes for representing and parsing JS manifests.
+ 
+ import io
++import json
+ import os
+ import posixpath
+ import re
+@@ -37,13 +38,25 @@ class XULInfo:
+         """Return JS that when executed sets up variables so that JS expression
+         predicates on XUL build info evaluate properly."""
+ 
++        debian = {}
++        p = Popen(
++            ['dpkg-architecture', '-a' + os.environ['DEB_HOST_ARCH']],
++            stdout=PIPE,
++            universal_newlines=True,
++        )
++        for line in p.stdout:
++            k, v = line.rstrip('\n').split('=', 1)
++            debian[k] = v
++        p.wait()
++
+         return (
+-            'var xulRuntime = {{ OS: "{}", XPCOMABI: "{}", shell: true }};'
++            'var xulRuntime = {{ OS: "{}", XPCOMABI: "{}", debian: {}, shell: true }};'
+             "var release_or_beta = getBuildConfiguration().release_or_beta;"
+             "var isDebugBuild={}; var Android={}; "
+             "var browserIsRemote={}".format(
+                 self.os,
+                 self.abi,
++                json.dumps(debian),
+                 str(self.isdebug).lower(),
+                 str(self.os == "Android").lower(),
+                 str(self.browserIsRemote).lower(),
+--- ./firefox-115.11.0/js/src/tests/non262/Array/regress-157652.js	1715703530.000000000
++++ ./js/src/tests/non262/Array/regress-157652.js	1717918026.280309665
+@@ -1,4 +1,4 @@
+-// |reftest| skip-if(xulRuntime.XPCOMABI.match(/x86_64|aarch64|ppc64|ppc64le|s390x|mips64|loongarch64|riscv64/)||Android) -- No test results
++// |reftest| skip-if(xulRuntime.debian.DEB_HOST_ARCH_BITS==64||Android) -- No test results
+ /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+@@ -84,7 +84,7 @@
+ //-----------------------------------------------------------------------------
+ var BUGNUMBER = 157652;
+ var summary = "Testing that Array.sort() doesn't crash on very large arrays";
+-var expect = 'No Crash';
++var expect = /No Crash/;
+ var actual = 'No Crash';
+ 
+ printBugNumber(BUGNUMBER);
+@@ -110,8 +110,8 @@ try
+ catch(ex)
+ {
+   // handle changed 1.9 branch behavior. see bug 422348
+-  expect = 'InternalError: allocation size overflow';
++  expect = /InternalError: allocation size overflow|out of memory/;
+   actual = ex + '';
+ }
+ 
+-reportCompare(expect, actual, summary);
++reportMatch(expect, actual, summary);
+--- ./firefox-115.11.0/js/src/tests/non262/Array/regress-330812.js	1715703530.000000000
++++ ./js/src/tests/non262/Array/regress-330812.js	1717918026.280831321
+@@ -1,4 +1,4 @@
+-// |reftest| slow-if(xulRuntime.XPCOMABI.match(/x86_64|aarch64|ppc64|ppc64le|s390x|mips64|loongarch64|riscv64/)||Android) -- No test results
++// |reftest| slow-if(xulRuntime.debian.DEB_HOST_ARCH_BITS==64||Android) -- No test results
+ /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+@@ -8,7 +8,7 @@
+ var BUGNUMBER = 330812;
+ var summary = 'Making Array(1<<29).sort() less problematic';
+ var actual = 'No Crash';
+-var expect = 'No Crash';
++var expect = /No Crash/;
+ 
+ printBugNumber(BUGNUMBER);
+ printStatus (summary);
+@@ -26,8 +26,8 @@ try
+ catch(ex)
+ {
+   // handle changed 1.9 branch behavior. see bug 422348
+-  expect = 'InternalError: allocation size overflow';
++  expect = /InternalError: allocation size overflow|out of memory/;
+   actual = ex + '';
+ }
+ 
+-reportCompare(expect, actual, summary);
++reportMatch(expect, actual, summary);
+--- ./firefox-115.11.0/js/src/tests/non262/Function/regress-338001.js	1715703530.000000000
++++ ./js/src/tests/non262/Function/regress-338001.js	1717918026.282495577
+@@ -8,7 +8,7 @@
+ var BUGNUMBER = 338001;
+ var summary = 'integer overflow in jsfun.c:Function';
+ var actual = 'No Crash';
+-var expect = /No Crash|InternalError: allocation size overflow/;
++var expect = /No Crash|InternalError: allocation size overflow|out of memory/;
+ 
+ printBugNumber(BUGNUMBER);
+ printStatus (summary);
+--- ./firefox-115.11.0/js/src/tests/non262/extensions/regress-336409-1.js	1715703530.000000000
++++ ./js/src/tests/non262/extensions/regress-336409-1.js	1717918026.284304164
+@@ -8,7 +8,7 @@
+ var BUGNUMBER = 336409;
+ var summary = 'Integer overflow in js_obj_toSource';
+ var actual = 'No Crash';
+-var expect = 'No Crash';
++var expect = /No Crash/;
+ 
+ printBugNumber(BUGNUMBER);
+ printStatus (summary);
+@@ -42,9 +42,9 @@ try
+ }
+ catch(ex)
+ {
+-  expect = 'InternalError: allocation size overflow';
++  expect = /InternalError: allocation size overflow|out of memory/
+   actual = ex + '';
+   print(actual);
+ }
+ 
+-reportCompare(expect, actual, summary);
++reportMatch(expect, actual, summary);
+--- ./firefox-115.11.0/js/src/tests/non262/regress/regress-303213.js	1715703530.000000000
++++ ./js/src/tests/non262/regress/regress-303213.js	1717918026.285890881
+@@ -8,7 +8,7 @@
+ var BUGNUMBER = 303213;
+ var summary = 'integer overflow in js';
+ var actual = 'No Crash';
+-var expect = 'No Crash';
++var expect = /No Crash/;
+ 
+ printBugNumber(BUGNUMBER);
+ printStatus (summary);
+@@ -49,8 +49,8 @@ try
+ catch(ex)
+ {
+   // handle changed 1.9 branch behavior. see bug 422348
+-  expect = 'InternalError: allocation size overflow';
++  expect = /InternalError: allocation size overflow|out of memory/;
+   actual = ex + '';
+ }
+  
+-reportCompare(expect, actual, summary);
++reportMatch(expect, actual, summary);
+--- ./firefox-115.11.0/js/src/tests/non262/regress/regress-422348.js	1715703530.000000000
++++ ./js/src/tests/non262/regress/regress-422348.js	1717918026.286271123
+@@ -1,4 +1,4 @@
+-// |reftest| skip-if(xulRuntime.XPCOMABI.match(/x86_64|aarch64|ppc64|ppc64le|s390x|mips64|loongarch64|riscv64/)) -- On 64-bit, takes forever rather than throwing
++// |reftest| skip-if(xulRuntime.debian.DEB_HOST_ARCH_BITS==64) -- On 64-bit, takes forever rather than throwing
+ /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+@@ -20,7 +20,7 @@ function test()
+   printBugNumber(BUGNUMBER);
+   printStatus (summary);
+  
+-  expect = 'InternalError: allocation size overflow';
++  expect = /InternalError: allocation size overflow|out of memory/;
+   try 
+   { 
+     Array(1 << 30).sort(); 
+@@ -31,5 +31,5 @@ function test()
+     actual = ex + '';
+   } 
+ 
+-  reportCompare(expect, actual, summary);
++  reportMatch(expect, actual, summary);
+ }
+--- ./firefox-115.11.0/js/src/wasm/WasmSignalHandlers.cpp	1715703532.000000000
++++ ./js/src/wasm/WasmSignalHandlers.cpp	1717918019.347875801
+@@ -111,7 +111,7 @@ using mozilla::DebugOnly;
+ #      define R01_sig(p) ((p)->sc_frame.fixreg[1])
+ #      define R32_sig(p) ((p)->sc_frame.srr0)
+ #    endif
+-#  elif defined(__linux__) || defined(__sun)
++#  elif defined(__linux__) || defined(__sun) || defined(__GNU__)
+ #    if defined(__linux__)
+ #      define EIP_sig(p) ((p)->uc_mcontext.gregs[REG_EIP])
+ #      define EBP_sig(p) ((p)->uc_mcontext.gregs[REG_EBP])
+--- ./firefox-115.11.0/modules/fdlibm/src/math_private.h	1715703532.000000000
++++ ./modules/fdlibm/src/math_private.h	1717918021.675337631
+@@ -30,7 +30,11 @@
+  * Adapted from https://github.com/freebsd/freebsd-src/search?q=__double_t
+  */
+ 
++#if defined __FLT_EVAL_METHOD__ && (__FLT_EVAL_METHOD__ == 2)
++typedef long double      __double_t;
++#else
+ typedef double      __double_t;
++#endif
+ typedef __double_t  double_t;
+ typedef float       __float_t;
+ 
+--- ./firefox-115.11.0/python/mozbuild/mozbuild/backend/recursivemake.py	1715703532.000000000
++++ ./python/mozbuild/mozbuild/backend/recursivemake.py	1717918019.916877671
+@@ -1532,9 +1532,9 @@ class RecursiveMakeBackend(MakeBackend):
+                                     " of srcdir-relative or absolute paths."
+                                 )
+ 
+-                            install_manifest.add_pattern_link(basepath, wild, dest_dir)
++                            install_manifest.add_pattern_copy(basepath, wild, dest_dir)
+                         else:
+-                            install_manifest.add_pattern_link(f.srcdir, f, dest_dir)
++                            install_manifest.add_pattern_copy(f.srcdir, f, dest_dir)
+                     elif isinstance(f, AbsolutePath):
+                         if not f.full_path.lower().endswith((".dll", ".pdb", ".so")):
+                             raise Exception(
+@@ -1545,7 +1545,7 @@ class RecursiveMakeBackend(MakeBackend):
+                         install_manifest.add_optional_exists(dest_file)
+                         absolute_files.append(f.full_path)
+                     else:
+-                        install_manifest.add_link(f.full_path, dest_file)
++                        install_manifest.add_copy(f.full_path, dest_file)
+                 else:
+                     install_manifest.add_optional_exists(dest_file)
+                     objdir_files.append(self._pretty_path(f, backend_file))
+--- ./firefox-115.11.0/testing/mozbase/mozdevice/mozdevice/adb.py	1715703532.000000000
++++ ./testing/mozbase/mozdevice/mozdevice/adb.py	1717918032.387441471
+@@ -15,7 +15,7 @@ import sys
+ import tempfile
+ import time
+ import traceback
+-from distutils import dir_util
++from shutil import copytree
+ from threading import Thread
+ 
+ import six
+@@ -2983,7 +2983,7 @@ class ADBDevice(ADBCommand):
+             temp_parent = tempfile.mkdtemp()
+             remote_name = os.path.basename(remote)
+             new_local = os.path.join(temp_parent, remote_name)
+-            dir_util.copy_tree(local, new_local)
++            copytree(local, new_local)
+             local = new_local
+             # See do_sync_push in
+             # https://android.googlesource.com/platform/system/core/+/master/adb/file_sync_client.cpp
+@@ -3136,7 +3136,7 @@ class ADBDevice(ADBCommand):
+                     self.rm(intermediate, recursive=True, force=True, timeout=timeout)
+         finally:
+             if copy_required:
+-                dir_util.copy_tree(local, original_local)
++                copytree(local, original_local, dirs_exist_ok=True)
+                 shutil.rmtree(temp_parent)
+ 
+     def get_file(self, remote, offset=None, length=None, timeout=None):
+--- ./firefox-115.11.0/testing/mozbase/mozdevice/mozdevice/remote_process_monitor.py	1715703532.000000000
++++ ./testing/mozbase/mozdevice/mozdevice/remote_process_monitor.py	1717918032.388457992
+@@ -135,7 +135,7 @@ class RemoteProcessMonitor:
+                         self.last_test_seen = "Last test finished"
+                     elif message.get("action") == "log":
+                         line = message["message"].strip()
+-                        m = re.match(".*:\s*(\d*)", line)
++                        m = re.match(r".*:\s*(\d*)", line)
+                         if m:
+                             try:
+                                 val = int(m.group(1))
+--- ./firefox-115.11.0/testing/mozbase/mozrunner/mozrunner/application.py	1715703532.000000000
++++ ./testing/mozbase/mozrunner/mozrunner/application.py	1717918032.389466096
+@@ -5,7 +5,7 @@
+ import os
+ import posixpath
+ from abc import ABCMeta, abstractmethod
+-from distutils.spawn import find_executable
++from shutil import which
+ 
+ import six
+ from mozdevice import ADBDeviceFactory
+@@ -51,7 +51,7 @@ class RemoteContext(object):
+     @property
+     def bindir(self):
+         if self._bindir is None:
+-            paths = [find_executable("emulator")]
++            paths = [which("emulator")]
+             paths = [p for p in paths if p is not None if os.path.isfile(p)]
+             if not paths:
+                 self._bindir = ""
+@@ -88,7 +88,7 @@ class RemoteContext(object):
+             paths.insert(0, os.path.abspath(self.bindir))
+             os.environ["PATH"] = os.pathsep.join(paths)
+ 
+-        return find_executable(binary)
++        return which(binary)
+ 
+     @abstractmethod
+     def stop_application(self):
+--- ./firefox-115.11.0/testing/web-platform/manifestupdate.py	1715703532.000000000
++++ ./testing/web-platform/manifestupdate.py	1717918031.824281739
+@@ -3,17 +3,16 @@
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ import argparse
++import configparser
+ import errno
+ import hashlib
+ import os
+ import sys
+ 
+ import manifestdownload
+-import six
+ from mach.util import get_state_dir
+ from mozfile import load_source
+ from mozlog.structured import commandline
+-from six.moves import configparser
+ from wptrunner import wptcommandline
+ 
+ manifest = None
+@@ -113,7 +112,7 @@ def run(src_root, obj_root, logger=None,
+ 
+     test_paths = wptcommandline.get_test_paths(wptcommandline.config.read(config_path))
+ 
+-    for paths in six.itervalues(test_paths):
++    for paths in test_paths.values():
+         if "manifest_path" not in paths:
+             paths["manifest_path"] = os.path.join(
+                 paths["metadata_path"], "MANIFEST.json"
+@@ -151,7 +150,7 @@ def run(src_root, obj_root, logger=None,
+ 
+ 
+ def ensure_manifest_directories(logger, test_paths):
+-    for paths in six.itervalues(test_paths):
++    for paths in test_paths.values():
+         manifest_dir = os.path.dirname(paths["manifest_path"])
+         if not os.path.exists(manifest_dir):
+             logger.info("Creating directory %s" % manifest_dir)
+@@ -170,7 +169,7 @@ def ensure_manifest_directories(logger,
+ def read_local_config(wpt_dir):
+     src_config_path = os.path.join(wpt_dir, "wptrunner.ini")
+ 
+-    parser = configparser.SafeConfigParser()
++    parser = configparser.ConfigParser()
+     success = parser.read(src_config_path)
+     assert src_config_path in success
+     return parser
+@@ -231,7 +230,7 @@ def load_and_update(
+ ):
+     rv = {}
+     wptdir_hash = hashlib.sha256(os.path.abspath(wpt_dir).encode()).hexdigest()
+-    for url_base, paths in six.iteritems(test_paths):
++    for url_base, paths in test_paths.items():
+         manifest_path = paths["manifest_path"]
+         this_cache_root = os.path.join(
+             cache_root, wptdir_hash, os.path.dirname(paths["manifest_rel_path"])
+--- ./firefox-115.11.0/testing/web-platform/tests/tools/wptrunner/wptrunner/products.py	1715703532.000000000
++++ ./testing/web-platform/tests/tools/wptrunner/wptrunner/products.py	1717918030.717606709
+@@ -1,7 +1,5 @@
+ # mypy: allow-untyped-defs
+-
+ import importlib
+-import imp
+ 
+ from .browsers import product_list
+ 
+@@ -10,12 +8,7 @@ def product_module(config, product):
+     if product not in product_list:
+         raise ValueError("Unknown product %s" % product)
+ 
+-    path = config.get("products", {}).get(product, None)
+-    if path:
+-        module = imp.load_source('wptrunner.browsers.' + product, path)
+-    else:
+-        module = importlib.import_module("wptrunner.browsers." + product)
+-
++    module = importlib.import_module("wptrunner.browsers." + product)
+     if not hasattr(module, "__wptrunner__"):
+         raise ValueError("Product module does not define __wptrunner__ variable")
+ 
