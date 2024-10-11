@@ -1,6 +1,8 @@
 Patches for packages released by Torrekie's repo
 
-Cydia Repository (Upcomming): https://apt.torrekie.com/
+** Missing patches for your desired package? Create an [issue](issues/new) to remind me! **
+
+Cydia Repository (Upcomming): https://apt.torrekie.com/Comdartiwerk
 
 Some packaging policies(preferences):
 

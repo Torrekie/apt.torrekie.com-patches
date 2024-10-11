@@ -1,0 +1,68 @@
+--- a/src/modules/gsettings/module-gsettings.c	1705080129.000000000
++++ b/src/modules/gsettings/module-gsettings.c	1724757643.047838739
+@@ -23,6 +23,7 @@
+ 
+ #include <sys/types.h>
+ #include <sys/wait.h>
++#include <signal.h>
+ 
+ #include <pulsecore/core-error.h>
+ #include <pulsecore/core-util.h>
+--- a/src/pulsecore/semaphore-osx.c	1705080129.000000000
++++ b/src/pulsecore/semaphore-osx.c	1724848209.739982310
+@@ -25,7 +25,17 @@
+ #include <stdio.h>
+ #include <errno.h>
+ #include <pthread.h>
++
++/* Torrekie: Sad story, we patched that which made everything incompatible */
++#define _SYS_SEMAPHORE_H_
+ #include <semaphore.h>
++#define SEM_FAILED ((sem_t *)-1)
++typedef int sem_t;
++extern int sem_wait(sem_t *) __DARWIN_ALIAS_C(sem_wait);
++extern int sem_post(sem_t *);
++extern int sem_close(sem_t *);
++extern sem_t * sem_open(const char *, int, ...);
++extern int sem_unlink(const char *);
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
+--- a/src/pulse/util.c	1705080129.000000000
++++ b/src/pulse/util.c	1727690557.545721872
+@@ -85,6 +85,7 @@ static int _main() PA_GCC_WEAKREF(main);
+ #endif
+ 
+ #ifdef __APPLE__
++#include <mach-o/dyld.h>
+ #include <mach/mach_init.h>
+ #include <mach/thread_act.h>
+ #include <mach/thread_policy.h>
+@@ -288,22 +289,13 @@ char *pa_get_binary_name(char *s, size_t
+ 
+ #ifdef OS_IS_DARWIN
+     {
+-        int mib[] = { CTL_KERN, KERN_PROCARGS, getpid(), 0 };
+-        size_t len, nmib = (sizeof(mib) / sizeof(mib[0])) - 1;
+-        char *buf;
+-
+-        sysctl(mib, nmib, NULL, &len, NULL, 0);
+-        buf = (char *) pa_xmalloc(len);
+-
+-        if (sysctl(mib, nmib, buf, &len, NULL, 0) == 0) {
+-            pa_strlcpy(s, basename(buf), l);
+-            pa_xfree(buf);
++        char path[PATH_MAX + 1];
++        uint32_t len = sizeof(path);
++
++        if ((_NSGetExecutablePath(path, &len))) {
++            pa_strlcpy(s, pa_path_get_filename(path), l);
+             return s;
+         }
+-
+-        pa_xfree(buf);
+-
+-        /* fall thru */
+     }
+ #endif /* OS_IS_DARWIN */
+ 

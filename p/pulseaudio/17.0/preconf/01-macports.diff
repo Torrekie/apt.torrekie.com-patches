@@ -1,0 +1,164 @@
+--- a/meson.build	1705080129.000000000
++++ b/meson.build	1724753358.308638313
+@@ -152,8 +152,6 @@ cdata.set_quoted('PA_SRCDIR', join_paths
+ cdata.set_quoted('PA_BUILDDIR', meson.current_build_dir())
+ if host_machine.system() == 'windows'
+   cdata.set_quoted('PA_SOEXT', '.dll')
+-elif host_machine.system() == 'darwin'
+-  cdata.set_quoted('PA_SOEXT', '.dylib')
+ else
+   cdata.set_quoted('PA_SOEXT', '.so')
+ endif
+@@ -192,6 +190,7 @@ endif
+ # rather than ending up in the config.h file?
+ if host_machine.system() == 'darwin'
+   cdata.set('OS_IS_DARWIN', 1)
++  cdata.set('HAVE_COREAUDIO', 1)
+   cdata.set('_DARWIN_C_SOURCE', '200112L') # Needed to get NSIG on Mac OS
+ elif host_machine.system() == 'windows'
+   cdata.set('OS_IS_WIN32', 1)
+--- a/src/daemon/default.pa.in	1705080129.000000000
++++ b/src/daemon/default.pa.in	1724753045.582207557
+@@ -144,12 +144,14 @@ load-module module-suspend-on-idle
+ 
+ ### If autoexit on idle is enabled we want to make sure we only quit
+ ### when no local session needs us anymore.
++ifelse(@HAVE_COREAUDIO@, 1, [], [dnl
+ .ifexists module-console-kit@PA_SOEXT@
+ load-module module-console-kit
+ .endif
+ .ifexists module-systemd-login@PA_SOEXT@
+ load-module module-systemd-login
+ .endif
++])dnl
+ 
+ ### Enable positioned event sounds
+ load-module module-position-event-sounds
+--- a/src/daemon/main.c	1705080129.000000000
++++ b/src/daemon/main.c	1724753529.079579792
+@@ -524,6 +524,9 @@ int main(int argc, char *argv[]) {
+ #ifdef HAVE_FORK
+     int daemon_pipe[2] = { -1, -1 };
+     int daemon_pipe2[2] = { -1, -1 };
++#ifdef HAVE_COREAUDIO
++    char **args;
++#endif
+ #endif
+     int autospawn_fd = -1;
+     bool autospawn_locked = false;
+@@ -828,6 +831,16 @@ int main(int argc, char *argv[]) {
+         goto finish;
+     }
+ 
++#if defined(HAVE_FORK) && defined(HAVE_COREAUDIO)
++    if ((e = getenv("PULSE_DAEMON_FD"))) {
++        int32_t fd;
++        if (pa_atoi(e, &fd) < 0)
++            goto finish;
++        daemon_pipe2[1] = fd;
++        if (conf->cmd == PA_CMD_START) autospawn_locked = true;
++    }
++#endif
++
+     if (conf->cmd == PA_CMD_START && (configured_address = check_configured_address())) {
+         /* There is an server address in our config, but where did it come from?
+          * By default a standard X11 login will load module-x11-publish which will
+@@ -904,7 +917,7 @@ int main(int argc, char *argv[]) {
+             goto finish;
+         }
+ 
+-        if ((pa_autospawn_lock_acquire(true) < 0)) {
++        if (!autospawn_locked && pa_autospawn_lock_acquire(true) < 0) {
+             pa_log("Failed to acquire autospawn lock");
+             goto finish;
+         }
+@@ -1050,6 +1063,18 @@ int main(int argc, char *argv[]) {
+ #endif
+ 
+         pa_nullify_stdfds();
++
++#if defined(HAVE_FORK) && defined(HAVE_COREAUDIO)
++        /* CoreAudio crashes if we don't exec after forking */
++        if (!(args = malloc((argc + 2) * sizeof *args)))
++            goto finish;
++        memcpy(args, argv, argc * sizeof *argv);
++        args[argc] = "--daemonize=no";
++        args[argc+1] = NULL;
++        s = pa_sprintf_malloc("%d", daemon_pipe2[1]);
++        pa_set_env("PULSE_DAEMON_FD", s);
++        execv(PA_BINARY, args);
++#endif
+     }
+ 
+     pa_set_env_and_record("PULSE_INTERNAL", "1");
+--- a/src/modules/macosx/module-coreaudio-device.c	1705080129.000000000
++++ b/src/modules/macosx/module-coreaudio-device.c	1724752918.101402800
+@@ -44,6 +44,7 @@
+ #include <pulsecore/thread.h>
+ #include <pulsecore/thread-mq.h>
+ #include <pulsecore/i18n.h>
++#include <pulsecore/namereg.h>
+ 
+ #include <CoreAudio/CoreAudio.h>
+ #include <CoreAudio/CoreAudioTypes.h>
+@@ -454,7 +455,12 @@ static int ca_device_create_sink(pa_modu
+         tmp = NULL;
+     }
+ 
+-    ca_sink->name = pa_strbuf_to_string_free(strbuf);
++    /* Clamp to PA_NAME_MAX and leave a "safety margin" for deduplication
++     * and other appended data. */
++    tmp = pa_strbuf_to_string_free(strbuf);
++    ca_sink->name = pa_xstrndup(tmp, PA_NAME_MAX - 20);
++    pa_xfree(tmp);
++    tmp = NULL;
+ 
+     pa_log_debug("Stream name is >%s<", ca_sink->name);
+ 
+@@ -588,7 +594,12 @@ static int ca_device_create_source(pa_mo
+         tmp = NULL;
+     }
+ 
+-    ca_source->name = pa_strbuf_to_string_free(strbuf);
++    /* Clamp to PA_NAME_MAX and leave a "safety margin" for deduplication
++     * and other appended data. */
++    tmp = pa_strbuf_to_string_free(strbuf);
++    ca_source->name = pa_xstrndup(tmp, PA_NAME_MAX - 20);
++    pa_xfree(tmp);
++    tmp = NULL;
+ 
+     pa_log_debug("Stream name is >%s<", ca_source->name);
+ 
+--- a/src/modules/meson.build	1705080129.000000000
++++ b/src/modules/meson.build	1724753516.620265735
+@@ -311,6 +311,12 @@ else
+   no_undefined_args = []
+ endif
+ 
++module_suffix = []
++if host_machine.system() == 'darwin'
++  # meson defaults to dylib but ltdl expects so
++  module_suffix = 'so'
++endif
++
+ foreach m : all_modules
+   name = m[0]
+   sources = m[1]
+@@ -331,5 +337,6 @@ foreach m : all_modules
+     link_args : [nodelete_link_args, no_undefined_args],
+     link_with : extra_libs,
+     name_prefix : '',
++    name_suffix : module_suffix,
+     implicit_include_directories : false)
+ endforeach
+--- a/src/pulsecore/shm.c	1705080129.000000000
++++ b/src/pulsecore/shm.c	1724753250.762639709
+@@ -94,7 +94,7 @@ struct shm_marker {
+ };
+ 
+ // Ensure struct is appropriately packed
+-static_assert(sizeof(struct shm_marker) == 8 * 5, "`struct shm_marker` is not tightly packed");
++_Static_assert(sizeof(struct shm_marker) == 8 * 5, "`struct shm_marker` is not tightly packed");
+ 
+ static inline size_t shm_marker_size(pa_mem_type_t type) {
+     if (type == PA_MEM_TYPE_SHARED_POSIX)

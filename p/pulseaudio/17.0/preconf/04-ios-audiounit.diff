@@ -1,0 +1,930 @@
+TODO:
+* macOS AudioUnit
+* PlayAndRecord stereo I/O over headphones
+--- pulseaudio-17.0/src/modules/macosx/module-coreaudio-device.c	1724756718.002112750
++++ src/modules/macosx/module-coreaudio-device.c	1728631574.636718873
+@@ -46,9 +46,25 @@
+ #include <pulsecore/i18n.h>
+ #include <pulsecore/namereg.h>
+ 
++#include <TargetConditionals.h>
++#if !TARGET_OS_EMBEDDED
+ #include <CoreAudio/CoreAudio.h>
+ #include <CoreAudio/CoreAudioTypes.h>
+ #include <CoreAudio/AudioHardware.h>
++#endif
++
++#if TARGET_OS_EMBEDDED || defined(USE_AUDIOUNIT)
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++/* This is somehow compatible with macOS */
++/* TODO: Fix PlayAndRecord scene */
++#define PLAY_AND_RECORD 0
++#include <AudioToolbox/AudioToolbox.h>
++#include <AudioUnit/AudioUnit.h>
++#ifndef USE_AUDIOUNIT
++#define USE_AUDIOUNIT 1
++#endif
++#endif
+ 
+ #define DEFAULT_FRAMES_PER_IOPROC 512
+ 
+@@ -77,8 +93,16 @@ typedef struct coreaudio_sink coreaudio_
+ typedef struct coreaudio_source coreaudio_source;
+ 
+ struct userdata {
++#if !TARGET_OS_EMBEDDED
++    /* AudioDevice/AudioObject still has to be involved when using AudioUnit on macOS */
+     AudioObjectID object_id;
+     AudioDeviceIOProcID proc_id;
++#endif
++
++#if defined(USE_AUDIOUNIT)
++    AudioUnit audio_unit;
++    bool allow_mic_input;
++#endif
+ 
+     pa_thread_mq thread_mq;
+     pa_asyncmsgq *async_msgq;
+@@ -92,8 +116,8 @@ struct userdata {
+ 
+     char *device_name, *vendor_name;
+ 
+-    const AudioBufferList *render_input_data;
+-    AudioBufferList       *render_output_data;
++    AudioBufferList *render_input_data;
++    AudioBufferList *render_output_data;
+ 
+     AudioStreamBasicDescription stream_description;
+ 
+@@ -133,6 +157,7 @@ static int card_set_profile(pa_card *c,
+     return 0;
+ }
+ 
++#if !defined(USE_AUDIOUNIT)
+ static OSStatus io_render_proc (AudioDeviceID          device,
+                                 const AudioTimeStamp  *now,
+                                 const AudioBufferList *inputData,
+@@ -178,6 +203,183 @@ static OSStatus ca_stream_format_changed
+ 
+     return 0;
+ }
++#else
++static OSStatus au_render_input (void *inRefCon,
++                                 AudioUnitRenderActionFlags *ioActionFlags,
++                                 const AudioTimeStamp *inTimeStamp,
++                                 UInt32 inBusNumber,
++                                 UInt32 inNumberFrames,
++                                 AudioBufferList *ioData) {
++    struct userdata *u = inRefCon;
++
++    pa_assert(u);
++    pa_assert(u->render_input_data);
++    pa_assert(u->render_input_data->mNumberBuffers < 2);
++
++    /* Calculate actual mDataByteSize, reallocate mData */
++    UInt32 actual_size = inNumberFrames * sizeof(Float32) * 2;
++    if (u->render_input_data->mBuffers[0].mDataByteSize < actual_size) {
++        free(u->render_input_data->mBuffers[0].mData);
++        u->render_input_data->mBuffers[0].mDataByteSize = actual_size;
++        u->render_input_data->mBuffers[0].mData = pa_xmalloc(actual_size);
++    }
++
++    /* AudioUnitRender somehow changing the size, we write it back later */
++    UInt32 orig_size = u->render_input_data->mBuffers[0].mDataByteSize;
++
++    OSStatus err = AudioUnitRender(u->audio_unit, ioActionFlags, inTimeStamp, inBusNumber, inNumberFrames, u->render_input_data);
++    if (err) {
++        pa_log("AudioUnitRender failed (%d).", err);
++        return err;
++    }
++
++    if (u->sources)
++        pa_assert_se(pa_asyncmsgq_send(u->async_msgq, PA_MSGOBJECT(u->sources->pa_source),
++                                        CA_MESSAGE_RENDER, NULL, 0, NULL) == 0);
++
++    u->render_input_data->mBuffers[0].mDataByteSize = orig_size;
++
++    return noErr;
++}
++
++static OSStatus au_render_output (void *inRefCon,
++                                  AudioUnitRenderActionFlags *ioActionFlags,
++                                  const AudioTimeStamp *inTimeStamp,
++                                  UInt32 inBusNumber,
++                                  UInt32 inNumberFrames,
++                                  AudioBufferList *ioData) {
++    struct userdata *u = inRefCon;
++
++    pa_assert(u);
++
++    u->render_output_data = ioData;
++
++    if (u->sinks)
++        pa_assert_se(pa_asyncmsgq_send(u->async_msgq, PA_MSGOBJECT(u->sinks->pa_sink),
++                                        CA_MESSAGE_RENDER, NULL, 0, NULL) == 0);
++
++    return noErr;
++}
++
++static void ca_stream_format_changed(void *inRefCon,
++                                     AudioUnit inUnit,
++                                     AudioUnitPropertyID inID,
++                                     AudioUnitScope inScope,
++                                     AudioUnitElement inElement) {
++    struct userdata *u = inRefCon;
++
++    pa_assert(u);
++
++    /* REVISIT: PA can't currently handle external format change requests.
++     * Hence, we set the original format back in this callback to avoid horrible audio artefacts.
++     * The device settings will appear to be 'locked' for any application as long as the PA daemon is running.
++     * Once we're able to propagate such events up in the core, this needs to be changed. */
++
++    AudioUnitSetProperty(inUnit, inID, inScope, inElement, &u->stream_description, sizeof(u->stream_description));
++
++    return;
++}
++#if TARGET_OS_EMBEDDED
++#if defined(USE_NEW_SESSION)
++static void au_session_interrupted(void *inClientData,
++                                  UInt32 inInterruptionState)
++{
++    struct userdata *u = inClientData;
++    OSStatus err;
++
++    pa_log("Session interrupted > --- %s ---", inInterruptionState == kAudioSessionBeginInterruption ? "Begin Interruption" : "End Interruption");
++
++    if (u->audio_unit != NULL) {
++        if (inInterruptionState == kAudioSessionBeginInterruption) {
++            err = AudioOutputUnitStop(u->audio_unit);
++            if (err) pa_log("Could not stop AURemoteIO (%d).", (int)err);
++        }
++
++        if (inInterruptionState == kAudioSessionEndInterruption) {
++            err = AudioSessionSetActive(true);
++            if (err) pa_log("AudioSession set active failed (%d).", (int)err);
++
++            err = AudioOutputUnitStart(u->audio_unit);
++            if (err) pa_log("Could not start AURemoteIO (%d).", (int)err);
++        }
++    }
++}
++#endif
++static char *str_route_change(CFDictionaryRef reason)
++{
++    CFNumberRef change_reason_ref = (CFNumberRef)CFDictionaryGetValue(reason, CFSTR(kAudioSession_AudioRouteChangeKey_Reason));
++    SInt32 reason_number;
++    CFNumberGetValue (change_reason_ref, kCFNumberSInt32Type, &reason_number);
++    char ret[22];
++    switch (reason_number) {
++        case kAudioSessionRouteChangeReason_NewDeviceAvailable:
++            return "NewDeviceAvailable";
++        case kAudioSessionRouteChangeReason_OldDeviceUnavailable:
++            return "OldDeviceUnavailable";
++        case kAudioSessionRouteChangeReason_CategoryChange:
++            return "CategoryChange";
++        case kAudioSessionRouteChangeReason_Override:
++            return "Override";
++        /* where is 5? */
++        case kAudioSessionRouteChangeReason_WakeFromSleep:
++            return "WakeFromSleep";
++        case kAudioSessionRouteChangeReason_NoSuitableRouteForCategory:
++            return "NoSuitableRouteForCategory";
++        case kAudioSessionRouteChangeReason_RouteConfigurationChange:
++            return "RouteConfigurationChange";
++        default:
++            /* Undocumented reasons */
++            sprintf(ret, "Undocumented reason %d", reason_number);
++            return pa_xstrdup(ret);
++    }
++
++    return "YOU SHOULD NOT REACH THIS TEXT! PLEASE REPORT BUG!";
++}
++static char *str_prop_listener(AudioSessionPropertyID inID)
++{
++    char ret[4] = {(inID >> 24), (inID >> 16) & 0xFF, (inID >> 8) & 0xFF, inID & 0xFF};
++    switch (inID) {
++        case kAudioSessionProperty_AudioRouteChange:
++            return "AudioRouteChange";
++        case kAudioSessionProperty_CurrentHardwareInputNumberChannels:
++            return "CurrentHardwareInputNumberChannels";
++        case kAudioSessionProperty_CurrentHardwareOutputNumberChannels:
++            return "CurrentHardwareOutputNumberChannels";
++        case kAudioSessionProperty_CurrentHardwareOutputVolume:
++            return "CurrentHardwareOutputVolume";
++        case kAudioSessionProperty_AudioInputAvailable:
++            return "AudioInputAvailable";
++        case kAudioSessionProperty_InputSources:
++            return "InputSources";
++        case kAudioSessionProperty_OutputDestinations:
++            return "OutputDestinations";
++        case kAudioSessionProperty_InputGainAvailable:
++            return "InputGainAvailable";
++        case kAudioSessionProperty_InputGainScalar:
++            return "InputGainScalar";
++        default:
++            return pa_xstrdup(ret);
++    }
++
++    return "YOU SHOULD NOT REACH THIS TEXT! PLEASE REPORT BUG!";
++}
++static void au_session_property_changed(void *inClientData,
++                                        AudioSessionPropertyID inID,
++                                        UInt32 inDataSize,
++                                        const void *inData)
++{
++    switch (inID) {
++        case kAudioSessionProperty_AudioRouteChange:
++            pa_log_info("Route change: %s", str_route_change((CFDictionaryRef)inData));
++            break;
++        default:
++            pa_log_debug("Unhandled property (%s) catched.", str_prop_listener(inID));
++    }
++
++    return;
++}
++#endif
++#endif
+ 
+ static pa_usec_t get_latency_us(pa_object *o) {
+     struct userdata *u;
+@@ -186,8 +388,10 @@ static pa_usec_t get_latency_us(pa_objec
+     UInt32 v = 0, total = 0;
+     OSStatus err;
+     UInt32 size = sizeof(v);
++#if !TARGET_OS_EMBEDDED
+     AudioObjectPropertyAddress property_address;
+     AudioObjectID stream_id;
++#endif
+ 
+     if (pa_sink_isinstance(o)) {
+         coreaudio_sink *sink = PA_SINK(o)->userdata;
+@@ -206,6 +410,7 @@ static pa_usec_t get_latency_us(pa_objec
+ 
+     pa_assert(u);
+ 
++#if !defined(USE_AUDIOUNIT)
+     property_address.mScope = is_source ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput;
+     property_address.mElement = kAudioObjectPropertyElementMaster;
+ 
+@@ -252,7 +457,51 @@ static pa_usec_t get_latency_us(pa_objec
+             pa_log_warn("Failed to get stream latency: %d", err);
+     } else
+         pa_log_warn("Failed to get streams: %d", err);
++#else
++#if !TARGET_OS_EMBEDDED
++    /* get the device latency */
++    size = sizeof(v);
++    err = AudioUnitGetProperty(u->audio_unit, kAudioDevicePropertyLatency, kAudioUnitScope_Global, 0, &v, &size);
++    if (!err)
++        total += v;
++    else
++        pa_log_warn("Failed to get device latency: %d", err);
++
++    /* the IOProc buffer size */
++    property_address.mSelector = kAudioDevicePropertyBufferFrameSize;
++    size = sizeof(v);
++    err = AudioUnitGetProperty(u->audio_unit, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0, &v, &size);
++    if (!err)
++        total += v;
++    else
++        pa_log_warn("Failed to get buffer frame size: %d", err);
++
++    /* IOProc safety offset - this value is the same for both directions, hence we divide it by 2 */
++    property_address.mSelector = kAudioDevicePropertySafetyOffset;
++    size = sizeof(v);
++    err = AudioUnitGetProperty(u->audio_unit, kAudioDevicePropertySafetyOffset, kAudioUnitScope_Global, 0, &v, &size);
++    if (!err)
++        total += v / 2;
++    else
++        pa_log_warn("Failed to get safety offset: %d", err);
++#else
++    /* get the device latency */
++    /* Torrekie: Sad truth, there's no way to calculate kAudioUnitProperty_Latency on iOS */
++    size = sizeof(v);
++    err = AudioUnitGetProperty(u->audio_unit, kAudioUnitProperty_Latency, kAudioUnitScope_Global, 0, &v, &size);
++    if (!err)
++        total += v;
++    else
++        pa_log_warn("Failed to get AURemoteIO latency: %d", err);
+ 
++    size = sizeof(v);
++    err = AudioSessionGetProperty(is_source ? kAudioSessionProperty_CurrentHardwareInputLatency : kAudioSessionProperty_CurrentHardwareOutputLatency, &size, &v);
++    if (!err)
++        total += v;
++    else
++         pa_log_warn("Failed to get session latency: %d", err);
++#endif
++#endif
+     return pa_bytes_to_usec(total * pa_frame_size(ss), ss);
+ }
+ 
+@@ -271,10 +520,21 @@ static void ca_device_check_device_state
+         if (ca_source->active)
+             active = true;
+ 
++#if !defined(USE_AUDIOUNIT)
+     if (active && !u->running)
+         AudioDeviceStart(u->object_id, u->proc_id);
+     else if (!active && u->running)
+         AudioDeviceStop(u->object_id, u->proc_id);
++#else
++    OSStatus err;
++    if (active && !u->running) {
++        err = AudioOutputUnitStart(u->audio_unit);
++        if (err) pa_log("Failed to start AURemoteIO (err = %d).", (int) err);
++    } else if (!active && u->running) {
++        err = AudioOutputUnitStop(u->audio_unit);
++        if (err) pa_log("Failed to stop AURemoteIO (err = %d).", (int) err);
++    }
++#endif
+ 
+     u->running = active;
+ }
+@@ -414,7 +674,9 @@ static int ca_device_create_sink(pa_modu
+     unsigned int i;
+     char *tmp = NULL;
+     pa_strbuf *strbuf;
++#if !defined(USE_AUDIOUNIT)
+     AudioObjectPropertyAddress property_address;
++#endif
+     CFStringRef tmp_cfstr = NULL;
+ 
+     if (buf->mNumberChannels > PA_CHANNELS_MAX) {
+@@ -431,11 +693,16 @@ static int ca_device_create_sink(pa_modu
+     strbuf = pa_strbuf_new();
+ 
+     for (i = 0; i < buf->mNumberChannels; i++) {
++#if !defined(USE_AUDIOUNIT)
+         property_address.mSelector = kAudioObjectPropertyElementName;
+         property_address.mScope = kAudioDevicePropertyScopeOutput;
+         property_address.mElement = channel_idx + i + 1;
+         size = sizeof(tmp_cfstr);
+         err = AudioObjectGetPropertyData(u->object_id, &property_address, 0, NULL, &size, &tmp_cfstr);
++#else
++        size = sizeof(tmp_cfstr);
++        err = AudioUnitGetProperty(u->audio_unit, kAudioUnitProperty_ElementName, kAudioUnitScope_Output, i, &tmp_cfstr, &size);
++#endif
+         if (err == 0) {
+             tmp = CFString_to_cstr(tmp_cfstr);
+ 
+@@ -447,7 +714,13 @@ static int ca_device_create_sink(pa_modu
+             pa_strbuf_puts(strbuf, ", ");
+ 
+         if (err || !tmp || !strlen(tmp))
++#if !defined(USE_AUDIOUNIT)
+             pa_strbuf_printf(strbuf, "Channel %d", (int) property_address.mElement);
++#else
++            /* Interesting fact, kAudioUnitErr_InvalidPropertyValue means we do have this channel without a name set,
++             * otherwise it returns kAudioUnitErr_InvalidElement */
++            pa_strbuf_printf(strbuf, "Channel %d", i);
++#endif
+         else
+             pa_strbuf_puts(strbuf, tmp);
+ 
+@@ -473,9 +746,14 @@ static int ca_device_create_sink(pa_modu
+         ca_sink->map.map[1] = PA_CHANNEL_POSITION_RIGHT;
+     }
+ 
++
+     ca_sink->ss.rate = u->stream_description.mSampleRate;
+     ca_sink->ss.format = PA_SAMPLE_FLOAT32LE;
+ 
++#if defined(USE_AUDIOUNIT)
++    u->device_name = pa_xstrdup("Remote IO (Output)");
++#endif
++
+     pa_sink_new_data_init(&new_data);
+     new_data.card = u->card;
+     new_data.driver = __FILE__;
+@@ -553,7 +831,9 @@ static int ca_device_create_source(pa_mo
+     unsigned int i;
+     char *tmp = NULL;
+     pa_strbuf *strbuf;
++#if !defined(USE_AUDIOUNIT)
+     AudioObjectPropertyAddress property_address;
++#endif
+     CFStringRef tmp_cfstr = NULL;
+ 
+     if (buf->mNumberChannels > PA_CHANNELS_MAX) {
+@@ -570,11 +850,16 @@ static int ca_device_create_source(pa_mo
+     strbuf = pa_strbuf_new();
+ 
+     for (i = 0; i < buf->mNumberChannels; i++) {
++#if !defined(USE_AUDIOUNIT)
+         property_address.mSelector = kAudioObjectPropertyElementName;
+         property_address.mScope = kAudioDevicePropertyScopeInput;
+         property_address.mElement = channel_idx + i + 1;
+         size = sizeof(tmp_cfstr);
+         err = AudioObjectGetPropertyData(u->object_id, &property_address, 0, NULL, &size, &tmp_cfstr);
++#else
++        size = sizeof(tmp_cfstr);
++        err = AudioUnitGetProperty(u->audio_unit, kAudioUnitProperty_ElementName, kAudioUnitScope_Input, i, &tmp_cfstr, &size);
++#endif
+         if (err == 0) {
+             tmp = CFString_to_cstr(tmp_cfstr);
+ 
+@@ -586,7 +871,11 @@ static int ca_device_create_source(pa_mo
+             pa_strbuf_puts(strbuf, ", ");
+ 
+         if (err || !tmp || !strlen(tmp))
++#if !defined(USE_AUDIOUNIT)
+             pa_strbuf_printf(strbuf, "Channel %d", (int) property_address.mElement);
++#else
++            pa_strbuf_printf(strbuf, "Channel %d", i);
++#endif
+         else
+             pa_strbuf_puts(strbuf, tmp);
+ 
+@@ -615,6 +904,10 @@ static int ca_device_create_source(pa_mo
+     ca_source->ss.rate = u->stream_description.mSampleRate;
+     ca_source->ss.format = PA_SAMPLE_FLOAT32LE;
+ 
++#if defined(USE_AUDIOUNIT)
++    u->device_name = pa_xstrdup("Remote IO (Input)");
++#endif
++
+     pa_source_new_data_init(&new_data);
+     new_data.card = u->card;
+     new_data.driver = __FILE__;
+@@ -662,8 +955,14 @@ static int ca_device_create_streams(pa_m
+     UInt32 size, i, channel_idx;
+     struct userdata *u = m->userdata;
+     AudioBufferList *buffer_list;
++#if !defined(USE_AUDIOUNIT)
+     AudioObjectPropertyAddress property_address;
++#else
++    AudioStreamBasicDescription asbd = {0};
++    bool retried;
++#endif
+ 
++#if !defined(USE_AUDIOUNIT)
+     property_address.mScope = direction_in ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput;
+     property_address.mElement = kAudioObjectPropertyElementMaster;
+ 
+@@ -671,6 +970,15 @@ static int ca_device_create_streams(pa_m
+     size = sizeof(AudioStreamBasicDescription);
+     property_address.mSelector = kAudioDevicePropertyStreamFormat;
+     err = AudioObjectGetPropertyData(u->object_id, &property_address, 0, NULL, &size, &u->stream_description);
++#else
++get_stream_format:
++    /* In AudioDevice, each device has its I/O scope, which means a microphone can also have its input and output scope,
++     * even they all called 'scope', the AudioUnit input scope means microphone itself, which takes place of AudioDeviceID.
++     * the corresponding setup is 'Element/Bus', AudioDevice input scope => AudioUnit Element 1 */
++    size = sizeof(AudioStreamBasicDescription);
++    memset(&u->stream_description, 0, size);
++    err = AudioUnitGetProperty(u->audio_unit, kAudioUnitProperty_StreamFormat, direction_in ? kAudioUnitScope_Output: kAudioUnitScope_Input, direction_in, &u->stream_description, &size);
++#endif
+     if (err) {
+         /* no appropriate streams found - silently bail. */
+         return -1;
+@@ -685,6 +993,7 @@ static int ca_device_create_streams(pa_m
+         return -1;
+     }
+ 
++#if !defined(USE_AUDIOUNIT)
+     /* get stream configuration */
+     size = 0;
+     property_address.mSelector = kAudioDevicePropertyStreamConfiguration;
+@@ -699,6 +1008,72 @@ static int ca_device_create_streams(pa_m
+ 
+     buffer_list = (AudioBufferList *) pa_xmalloc(size);
+     err = AudioObjectGetPropertyData(u->object_id, &property_address, 0, NULL, &size, buffer_list);
++#else
++    /* On iOS we have to do one more step, which reset some values that could possibly be invalid
++     * hence, we have to move the format listener to here */
++    /* Don't allow kAudioFormatFlagIsNonInterleaved here */
++    if (u->stream_description.mFormatFlags & kAudioFormatFlagIsNonInterleaved) {
++        if (retried) {
++            /* For some reason, we seems unable to override input format */
++            pa_log("Failed to set %s to interleaved.", direction_in ? "input" : "output");
++            retried = false;
++            goto skip;
++        } else {
++            pa_log_info("Default %s setting is Non-interleaved, trying to reset.", direction_in ? "input" : "output");
++        }
++        asbd.mSampleRate = 48000.0;
++        asbd.mFormatID = u->stream_description.mFormatID;
++        /* Default format has kLinearPCMFormatFlagsSampleFractionShift, we override them */
++        /* default is kAudioFormatFlagIsFloat, shall we use kAudioFormatFlagIsSignedInteger? */
++        asbd.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
++        asbd.mBytesPerPacket = 8;
++        asbd.mFramesPerPacket = 1; /* Interleaved ? 1 : 2 */
++        asbd.mChannelsPerFrame = 2; /* Interleaved ? 2 : 1 */
++        asbd.mBitsPerChannel = 32;
++        asbd.mBytesPerFrame = 8;
++        asbd.mReserved = 0;
++
++        /* Output 1 = Mic, Input 0 = Speaker */
++        err = AudioUnitSetProperty(u->audio_unit, kAudioUnitProperty_StreamFormat, direction_in ? kAudioUnitScope_Output : kAudioUnitScope_Input, direction_in, &asbd, sizeof(asbd));
++pa_log("set %s %d", direction_in ? "Output" : "Input", direction_in);
++        if (err) {
++            pa_log("Failed to set %s audio format (err = %d).", direction_in ? "input" : "output", (int) err);
++        } else {
++            /* After that, we shall refresh u->stream_description */
++            retried = true;
++            goto get_stream_format;
++        }
++    }
++skip:
++    retried = false;
++
++    /* iOS always set mSampleRate to 0 (kAudioStreamAnyRate), which not accepted by pulseaudio */
++    if (u->stream_description.mSampleRate == kAudioStreamAnyRate) {
++#if TARGET_OS_EMBEDDED
++        size = sizeof(u->stream_description.mSampleRate);
++        err = AudioSessionGetProperty(kAudioSessionProperty_CurrentHardwareSampleRate, &size, &u->stream_description.mSampleRate);
++        if (err) {
++            pa_log("Unable to get current hardware sample rate, defaulting to 48000 (%d).", (int)err);
++            u->stream_description.mSampleRate = 48000.0;
++        }
++#else
++        /* macOS default input 44100, output 48000 */
++        u->stream_description.mSampleRate = direction_in ? 44100.0 : 48000.0;
++#endif
++    }
++
++    /* This AudioBufferList is for keeping original code structure, not for actual use */
++    buffer_list = (AudioBufferList *) pa_xmalloc(offsetof(AudioBufferList, mBuffers) + (sizeof(AudioBuffer) * ((u->stream_description.mFormatFlags & kAudioFormatFlagIsNonInterleaved) ? u->stream_description.mChannelsPerFrame : 1)));
++    buffer_list->mNumberBuffers = (u->stream_description.mFormatFlags & kAudioFormatFlagIsNonInterleaved) ? u->stream_description.mChannelsPerFrame : 1;
++    for (i = 0; i < buffer_list->mNumberBuffers; ++i) {
++        buffer_list->mBuffers[i].mNumberChannels = (u->stream_description.mFormatFlags & kAudioFormatFlagIsNonInterleaved) ? 1 : u->stream_description.mChannelsPerFrame;
++        /* (48000 * bufferDuration * mBytesPerFrame) / mFramesPerPacket = mDataByteSize */
++        /* NonInterleaved size is 8192 / 1, Interleaved size is 8192 / mNumberBuffers for each */
++        buffer_list->mBuffers[i].mDataByteSize = 8192 / ((buffer_list->mNumberBuffers > 1) ? 2 : 1);
++        // buffer_list->mBuffers[0].mData = (UInt32 *)pa_xmalloc(size);
++
++    }
++#endif
+ 
+     if (!err) {
+         pa_log_debug("Sample rate: %f", u->stream_description.mSampleRate);
+@@ -777,7 +1152,14 @@ int pa__init(pa_module *m) {
+     pa_card_profile *p;
+     coreaudio_sink *ca_sink;
+     coreaudio_source *ca_source;
++#if !TARGET_OS_EMBEDDED
+     AudioObjectPropertyAddress property_address;
++#endif
++#if defined(USE_AUDIOUNIT)
++    AudioComponentDescription desc;
++    AudioComponent output_component;
++    UInt32 buf;
++#endif
+ 
+     pa_assert(m);
+ 
+@@ -800,11 +1182,20 @@ int pa__init(pa_module *m) {
+     u->module = m;
+     m->userdata = u;
+ 
++    /* TODO: We should change the platform check macros to __builtin_available */
++#if !TARGET_OS_EMBEDDED
+     if (pa_modargs_get_value_u32(ma, "object_id", (unsigned int *) &u->object_id) != 0) {
+         pa_log("Failed to parse object_id argument.");
+         goto fail;
+     }
++#else
++    /* TODO: modify module-coreaudio-detect to separate mic and speaker */
++    if (pa_modargs_get_value_u32(ma, "object_id", (unsigned int *) &buf) == 0) {
++        pa_log_debug("object_id argument ignored when using AudioUnit on iOS.");
++    }
++#endif
+ 
++#if !defined(USE_AUDIOUNIT)
+     property_address.mScope = kAudioObjectPropertyScopeGlobal;
+     property_address.mElement = kAudioObjectPropertyElementMaster;
+ 
+@@ -833,6 +1224,204 @@ int pa__init(pa_module *m) {
+         u->vendor_name = pa_xstrdup(CFString_to_cstr(tmp_cfstr));
+         pa_log_info("Vendor of CoreAudio device '%s': '%s'", u->device_name, CFString_to_cstr(tmp_cfstr));
+     }
++#else
++    /* The better Apple practice is to use AudioQueue, thats what afplay do */
++#if TARGET_OS_EMBEDDED && defined(USE_NEW_SESSION)
++    /* According to what aurioTouch does, we have to create our own AudioSession instead of using the one provided by AudioComponent */
++    err = AudioSessionInitialize(NULL, NULL, au_session_interrupted, u);
++    if (err) {
++        pa_log("Unable to create AudioSession (%d).", (int)err);
++        goto fail;
++    }
++
++#if PLAY_AND_RECORD
++    size = sizeof(buf);
++    err = AudioSessionGetProperty(kAudioSessionProperty_AudioInputAvailable, &size, &buf);
++    if (err) {
++        pa_log("Unable to check microphone availability, input will be disabled (%d).", (int)err);
++    }
++    u->allow_mic_input = (buf > 0);
++#else
++    u->allow_mic_input = false;
++#endif
++
++    if (u->allow_mic_input) {
++        /* We somehow need to handle mic and speaker at same time */
++        buf = kAudioSessionCategory_PlayAndRecord;
++        err = AudioSessionSetProperty(kAudioSessionProperty_AudioCategory, sizeof(buf), &buf);
++        if (err) {
++            pa_log("Unable to set PlayAndRecord category, microphone device will be disabled to avoid audio interrupts (%d).", (int)err);
++        }
++
++        buf = 1;
++        err = AudioSessionSetProperty(kAudioSessionProperty_OverrideCategoryEnableBluetoothInput, sizeof(buf), &buf);
++        if (err) {
++            pa_log("Unable to set Bluetooth Input, Bluetooth devices will be detached (%d).", (int)err);
++        }
++    } else {
++        buf = kAudioSessionCategory_MediaPlayback;
++        err = AudioSessionSetProperty(kAudioSessionProperty_AudioCategory, sizeof(buf), &buf);
++        if (err) {
++            pa_log("Unable to set MediaPlayback category (%d).", (int)err);
++        }
++    }
++
++    /* Allow mixing */
++    buf = true;
++    err = AudioSessionSetProperty(kAudioSessionProperty_OverrideCategoryMixWithOthers, sizeof(buf), &buf);
++    if (err) {
++        pa_log("Unable to set MixWithOthers category override, audio may interrupted by other processes (%d).", (int)err);
++    }
++
++    /* We currently do nothing on route changes */
++    err = AudioSessionAddPropertyListener(kAudioSessionProperty_AudioRouteChange, au_session_property_changed, u);
++    if (err) {
++        pa_log_debug("Unable to listen to audio route changes (%d).", (int)err);
++    }
++
++    /* TODO: Once we handles AVAudioSessionMediaServicesWereResetNotification,
++     * all the AudioUnit/AudioSession init logics shall be placed to separated functions */
++
++#endif
++    /* find the default audio component */
++    desc.componentType = kAudioUnitType_Output;
++    desc.componentSubType = kAudioUnitSubType_RemoteIO; /* RemoteIO actually available on macOS */
++    desc.componentManufacturer = kAudioUnitManufacturer_Apple;
++    desc.componentFlags = 0;
++    desc.componentFlagsMask = 0;
++
++    output_component = AudioComponentFindNext(NULL, &desc);
++    if (output_component == NULL) {
++        pa_log("Failed to find any Audio Component.");
++        goto fail;
++    }
++
++    err = AudioComponentInstanceNew(output_component, &u->audio_unit);
++    if (err) {
++        pa_log("Failed to get AudioComponentInstanceNew() (err = %d).", (int) err);
++        goto fail;
++    }
++
++    /* The previous code actually works on iOS, but it returns null aggregate devices instead */
++    /* kAudioDevicePropertyDeviceName returns 'who?' */
++    /* kAudioDevicePropertyDeviceNameCFString results "VAD Aggregate Device", with no functionality */
++
++    /* How can people change the device info by replacing hardwares on iDevices? */
++    u->device_name = pa_xstrdup("Remote IO");
++
++    /* To make my patch more readable, copy the common code instead of patching on top of it */
++    pa_card_new_data_init(&card_new_data);
++    pa_proplist_sets(card_new_data.proplist, PA_PROP_DEVICE_STRING, u->device_name);
++    card_new_data.driver = __FILE__;
++    pa_card_new_data_set_name(&card_new_data, u->device_name);
++    pa_log_info("Initializing module for Audio Unit '%s'", u->device_name);
++
++    /* set device vendor name (what) */
++    /* The correct way of reading device name is to read IORegistry of com.apple.driver.AppleEmbeddedAudio,
++       but that was too complicated */
++    u->vendor_name = "Apple Inc.";
++
++#if !defined(USE_NEW_SESSION)
++#if PLAY_AND_RECORD
++    size = sizeof(buf);
++    err = AudioSessionGetProperty(kAudioSessionProperty_AudioInputAvailable, &size, &buf);
++    if (err) {
++        pa_log("Unable to check microphone availability, input will be disabled (%d).", (int)err);
++    }
++    u->allow_mic_input = (buf > 0);
++#else
++    u->allow_mic_input = false;
++#endif
++
++    if (u->allow_mic_input) {
++        /* We somehow need to handle mic and speaker at same time */
++        buf = kAudioSessionCategory_PlayAndRecord;
++        size = sizeof(buf);
++        err = AudioSessionSetProperty(kAudioSessionProperty_AudioCategory, sizeof(buf), &buf);
++        if (err) {
++            pa_log("Unable to set PlayAndRecord category, microphone device will be disabled to avoid audio interrupts (%d).", (int)err);
++        }
++
++        buf = 1;
++        size = sizeof(buf);
++        err = AudioSessionSetProperty(kAudioSessionProperty_OverrideCategoryEnableBluetoothInput, sizeof(buf), &buf);
++        if (err) {
++            pa_log("Unable to set Bluetooth Input, Bluetooth devices will be detached (%d).", (int)err);
++        }
++    } else {
++        buf = kAudioSessionCategory_MediaPlayback;
++        size = sizeof(buf);
++        err = AudioSessionSetProperty(kAudioSessionProperty_AudioCategory, sizeof(buf), &buf);
++        if (err) {
++            pa_log("Unable to set MediaPlayback category (%d).", (int)err);
++        }
++    }
++
++    /* Allow mixing */
++    buf = true;
++    size = sizeof(buf);
++    err = AudioSessionSetProperty(kAudioSessionProperty_OverrideCategoryMixWithOthers, sizeof(buf), &buf);
++    if (err) {
++        pa_log("Unable to set MixWithOthers category override, audio may interrupted by other processes (%d).", (int)err);
++    }
++
++    /* We currently do nothing on route changes */
++    err = AudioSessionAddPropertyListener(kAudioSessionProperty_AudioRouteChange, au_session_property_changed, u);
++    if (err) {
++        pa_log_debug("Unable to listen to audio route changes (%d).", (int)err);
++    }
++
++    /* TODO: Once we handles AVAudioSessionMediaServicesWereResetNotification,
++     * all the AudioUnit/AudioSession init logics shall be placed to separated functions */
++#endif
++
++    /*
++                +------------------------------------------------+
++                |                   I/O Unit                     |
++                |  +-----------------+     +------------------+  |
++                |  |   Input scope   |     |   Output scope   |  |
++                |  | +--------------------------------------+ |  |
++             *------>|        Element 0 (Output bus)          |-------> Speaker
++             |  |  | +--------------------------------------+ |  |
++             |  |  | +--------------------------------------+ |  |
++       Mic --------->|        Element 1 (Input bus)         |-------+
++             |  |  | +--------------------------------------+ |  |  |
++             |  |  +-----------------+     +------------------+  |  |
++             |  +------------------------------------------------+  |
++             +-------------------- Application <--------------------*
++
++    */
++
++    if (u->allow_mic_input) {
++        /* Enable IO for recording (only when input is available) */
++        buf = 1;
++        err = AudioUnitSetProperty(u->audio_unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Input, 1, &buf, sizeof(buf));
++        if (err) {
++            pa_log("Failed to enable input on AURemoteIO (err = %d).", (int) err);
++            pa_log("microphone device will be disabled.");
++            u->allow_mic_input = false;
++        }
++    }
++
++    /* Enable IO for playback */
++    err = AudioUnitSetProperty(u->audio_unit, kAudioOutputUnitProperty_EnableIO, kAudioUnitScope_Output, 0, &buf, sizeof(buf));
++    if (err) {
++        pa_log("Failed to enable output on AURemoteIO (err = %d).", (int) err);
++    }
++
++    /* PlayAndRecord resulting in mono */
++    AudioChannelLayout layout = {0};
++    layout.mChannelLayoutTag = kAudioChannelLayoutTag_StereoHeadphones;
++    err = AudioUnitSetProperty(u->audio_unit, kAudioUnitProperty_AudioChannelLayout, kAudioUnitScope_Input, 0, &layout, sizeof(layout));
++    if (err) {
++        pa_log("Failed to set stereo input layout on AURemoteIO (err = %d).", (int) err);
++    }
++    err = AudioUnitSetProperty(u->audio_unit, kAudioUnitProperty_AudioChannelLayout, kAudioUnitScope_Output, 0, &layout, sizeof(layout));
++    if (err) {
++        pa_log("Failed to set stereo output layout on AURemoteIO (err = %d).", (int) err);
++    }
++
++#endif
+ 
+     /* add on profile */
+     p = pa_card_profile_new("on", _("On"), 0);
+@@ -882,6 +1471,7 @@ int pa__init(pa_module *m) {
+         goto fail;
+     }
+ 
++#if !defined(USE_AUDIOUNIT)
+     /* register notification callback for stream format changes */
+     property_address.mSelector = kAudioDevicePropertyStreamFormat;
+     property_address.mScope = kAudioObjectPropertyScopeGlobal;
+@@ -905,13 +1495,68 @@ int pa__init(pa_module *m) {
+     pa_log_debug("%u frames per IOProc\n", (unsigned int) frames);
+ 
+     /* create one ioproc for both directions */
+-//    err = AudioDeviceCreateIOProcID(u->object_id, io_render_proc, u, &u->proc_id);
+-    err = AudioDeviceAddIOProc(u->object_id, io_render_proc, u);
++    err = AudioDeviceCreateIOProcID(u->object_id, io_render_proc, u, &u->proc_id);
+     u->proc_id = io_render_proc;
+     if (err) {
+         pa_log("AudioDeviceCreateIOProcID(%u) failed (err = %08x\n).", u->object_id, (int) err);
+         goto fail;
+     }
++#else
++    /* iOS refuses to create format listeners on VAD, since no actual device in it, thats why we can't use previous code */
++    err = AudioUnitAddPropertyListener(u->audio_unit, kAudioUnitProperty_StreamFormat, ca_stream_format_changed, u);
++    if (err != noErr)
++        pa_log("AudioUnitAddPropertyListener() failed (err = %d).", (int) err);
++
++    /* set number of frames in IOProc */
++    pa_modargs_get_value_u32(ma, "ioproc_frames", (unsigned int *) &frames);
++
++    err = AudioUnitSetProperty(u->audio_unit, kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitScope_Global, 0, &frames, sizeof(frames));
++    if (err != noErr) {
++        pa_log("AudioUnitSetProperty(kAudioUnitProperty_MaximumFramesPerSlice) failed (err = %d).", (int) err);
++    }
++
++#if 1
++    /* Input Callbacks has no preallocated ioData, so do it by ourself */
++    /* offsetof(AudioBufferList, mBuffers[0]) + (numBuffers * sizeof(AudioBuffer)), we use interleaved here so only 1 AudioBuffer */
++    AudioBufferList *input_buffer = (AudioBufferList *)pa_xmalloc(offsetof(AudioBufferList, mBuffers[0]) + sizeof(AudioBuffer));
++    input_buffer->mNumberBuffers = 1;
++    input_buffer->mBuffers[0].mNumberChannels = 2;
++    input_buffer->mBuffers[0].mDataByteSize = 8192; /* Sample Rate: 48000.0, Bytes Per Frame: 8, Bytes Per Packet: 8 */
++    input_buffer->mBuffers[0].mData = pa_xmalloc(input_buffer->mBuffers[0].mDataByteSize);
++
++    u->render_input_data = input_buffer;
++
++    /* iOS refuses to create IOProc on VAD too */
++    /* HALS_IOContext::CreateIOProcID: only one IOProc at a time is supported */
++    AURenderCallbackStruct callback_input = {
++        .inputProc = au_render_input,
++        .inputProcRefCon = u
++    };
++    err = AudioUnitSetProperty(u->audio_unit, kAudioOutputUnitProperty_SetInputCallback, kAudioUnitScope_Global, 1, &callback_input, sizeof(callback_input));
++
++    if (err != noErr) {
++        pa_log("AudioUnitSetProperty(kAudioUnitProperty_SetInputCallback) failed (err = %08x).", (int)err);
++        /* Consider ingore fails on input (input require entitlements) */
++        goto fail;
++    }
++#endif
++
++    AURenderCallbackStruct callback_output = {
++        .inputProc = au_render_output,
++        .inputProcRefCon = u
++    };
++    err = AudioUnitSetProperty(u->audio_unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &callback_output, sizeof(callback_output));
++    if (err != noErr) {
++        pa_log("AudioUnitSetProperty(kAudioUnitProperty_SetRenderCallback) failed (err = %d).", (int)err);
++        goto fail;
++    }
++
++    err = AudioUnitInitialize(u->audio_unit);
++    if (err != noErr) {
++        pa_log("AudioUnitInitialize() failed (err = %d).", (int)err);
++        goto fail;
++    }
++#endif
+ 
+     for (ca_sink = u->sinks; ca_sink; ca_sink = ca_sink->next)
+         pa_sink_put(ca_sink->pa_sink);
+@@ -937,8 +1582,9 @@ void pa__done(pa_module *m) {
+     struct userdata *u;
+     coreaudio_sink *ca_sink;
+     coreaudio_source *ca_source;
++#if !TARGET_OS_EMBEDDED
+     AudioObjectPropertyAddress property_address;
+-
++#endif
+     pa_assert(m);
+ 
+     u = m->userdata;
+@@ -987,10 +1633,10 @@ void pa__done(pa_module *m) {
+         ca_source = next;
+     }
+ 
++#if !defined(USE_AUDIOUNIT)
+     if (u->proc_id) {
+         AudioDeviceStop(u->object_id, u->proc_id);
+-//        AudioDeviceDestroyIOProcID(u->object_id, u->proc_id);
+-        AudioDeviceRemoveIOProc(u->object_id, u->proc_id);
++        AudioDeviceDestroyIOProcID(u->object_id, u->proc_id);
+     }
+ 
+     property_address.mSelector = kAudioDevicePropertyStreamFormat;
+@@ -998,9 +1644,23 @@ void pa__done(pa_module *m) {
+     property_address.mElement = kAudioObjectPropertyElementMaster;
+ 
+     AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &property_address, ca_stream_format_changed, u);
++#else
++    if (u->audio_unit) {
++        AudioOutputUnitStop(u->audio_unit);
++#if TARGET_OS_EMBEDDED
++        AudioSessionRemovePropertyListener(kAudioSessionProperty_AudioRouteChange);
++#pragma clang diagnostic pop
++#endif
++        AudioUnitUninitialize(u->audio_unit);
++        AudioComponentInstanceDispose(u->audio_unit);
++    }
++#endif
+ 
++#if !defined(USE_AUDIOUNIT)
++    /* Info were hardcoded in current AudioUnit impl */
+     pa_xfree(u->device_name);
+     pa_xfree(u->vendor_name);
++#endif
+     pa_rtpoll_free(u->rtpoll);
+     pa_card_free(u->card);
+ 

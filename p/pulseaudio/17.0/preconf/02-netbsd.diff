@@ -1,0 +1,98 @@
+--- a/meson.build	1724755033.863121527
++++ b/meson.build	1724754647.188749773
+@@ -374,7 +374,7 @@ if cc.has_header_symbol('sys/syscall.h',
+ endif
+ 
+ if cc.has_function('dgettext')
+-  if host_machine.system() != 'windows'
++  if host_machine.system() == 'windows'
+     libintl_dep = []
+   else
+     libintl_dep = cc.find_library('intl')
+--- a/src/pulsecore/core-rtclock.c	1705080129.000000000
++++ b/src/pulsecore/core-rtclock.c	1724754695.298662024
+@@ -87,11 +87,7 @@ struct timeval *pa_rtclock_get(struct ti
+ 
+     return tv;
+ #elif defined(OS_IS_DARWIN)
+-    uint64_t val, abs_time = mach_absolute_time();
+-    Nanoseconds nanos;
+-
+-    nanos = AbsoluteToNanoseconds(*(AbsoluteTime *) &abs_time);
+-    val = *(uint64_t *) &nanos;
++    uint64_t val = mach_absolute_time();
+ 
+     tv->tv_sec = val / PA_NSEC_PER_SEC;
+     tv->tv_usec = (val % PA_NSEC_PER_SEC) / PA_NSEC_PER_USEC;
+--- a/src/pulsecore/iochannel.c	1705080129.000000000
++++ b/src/pulsecore/iochannel.c	1724754819.993281682
+@@ -291,14 +291,14 @@ bool pa_iochannel_creds_supported(pa_ioc
+ }
+ 
+ int pa_iochannel_creds_enable(pa_iochannel *io) {
+-#if !defined(__FreeBSD__) && !defined(__FreeBSD_kernel__) && !defined(__GNU__)
++#if !defined(__FreeBSD__) && !defined(__FreeBSD_kernel__) && !defined(__GNU__) && !defined(__APPLE__)
+     int t = 1;
+ #endif
+ 
+     pa_assert(io);
+     pa_assert(io->ifd >= 0);
+ 
+-#if !defined(__FreeBSD__) && !defined(__FreeBSD_kernel__) && !defined(__GNU__)
++#if !defined(__FreeBSD__) && !defined(__FreeBSD_kernel__) && !defined(__GNU__) && !defined(__APPLE__)
+     if (setsockopt(io->ifd, SOL_SOCKET, SO_PASSCRED, &t, sizeof(t)) < 0) {
+         pa_log_error("setsockopt(SOL_SOCKET, SO_PASSCRED): %s", pa_cstrerror(errno));
+         return -1;
+--- a/src/pulsecore/meson.build	1705080129.000000000
++++ b/src/pulsecore/meson.build	1724754854.184817320
+@@ -177,8 +177,10 @@ simd = import('unstable-simd')
+ simd_variants = [
+   { 'mmx' : ['remap_mmx.c', 'svolume_mmx.c'] },
+   { 'sse' : ['remap_sse.c', 'sconv_sse.c', 'svolume_sse.c'] },
+-  { 'neon' : ['remap_neon.c', 'sconv_neon.c', 'mix_neon.c'] },
+ ]
++if host_machine.cpu_family() == 'arm'
++  simd_variants += { 'neon' : ['remap_neon.c', 'sconv_neon.c', 'mix_neon.c'] }
++endif
+ 
+ libpulsecore_simd_lib = []
+ 
+--- a/src/pulsecore/mix_neon.c	1705080129.000000000
++++ b/src/pulsecore/mix_neon.c	1724754878.171996196
+@@ -175,6 +175,10 @@ static void pa_mix2_ch4_s16ne_neon(pa_mi
+ 
+     int32x4_t sv0, sv1;
+ 
++#ifdef __clang__
++    sv0 = vld1q_s32(streams[0].linear);
++    sv1 = vld1q_s32(streams[1].linear);
++#else
+     __asm__ __volatile__ (
+         "vld1.s32 %h[sv0], [%[lin0]]         \n\t"
+         "vld1.s32 %h[sv1], [%[lin1]]         \n\t"
+@@ -182,6 +186,7 @@ static void pa_mix2_ch4_s16ne_neon(pa_mi
+         : [lin0] "r" (streams[0].linear), [lin1] "r" (streams[1].linear)
+         : /* clobber list */
+     );
++#endif
+ 
+     length /= sizeof(int16_t);
+     for (; length >= 4; length -= 4) {
+--- a/src/tests/rtpoll-test.c	1705080129.000000000
++++ b/src/tests/rtpoll-test.c	1724754906.155097067
+@@ -83,6 +83,7 @@ START_TEST (rtpoll_test) {
+ END_TEST
+ 
+ int main(int argc, char *argv[]) {
++#ifdef SIGRTMIN
+     int failed = 0;
+     Suite *s;
+     TCase *tc;
+@@ -103,4 +104,7 @@ int main(int argc, char *argv[]) {
+     srunner_free(sr);
+ 
+     return (failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
++#else
++    return 0
++#endif
+ }

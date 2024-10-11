@@ -1,0 +1,11 @@
+--- a/src/pulse/client-conf.c	1705080129.000000000
++++ b/src/pulse/client-conf.c	1724756694.029705842
+@@ -63,7 +63,7 @@ static const pa_client_conf default_conf
+     .cookie_from_x11_valid = false,
+     .cookie_file_from_application = NULL,
+     .cookie_file_from_client_conf = NULL,
+-    .autospawn = true,
++    .autospawn = false,
+     .disable_shm = false,
+     .disable_memfd = false,
+     .shm_size = 0,

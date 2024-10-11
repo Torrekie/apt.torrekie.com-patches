@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -e
+
+
+
+if [ "$1" = "purge" ] ; then
+        pw deluser pulse > /dev/null || true
+        pw delgroup pulse-access > /dev/null || true
+        pw delgroup pulse-rt > /dev/null || true
+fi
+
+exit 0
