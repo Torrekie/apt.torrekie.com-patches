@@ -1,0 +1,167 @@
+--- a/gio/gcredentialsprivate.h	1694180538.000000000
++++ b/gio/gcredentialsprivate.h	1696918872.703002138
+@@ -169,7 +169,7 @@
+ #undef G_CREDENTIALS_UNIX_CREDENTIALS_MESSAGE_SUPPORTED
+ #define G_CREDENTIALS_SOCKET_GET_CREDENTIALS_SUPPORTED 1
+ #define G_CREDENTIALS_SPOOFING_SUPPORTED 1
+-#define G_CREDENTIALS_HAS_PID 0
++#define G_CREDENTIALS_HAS_PID 1
+ 
+ void _g_credentials_set_local_peerid (GCredentials *credentials,
+                                       pid_t         pid);
+--- a/gio/gio-tool-launch.c	1694180538.000000000
++++ b/gio/gio-tool-launch.c	1696918434.031005423
+@@ -23,7 +23,7 @@
+ 
+ #include <gio/gio.h>
+ 
+-#if defined(G_OS_UNIX) && !defined(__APPLE__)
++#if defined(G_OS_UNIX)
+ #include <gio/gdesktopappinfo.h>
+ #endif
+ 
+@@ -40,7 +40,7 @@ handle_launch (int argc, char *argv[], g
+ {
+   GOptionContext *context;
+   GError *error = NULL;
+-#if defined(G_OS_UNIX) && !defined(__APPLE__)
++#if defined(G_OS_UNIX)
+   int i;
+   GAppInfo *app = NULL;
+   GAppLaunchContext *app_context = NULL;
+@@ -83,7 +83,7 @@ handle_launch (int argc, char *argv[], g
+ 
+   g_option_context_free (context);
+ 
+-#if !defined(G_OS_UNIX) || defined(__APPLE__)
++#if !defined(G_OS_UNIX)
+   print_error (_("The launch command is not currently supported on this platform"));
+   retval = 1;
+ #else
+--- a/gio/gio-tool-open.c	1694180538.000000000
++++ b/gio/gio-tool-open.c	1696919400.201729730
+@@ -23,7 +23,7 @@
+ 
+ #include <gio/gio.h>
+ 
+-#if defined(G_OS_UNIX) && !defined(__APPLE__)
++#if defined(G_OS_UNIX)
+ #include <gio/gdesktopappinfo.h>
+ #endif
+ 
+--- a/gio/giomodule.c	1694180538.000000000
++++ b/gio/giomodule.c	1696919475.568070827
+@@ -61,7 +61,7 @@
+ #endif
+ #include <glib/gstdio.h>
+ 
+-#if defined(G_OS_UNIX) && !defined(__APPLE__)
++#if defined(G_OS_UNIX)
+ #include "gdesktopappinfo.h"
+ #endif
+ #ifdef HAVE_COCOA
+@@ -1192,7 +1192,7 @@ _g_io_modules_ensure_extension_points_re
+ 
+   if (g_once_init_enter (&registered_extensions))
+     {
+-#if defined(G_OS_UNIX) && !defined(__APPLE__)
++#if defined(G_OS_UNIX)
+ #if !GLIB_CHECK_VERSION (3, 0, 0)
+       ep = g_io_extension_point_register (G_DESKTOP_APP_INFO_LOOKUP_EXTENSION_POINT_NAME);
+       g_io_extension_point_set_required_type (ep, G_TYPE_DESKTOP_APP_INFO_LOOKUP);
+--- a/gio/glocalfileinfo.c	1694180538.000000000
++++ b/gio/glocalfileinfo.c	1696918484.726967220
+@@ -1342,7 +1342,7 @@ get_content_type (const char          *b
+ 
+       content_type = g_content_type_guess (basename, NULL, 0, &result_uncertain);
+       
+-#if !defined(G_OS_WIN32) && !defined(__APPLE__)
++#if !defined(G_OS_WIN32)
+       if (!fast && result_uncertain && path != NULL)
+ 	{
+ 	  guchar sniff_buffer[4096];
+--- a/gio/gunixcredentialsmessage.c	1694180538.000000000
++++ b/gio/gunixcredentialsmessage.c	1696919358.406833230
+@@ -105,6 +105,8 @@ g_unix_credentials_message_get_msg_type
+   return SCM_CREDS;
+ #elif G_CREDENTIALS_USE_SOLARIS_UCRED
+   return SCM_UCRED;
++#elif G_CREDENTIALS_USE_APPLE_XUCRED
++  return SCM_CREDS;
+ #elif G_CREDENTIALS_UNIX_CREDENTIALS_MESSAGE_SUPPORTED
+   #error "G_CREDENTIALS_UNIX_CREDENTIALS_MESSAGE_SUPPORTED is set but there is no msg_type defined for this platform"
+ #else
+--- a/glib/gutils.c	1694180538.000000000
++++ b/glib/gutils.c	1696918005.797479966
+@@ -1677,7 +1677,7 @@ g_get_os_info (const gchar *key_name)
+ {
+ #if defined (__APPLE__)
+   if (g_strcmp0 (key_name, G_OS_INFO_KEY_NAME) == 0)
+-    return g_strdup ("macOS");
++    return g_strdup ("Darwin"); // Use kernel name instead
+   else
+     return NULL;
+ #elif defined (G_OS_UNIX)
+--- a/glib/meson.build	1694180538.000000000
++++ b/glib/meson.build	1696919946.977332752
+@@ -384,7 +384,7 @@ if glib_have_cocoa
+ endif
+ 
+ if glib_have_carbon
+-  framework_dep = dependency('appleframeworks', modules : 'Carbon')
++  framework_dep = dependency('appleframeworks', modules : 'CoreServices')
+   platform_deps += [framework_dep]
+ endif
+ 
+--- a/meson.build	1694180538.000000000
++++ b/meson.build	1696920505.134174133
+@@ -55,16 +55,6 @@ endif
+ 
+ host_system = host_machine.system()
+ 
+-if host_system == 'darwin'
+-  ios_test_code = '''#include <TargetConditionals.h>
+-  #if ! TARGET_OS_IPHONE
+-  #error "Not iOS/tvOS/watchOS/iPhoneSimulator"
+-  #endif'''
+-  if cc.compiles(ios_test_code, name : 'building for iOS')
+-    host_system = 'ios'
+-  endif
+-endif
+-
+ glib_version = meson.project_version()
+ glib_api_version = '2.0'
+ version_arr = glib_version.split('.')
+@@ -907,31 +897,17 @@ if host_system == 'darwin'
+   add_project_arguments(objcc.get_supported_arguments(warning_objc_args), language: 'objc')
+ 
+   # Mac OS X Carbon support
+-  glib_have_carbon = objcc.compiles('''#include <Carbon/Carbon.h>
++  glib_have_carbon = objcc.compiles('''
+                                        #include <CoreServices/CoreServices.h>''',
+                                     name : 'Mac OS X Carbon support')
+ 
+   if glib_have_carbon
+     glib_conf.set('HAVE_CARBON', true)
++    glib_have_os_x_9_or_later = objcc.compiles('''#include <AvailabilityMacros.h>''',
+-    glib_have_os_x_9_or_later = objcc.compiles('''#include <AvailabilityMacros.h>
+-                                                  #if MAC_OS_X_VERSION_MIN_REQUIRED < 1090
+-                                                  #error Compiling for minimum OS X version before 10.9
+-                                                  #endif''',
+                                                name : 'OS X 9 or later')
+   endif
+ 
+-  # Mac OS X Cocoa support
+-  glib_have_cocoa = objcc.compiles('''#include <Cocoa/Cocoa.h>
+-                                      #ifdef GNUSTEP_BASE_VERSION
+-                                      #error "Detected GNUstep, not Cocoa"
+-                                      #endif''',
+-                                   name : 'Mac OS X Cocoa support')
+-
+-  if glib_have_cocoa
+-    glib_conf.set('HAVE_COCOA', true)
+-    osx_ldflags += ['-Wl,-framework,Foundation', '-Wl,-framework,AppKit']
+-  endif
+ endif
+ 
+ if host_system == 'qnx'
