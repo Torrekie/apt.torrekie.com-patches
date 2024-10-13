@@ -1,8 +1,8 @@
 TODO:
 * macOS AudioUnit
 * PlayAndRecord stereo I/O over headphones
---- pulseaudio-17.0/src/modules/macosx/module-coreaudio-device.c	1728818990.997071975
-+++ src/modules/macosx/module-coreaudio-device.c	1728818772.366136271
+--- a/src/modules/macosx/module-coreaudio-device.c	1728818990.997071975
++++ b/src/modules/macosx/module-coreaudio-device.c	1728818772.366136271
 @@ -46,9 +46,25 @@
  #include <pulsecore/i18n.h>
  #include <pulsecore/namereg.h>
