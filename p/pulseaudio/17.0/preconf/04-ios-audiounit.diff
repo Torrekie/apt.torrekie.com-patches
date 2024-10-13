@@ -1,8 +1,8 @@
 TODO:
 * macOS AudioUnit
 * PlayAndRecord stereo I/O over headphones
---- pulseaudio-17.0/src/modules/macosx/module-coreaudio-device.c	1724756718.002112750
-+++ src/modules/macosx/module-coreaudio-device.c	1728631574.636718873
+--- pulseaudio-17.0/src/modules/macosx/module-coreaudio-device.c	1728818990.997071975
++++ src/modules/macosx/module-coreaudio-device.c	1728818772.366136271
 @@ -46,9 +46,25 @@
  #include <pulsecore/i18n.h>
  #include <pulsecore/namereg.h>
@@ -290,7 +290,7 @@ TODO:
 +        total += v;
 +    else
 +        pa_log_warn("Failed to get buffer frame size: %d", err);
-+
+ 
 +    /* IOProc safety offset - this value is the same for both directions, hence we divide it by 2 */
 +    property_address.mSelector = kAudioDevicePropertySafetyOffset;
 +    size = sizeof(v);
@@ -308,7 +308,7 @@ TODO:
 +        total += v;
 +    else
 +        pa_log_warn("Failed to get AURemoteIO latency: %d", err);
- 
++
 +    size = sizeof(v);
 +    err = AudioSessionGetProperty(is_source ? kAudioSessionProperty_CurrentHardwareInputLatency : kAudioSessionProperty_CurrentHardwareOutputLatency, &size, &v);
 +    if (!err)
@@ -487,7 +487,7 @@ TODO:
      /* get stream configuration */
      size = 0;
      property_address.mSelector = kAudioDevicePropertyStreamConfiguration;
-@@ -699,6 +1008,72 @@ static int ca_device_create_streams(pa_m
+@@ -699,6 +1008,71 @@ static int ca_device_create_streams(pa_m
  
      buffer_list = (AudioBufferList *) pa_xmalloc(size);
      err = AudioObjectGetPropertyData(u->object_id, &property_address, 0, NULL, &size, buffer_list);
@@ -518,7 +518,6 @@ TODO:
 +
 +        /* Output 1 = Mic, Input 0 = Speaker */
 +        err = AudioUnitSetProperty(u->audio_unit, kAudioUnitProperty_StreamFormat, direction_in ? kAudioUnitScope_Output : kAudioUnitScope_Input, direction_in, &asbd, sizeof(asbd));
-+pa_log("set %s %d", direction_in ? "Output" : "Input", direction_in);
 +        if (err) {
 +            pa_log("Failed to set %s audio format (err = %d).", direction_in ? "input" : "output", (int) err);
 +        } else {
@@ -560,7 +559,13 @@ TODO:
  
      if (!err) {
          pa_log_debug("Sample rate: %f", u->stream_description.mSampleRate);
-@@ -777,7 +1152,14 @@ int pa__init(pa_module *m) {
+@@ -772,12 +1146,19 @@ int pa__init(pa_module *m) {
+     struct userdata *u = NULL;
+     pa_modargs *ma = NULL;
+     bool record = true, playback = true;
+-    char tmp[64];
++    CFStringRef tmp_cfstr = NULL;
+     pa_card_new_data card_new_data;
      pa_card_profile *p;
      coreaudio_sink *ca_sink;
      coreaudio_source *ca_source;
@@ -575,7 +580,7 @@ TODO:
  
      pa_assert(m);
  
-@@ -800,11 +1182,20 @@ int pa__init(pa_module *m) {
+@@ -800,37 +1181,248 @@ int pa__init(pa_module *m) {
      u->module = m;
      m->userdata = u;
  
@@ -596,10 +601,44 @@ TODO:
      property_address.mScope = kAudioObjectPropertyScopeGlobal;
      property_address.mElement = kAudioObjectPropertyElementMaster;
  
-@@ -833,6 +1224,204 @@ int pa__init(pa_module *m) {
-         u->vendor_name = pa_xstrdup(CFString_to_cstr(tmp_cfstr));
-         pa_log_info("Vendor of CoreAudio device '%s': '%s'", u->device_name, CFString_to_cstr(tmp_cfstr));
+     /* get device product name */
+-    property_address.mSelector = kAudioDevicePropertyDeviceName;
+-    size = sizeof(tmp);
+-    err = AudioObjectGetPropertyData(u->object_id, &property_address, 0, NULL, &size, tmp);
++    property_address.mSelector = kAudioDevicePropertyDeviceNameCFString;
++    size = sizeof(tmp_cfstr);
++    err = AudioObjectGetPropertyData(u->object_id, &property_address, 0, NULL, &size, &tmp_cfstr);
+     if (err) {
+-        pa_log("Failed to get kAudioDevicePropertyDeviceName (err = %08x).", (int) err);
++        pa_log("Failed to get kAudioDevicePropertyDeviceNameCFString (err = %08x).", (int) err);
+         goto fail;
      }
+ 
+-    u->device_name = pa_xstrdup(tmp);
++    u->device_name = pa_xstrdup(CFString_to_cstr(tmp_cfstr));
+ 
+     pa_card_new_data_init(&card_new_data);
+-    pa_proplist_sets(card_new_data.proplist, PA_PROP_DEVICE_STRING, tmp);
++    pa_proplist_sets(card_new_data.proplist, PA_PROP_DEVICE_STRING, CFString_to_cstr(tmp_cfstr));
+     card_new_data.driver = __FILE__;
+-    pa_card_new_data_set_name(&card_new_data, tmp);
+-    pa_log_info("Initializing module for CoreAudio device '%s' (id %d)", tmp, (unsigned int) u->object_id);
++    pa_card_new_data_set_name(&card_new_data, CFString_to_cstr(tmp_cfstr));
++    pa_log_info("Initializing module for CoreAudio device '%s' (id %d)", CFString_to_cstr(tmp_cfstr), (unsigned int) u->object_id);
+ 
+     /* get device vendor name (may fail) */
+-    property_address.mSelector = kAudioDevicePropertyDeviceManufacturer;
+-    size = sizeof(tmp);
+-    err = AudioObjectGetPropertyData(u->object_id, &property_address, 0, NULL, &size, tmp);
+-    if (!err)
+-        u->vendor_name = pa_xstrdup(tmp);
++    property_address.mSelector = kAudioDevicePropertyDeviceManufacturerCFString;
++    size = sizeof(tmp_cfstr);
++    err = AudioObjectGetPropertyData(u->object_id, &property_address, 0, NULL, &size, &tmp_cfstr);
++    if (!err) {
++        u->vendor_name = pa_xstrdup(CFString_to_cstr(tmp_cfstr));
++        pa_log_info("Vendor of CoreAudio device '%s': '%s'", u->device_name, CFString_to_cstr(tmp_cfstr));
++    }
 +#else
 +    /* The better Apple practice is to use AudioQueue, thats what afplay do */
 +#if TARGET_OS_EMBEDDED && defined(USE_NEW_SESSION)
@@ -619,6 +658,7 @@ TODO:
 +    u->allow_mic_input = (buf > 0);
 +#else
 +    u->allow_mic_input = false;
++    pa_log("iOS microphone input is not included in this build.");
 +#endif
 +
 +    if (u->allow_mic_input) {
@@ -786,6 +826,7 @@ TODO:
 +    }
 +
 +    /* PlayAndRecord resulting in mono */
++#if 0
 +    AudioChannelLayout layout = {0};
 +    layout.mChannelLayoutTag = kAudioChannelLayoutTag_StereoHeadphones;
 +    err = AudioUnitSetProperty(u->audio_unit, kAudioUnitProperty_AudioChannelLayout, kAudioUnitScope_Input, 0, &layout, sizeof(layout));
@@ -796,12 +837,12 @@ TODO:
 +    if (err) {
 +        pa_log("Failed to set stereo output layout on AURemoteIO (err = %d).", (int) err);
 +    }
-+
++#endif
 +#endif
  
      /* add on profile */
      p = pa_card_profile_new("on", _("On"), 0);
-@@ -882,6 +1471,7 @@ int pa__init(pa_module *m) {
+@@ -880,27 +1472,92 @@ int pa__init(pa_module *m) {
          goto fail;
      }
  
@@ -809,16 +850,34 @@ TODO:
      /* register notification callback for stream format changes */
      property_address.mSelector = kAudioDevicePropertyStreamFormat;
      property_address.mScope = kAudioObjectPropertyScopeGlobal;
-@@ -905,13 +1495,68 @@ int pa__init(pa_module *m) {
+     property_address.mElement = kAudioObjectPropertyElementMaster;
+ 
+-    AudioObjectAddPropertyListener(u->object_id, &property_address, ca_stream_format_changed, u);
+-
++    err = AudioObjectAddPropertyListener(u->object_id, &property_address, ca_stream_format_changed, u);
++    if (err) {
++        pa_log("AudioObjectAddPropertyListener() failed (err = %08x\n).", (int) err);
++        goto fail;
++    }
+     /* set number of frames in IOProc */
+     frames = DEFAULT_FRAMES_PER_IOPROC;
+     pa_modargs_get_value_u32(ma, "ioproc_frames", (unsigned int *) &frames);
+ 
+     property_address.mSelector = kAudioDevicePropertyBufferFrameSize;
+-    AudioObjectSetPropertyData(u->object_id, &property_address, 0, NULL, sizeof(frames), &frames);
++    err = AudioObjectSetPropertyData(u->object_id, &property_address, 0, NULL, sizeof(frames), &frames);
++    if (err) {
++        pa_log("AudioObjectSetPropertyData() failed (err = %08x\n).", (int) err);
++        goto fail;
++    }
      pa_log_debug("%u frames per IOProc\n", (unsigned int) frames);
  
      /* create one ioproc for both directions */
--//    err = AudioDeviceCreateIOProcID(u->object_id, io_render_proc, u, &u->proc_id);
--    err = AudioDeviceAddIOProc(u->object_id, io_render_proc, u);
-+    err = AudioDeviceCreateIOProcID(u->object_id, io_render_proc, u, &u->proc_id);
-     u->proc_id = io_render_proc;
+     err = AudioDeviceCreateIOProcID(u->object_id, io_render_proc, u, &u->proc_id);
++    u->proc_id = io_render_proc;
      if (err) {
-         pa_log("AudioDeviceCreateIOProcID(%u) failed (err = %08x\n).", u->object_id, (int) err);
+-        pa_log("AudioDeviceCreateIOProcID() failed (err = %08x\n).", (int) err);
++        pa_log("AudioDeviceCreateIOProcID(%u) failed (err = %08x\n).", u->object_id, (int) err);
          goto fail;
      }
 +#else
@@ -880,7 +939,7 @@ TODO:
  
      for (ca_sink = u->sinks; ca_sink; ca_sink = ca_sink->next)
          pa_sink_put(ca_sink->pa_sink);
-@@ -937,8 +1582,9 @@ void pa__done(pa_module *m) {
+@@ -926,8 +1583,9 @@ void pa__done(pa_module *m) {
      struct userdata *u;
      coreaudio_sink *ca_sink;
      coreaudio_source *ca_source;
@@ -891,20 +950,15 @@ TODO:
      pa_assert(m);
  
      u = m->userdata;
-@@ -987,10 +1633,10 @@ void pa__done(pa_module *m) {
+@@ -976,6 +1634,7 @@ void pa__done(pa_module *m) {
          ca_source = next;
      }
  
 +#if !defined(USE_AUDIOUNIT)
      if (u->proc_id) {
          AudioDeviceStop(u->object_id, u->proc_id);
--//        AudioDeviceDestroyIOProcID(u->object_id, u->proc_id);
--        AudioDeviceRemoveIOProc(u->object_id, u->proc_id);
-+        AudioDeviceDestroyIOProcID(u->object_id, u->proc_id);
-     }
- 
-     property_address.mSelector = kAudioDevicePropertyStreamFormat;
-@@ -998,9 +1644,23 @@ void pa__done(pa_module *m) {
+         AudioDeviceDestroyIOProcID(u->object_id, u->proc_id);
+@@ -986,9 +1645,23 @@ void pa__done(pa_module *m) {
      property_address.mElement = kAudioObjectPropertyElementMaster;
  
      AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &property_address, ca_stream_format_changed, u);
