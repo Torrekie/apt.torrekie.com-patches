@@ -1,0 +1,44 @@
+--- a/configure.ac	1709554972.000000000
++++ b/configure.ac	1729067934.394932070
+@@ -789,7 +789,7 @@ fi
+ #
+ if test "$enable_locking" = yes ; then
+   case "$host" in
+-    *-hpux* | *-aix* | *-netbsd* | *-freebsd* | *-openbsd* )
++    *-hpux* | *-aix* | *-netbsd* | *-freebsd* | *-openbsd* | *-darwin* )
+       need_setuid=yes
+     ;;
+   esac
+--- a/src/gs-auth-pam.c	1684601136.000000000
++++ b/src/gs-auth-pam.c	1729069800.410336438
+@@ -472,7 +472,17 @@ gs_auth_thread_func (gpointer data) {
+ 
+     status = pam_authenticate (pam_handle, flags);
+ 
++#ifdef __APPLE__
++    /* Torrekie: Try to make it actually timeout 1 nsec when got chance */
++    sigset_t pending;
++    sigpending(&pending);
++    for (int i = 1; i < __DARWIN_NSIG; i++)
++	if (sigismember(&pending, i) && sigismember(&set, i)) {
++	    sigwait(&set, NULL);
++	}
++#else
+     sigtimedwait (&set, NULL, &timeout);
++#endif
+     unblock_sigchld ();
+ 
+     if (gs_auth_get_verbose ()) {
+--- a/src/gs-auth-pwent.c	1679326707.000000000
++++ b/src/gs-auth-pwent.c	1729067830.059624305
+@@ -37,7 +37,9 @@
+ # include <unistd.h>
+ #endif
+ 
+-#ifdef HAVE_LIBCRYPT
++#ifdef __APPLE__
++/* Always use Apple libc embedded crypt(3) */
++#elif defined(HAVE_LIBCRYPT)
+ # include <crypt.h>
+ #else
+ # define crypt(a, b) NULL
