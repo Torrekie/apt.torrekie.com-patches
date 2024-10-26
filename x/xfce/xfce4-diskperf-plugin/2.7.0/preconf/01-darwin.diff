@@ -1,0 +1,250 @@
+--- a/configure.ac	1646338051.000000000
++++ b/configure.ac	1729849838.434051154
+@@ -41,6 +41,9 @@ AC_CHECK_HEADERS([sys/sysmacros.h])
+ LT_LIB_M
+ AC_SUBST(LIBM)
+ 
++dnl Check for Darwin to add IOKit and CoreFoundation
++AM_CONDITIONAL([DARWIN], [test x"$(uname)" = x"Darwin"])
++
+ dnl translations
+ XDT_I18N([])
+ 
+--- a/panel-plugin/Makefile.am	1646337722.000000000
++++ b/panel-plugin/Makefile.am	1729850180.155188705
+@@ -33,6 +33,12 @@ libdiskperf_la_LDFLAGS = \
+ 	-export-symbols-regex '^xfce_panel_module_(preinit|init|construct)' \
+ 	$(PLATFORM_LDFLAGS)
+ 
++if DARWIN
++libdiskperf_la_LDFLAGS += \
++	-framework CoreFoundation \
++	-framework IOKit
++endif
++
+ #
+ # Desktop file
+ #
+--- a/panel-plugin/devperf.c	1646337722.000000000
++++ b/panel-plugin/devperf.c	1729927155.756877259
+@@ -517,6 +517,145 @@ int DevGetPerfData (const void *p_pvDevi
+     return 0;
+ }
+ 
++#elif defined (__APPLE__)
++/*
++ * Darwin support, taken from system_cmds/iostat
++ * apple-oss-distributions/system_cmds-970.0.4 system_cmds/iostat/iostat.c
++ */
++#include <CoreFoundation/CoreFoundation.h>
++#include <IOKit/IOKitLib.h>
++#include <IOKit/storage/IOBlockStorageDriver.h>
++#include <IOKit/storage/IOMedia.h>
++#include <IOKit/IOBSD.h>
++
++static mach_port_t main_port;
++
++int DevPerfInit (void)
++{
++    return 0;
++}
++
++int DevCheckStatAvailability(char const **strptr)
++{
++    return 0;
++}
++
++int DevGetPerfData(const void *p_pvDevice, struct devperf_t *perf)
++{
++    char *bsdname = (char *) p_pvDevice;
++    struct timeval tv;
++    io_iterator_t drivelist;
++    io_registry_entry_t drive, parent;
++    kern_return_t status;
++    CFNumberRef number;
++    CFDictionaryRef properties;
++    CFDictionaryRef statistics;
++
++    u_int64_t value;
++    u_int64_t rbytes, wbytes, rxfer, wxfer, rbusy, wbusy;
++
++    int ret = -1;
++
++    /* The use of 'IOMasterPort' is for pre Darwin 21 compatibility, not for any other specific reasons.
++     * IOMainPort is completely identical with IOMasterPort, we use old one to avoid OS version checking */
++    IOMasterPort(bootstrap_port, &main_port);
++
++    status = IOServiceGetMatchingServices(kIOMasterPortDefault, IOBSDNameMatching(main_port, kNilOptions, bsdname), &drivelist);
++    if (status != KERN_SUCCESS)
++        return ret;
++
++    /* Get the first match (should only be one) */
++    if (!(drive = IOIteratorNext(drivelist))) {
++        IOObjectRelease(drivelist);
++        return ret;
++    }
++    if (!IOObjectConformsTo(drive, "IOMedia"))
++        goto drive_release;
++
++    /* get drive's parent */
++    status = IORegistryEntryGetParentEntry(drive, kIOServicePlane, &parent);
++    if (status != KERN_SUCCESS)
++        goto drive_release;
++
++    if (IOObjectConformsTo(parent, "IOBlockStorageDriver")) {
++#if 0
++        /* get drive properties (IOMedia) */
++        status = IORegistryEntryCreateCFProperties(drive, (CFMutableDictionaryRef *)&properties, kCFAllocatorDefault, kNilOptions);
++        if (status != KERN_SUCCESS)
++            goto parent_release;
++
++        /* IOMedia keys provide basic informations such as preferred blocksize,
++         * enable this code when needed someday */
++        CFRelease(properties);
++#endif
++        /* get parent properties (IOBlockStorage) */
++        status = IORegistryEntryCreateCFProperties(parent, (CFMutableDictionaryRef *)&properties, kCFAllocatorDefault, kNilOptions);
++        if (status != KERN_SUCCESS)
++            goto parent_release;
++
++        /* get statistics from properties */
++        rbytes = wbytes = rxfer = wxfer = rbusy = wbusy = 0;
++        statistics = (CFDictionaryRef)CFDictionaryGetValue(properties, CFSTR(kIOBlockStorageDriverStatisticsKey));
++        if (statistics) {
++            /* Get I/O volume */
++            if ((number = (CFNumberRef)CFDictionaryGetValue(statistics,
++                CFSTR(kIOBlockStorageDriverStatisticsBytesReadKey)))) {
++                CFNumberGetValue(number, kCFNumberSInt64Type, &value);
++                rbytes = value;
++            }
++            if ((number = (CFNumberRef)CFDictionaryGetValue(statistics,
++                CFSTR(kIOBlockStorageDriverStatisticsBytesWrittenKey)))) {
++                CFNumberGetValue(number, kCFNumberSInt64Type, &value);
++                wbytes = value;
++            }
++
++            /* Get I/O counts */
++            if ((number = (CFNumberRef)CFDictionaryGetValue(statistics,
++                CFSTR(kIOBlockStorageDriverStatisticsReadsKey)))) {
++                CFNumberGetValue(number, kCFNumberSInt64Type, &value);
++                rxfer = value;
++            }
++            if ((number = (CFNumberRef)CFDictionaryGetValue(statistics,
++                CFSTR(kIOBlockStorageDriverStatisticsWritesKey)))) {
++                CFNumberGetValue(number, kCFNumberSInt64Type, &value);
++                wxfer = value;
++            }
++
++            /* Get I/O time (nanosecond) */
++            if ((number = (CFNumberRef)CFDictionaryGetValue(statistics,
++                CFSTR(kIOBlockStorageDriverStatisticsLatentReadTimeKey)))) {
++                CFNumberGetValue(number, kCFNumberSInt64Type, &value);
++                rbusy = value;
++            }
++            if ((number = (CFNumberRef)CFDictionaryGetValue(statistics,
++                CFSTR(kIOBlockStorageDriverStatisticsLatentWriteTimeKey)))) {
++                CFNumberGetValue(number, kCFNumberSInt64Type, &value);
++                wbusy = value;
++            }
++
++        }
++        CFRelease(properties);
++
++        gettimeofday(&tv, NULL);
++        perf->timestamp_ns = (uint64_t)1000ull * 1000ull * 1000ull * tv.tv_sec + 1000ull * tv.tv_usec;
++        perf->rbusy_ns = rbusy;
++        perf->wbusy_ns = wbusy;
++        perf->rbytes = rbytes;
++        perf->wbytes = wbytes;
++        perf->qlen = rxfer + wxfer;
++
++        ret = 0;
++    }
++parent_release:
++    IOObjectRelease(parent);
++
++drive_release:
++    IOObjectRelease(drive);
++    IOObjectRelease(drivelist);
++
++    return ret;
++}
++
+ #else
+ /**************************************************************/
+ /********************   Unsupported platform    ***************/
+--- a/panel-plugin/main.c	1646337722.000000000
++++ b/panel-plugin/main.c	1729923375.208969908
+@@ -82,7 +82,7 @@ typedef enum monitor_bar_order_t {
+ typedef struct param_t {
+     /* Configurable parameters */
+     char            acDevice[128];
+-#if  !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__)
++#if  !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__) && !defined(__APPLE__)
+     dev_t           st_rdev;
+ #endif
+     int             fTitleDisplayed;
+@@ -163,7 +163,7 @@ static int DisplayPerf (struct diskperf_
+     struct devperf_t  oPerf;
+     struct param_t   *poConf = &poPlugin->oConf.oParam;
+     struct monitor_t *poMonitor = &poPlugin->oMonitor;
+-#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__)
++#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__) && !defined(__APPLE__)
+     struct stat       oStat;
+ #endif
+     uint64_t        iInterval_ns, rbytes, wbytes, iRBusy_ns, iWBusy_ns;
+@@ -175,7 +175,7 @@ static int DisplayPerf (struct diskperf_
+     rbytes = wbytes = iRBusy_ns = iWBusy_ns = -1;
+     memset (&oPerf, 0, sizeof (oPerf));
+     oPerf.qlen = -1;
+-#if defined(__FreeBSD__) || defined (__NetBSD__) || defined(__OpenBSD__) || defined(__sun__)
++#if defined(__FreeBSD__) || defined (__NetBSD__) || defined(__OpenBSD__) || defined(__sun__) || defined(__APPLE__)
+     status = DevGetPerfData (poConf->acDevice, &oPerf);
+ #else
+     if (poConf->st_rdev == 0)
+@@ -440,7 +440,7 @@ static diskperf_t *diskperf_create_contr
+     struct diskperf_t *poPlugin;
+     struct param_t *poConf;
+     struct monitor_t *poMonitor;
+-#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__)
++#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__) && !defined(__APPLE__)
+     struct stat     oStat;
+     int             status;
+ #endif
+@@ -461,6 +461,9 @@ static diskperf_t *diskperf_create_contr
+ #elif defined(__sun__)
+     strncpy (poConf->acDevice, "sd0", 128);
+     strncpy (poConf->acTitle, "sd0", 16);
++#elif defined(__APPLE__)
++    strncpy (poConf->acDevice, "disk0", 128);
++    strncpy (poConf->acTitle, "disk0", 16);
+ #else
+     strncpy (poConf->acDevice, "/dev/sda", 128);
+     status = stat (poConf->acDevice, &oStat);
+@@ -525,7 +528,7 @@ static void diskperf_read_config (XfcePa
+     struct param_t *poConf = &poPlugin->oConf.oParam;
+     struct monitor_t *poMonitor = &poPlugin->oMonitor;
+     Widget_t       *pw2ndBar = poPlugin->oMonitor.awProgressBar + 1;
+-#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__)
++#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__) && !defined(__APPLE__)
+     struct stat     oStat;
+     int             status;
+ #endif
+@@ -542,7 +545,7 @@ static void diskperf_read_config (XfcePa
+     if ((value = xfce_rc_read_entry (rc, (CONF_DEVICE), NULL))) {
+         memset (poConf->acDevice, 0, sizeof (poConf->acDevice));
+         strncpy (poConf->acDevice, value, sizeof (poConf->acDevice) - 1);
+-#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__)
++#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__) && !defined(__APPLE__)
+         status = stat (poConf->acDevice, &oStat);
+         poConf->st_rdev = (status == -1 ? 0 : oStat.st_rdev);
+ #endif
+@@ -645,7 +648,7 @@ static void SetDevice (Widget_t p_wTF, v
+     struct diskperf_t *poPlugin = (diskperf_t *) p_pvPlugin;
+     struct param_t    *poConf = &poPlugin->oConf.oParam;
+     const char        *pcDevice = gtk_entry_get_text (GTK_ENTRY (p_wTF));
+-#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__)
++#if !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__) && !defined(__sun__) && !defined(__APPLE__)
+     struct stat oStat;
+ 
+     stat (pcDevice, &oStat);
