@@ -1,0 +1,770 @@
+--- a/acinclude.m4	1673779394.000000000
++++ b/acinclude.m4	1730891382.521919609
+@@ -205,18 +205,18 @@ fi
+ 
+ if test -z "$list_mounted_fs"; then
+ # DEC Alpha running OSF/1.
+-AC_MSG_CHECKING([for getfsstat function])
+-AC_CACHE_VAL(fu_cv_sys_mounted_getsstat,
++AC_MSG_CHECKING([for OSF/1 getfsstat function])
++AC_CACHE_VAL(fu_cv_sys_mounted_getfsstat,
+ [AC_TRY_LINK([
+ #include <sys/types.h>
+ #include <sys/mount.h>
+ #include <sys/fs_types.h>],
+ [struct statfs *stats;
+ int numsys = getfsstat ((struct statfs *)0, 0L, MNT_WAIT); ],
+-fu_cv_sys_mounted_getsstat=yes,
+-fu_cv_sys_mounted_getsstat=no)])
+-AC_MSG_RESULT($fu_cv_sys_mounted_getsstat)
+-if test $fu_cv_sys_mounted_getsstat = yes; then
++fu_cv_sys_mounted_getfsstat=yes,
++fu_cv_sys_mounted_getfsstat=no)])
++AC_MSG_RESULT($fu_cv_sys_mounted_getfsstat)
++if test $fu_cv_sys_mounted_getfsstat = yes; then
+ list_mounted_fs=found
+ AC_DEFINE(MOUNTED_GETFSSTAT, 1,
+           [Define if there is a function named getfsstat for reading the list of mounted filesystems.  [DEC Alpha running OSF/1]])
+--- a/configure.ac	1708105505.000000000
++++ b/configure.ac	1730883893.528701199
+@@ -191,6 +191,13 @@ case "$host_os" in
+      ;;
+ esac
+ 
++dnl Darwin
++case "$host_os" in
++    darwin*)
++        LDFLAGS="-Wl,-dead_strip_dylibs -Wl,-framework,CoreFoundation -Wl,-framework,IOKit $LDFLAGS"
++    ;;
++esac
++
+ dnl For DEC OSF1
+ AC_CHECK_LIB(mach, vm_statistics)
+ 
+--- a/examples/df.c	1480269903.000000000
++++ b/examples/df.c	1730876906.230940363
+@@ -41,7 +41,7 @@ static void print_fsusage(const char *mo
+     mountpoint
+     );
+ 
+-  g_strfreev(a);
++//  g_strfreev(a);
+ }
+ 
+ int main(int argc, char **argv)
+--- a/lib/Makefile.am	1673779394.000000000
++++ b/lib/Makefile.am	1730883546.642236936
+@@ -53,3 +53,4 @@ typelib_DATA = $(INTROSPECTION_GIRS:.gir
+ 
+ CLEANFILES += $(gir_DATA) $(typelib_DATA)
+ endif
++
+--- a/libgtop-sysdeps.m4	1673779394.000000000
++++ b/libgtop-sysdeps.m4	1730879715.116384813
+@@ -72,6 +72,8 @@ AC_DEFUN([GNOME_LIBGTOP_SYSDEPS],[
+ 	  libgtop_sysdeps_dir=darwin
+ 	  libgtop_need_server=yes
+ 	  libgtop_have_sysinfo=yes
++	  libgtop_sysdeps_private_mountlist=yes
++	  libgtop_sysdeps_private_fsusage=yes
+ 	  libgtop_postinstall='chgrp kmem $(DESTDIR)$(libexecdir)/libgtop_server2 && chmod g+s $(DESTDIR)$(libexecdir)/libgtop_server2'
+ 	  ;;
+ 	cygwin*)
+--- a/sysdeps/common/fsusage.c	1480269903.000000000
++++ b/sysdeps/common/fsusage.c	1730879477.241004223
+@@ -158,6 +158,15 @@ _glibtop_openbsd_get_fsusage_read_write(
+ #define _glibtop_get_fsusage_read_write(S, B, P) \
+ 	_glibtop_openbsd_get_fsusage_read_write(S, B, P)
+ 
++#elif defined(__APPLE__)
++void
++_glibtop_darwin_get_fsusage_read_write(glibtop *server,
++					glibtop_fsusage *buf,
++					const char *path);
++
++#define _glibtop_get_fsusage_read_write(S, B, P) \
++	_glibtop_darwin_get_fsusage_read_write(S, B, P)
++
+ #else /* default fallback */
+ #warning glibtop_get_fsusage .read .write are not implemented.
+ static inline void
+@@ -279,7 +288,7 @@ glibtop_get_fsusage_s (glibtop *server,
+     return;
+ 
+ #if (defined(sun) || defined(__sun)) && (defined(__SVR4) || defined(__svr4__)) \
+-	|| defined(__FreeBSD__) || defined(__OpenBSD__)
++	|| defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__APPLE__)
+   /* Solaris but not SunOS and FreeBSD */
+   buf->block_size = fsd.f_frsize;
+ #else
+--- a/sysdeps/common/mountlist.c	1480269903.000000000
++++ b/sysdeps/common/mountlist.c	1730879517.330328309
+@@ -106,7 +106,7 @@ static struct mount_entry *read_filesyst
+ #endif
+ 
+ 
+-#if defined (MOUNTED_GETMNTINFO) && !defined (__NetBSD__) && !defined (__OpenBSD__) && !defined(__FreeBSD__)
++#if defined (MOUNTED_GETMNTINFO) && !defined (__NetBSD__) && !defined (__OpenBSD__) && !defined(__FreeBSD__) && !defined(__APPLE__)
+ static const char *
+ fstype_to_string (short t)
+ {
+@@ -309,7 +309,7 @@ read_filesystem_list (void)
+ 	me = (struct mount_entry *) g_malloc (sizeof (struct mount_entry));
+ 	me->me_devname = g_strdup (fsp->f_mntfromname);
+ 	me->me_mountdir = g_strdup (fsp->f_mntonname);
+-#if defined(__NetBSD__) || defined(__OpenBSD__) || defined(__FreeBSD__)
++#if defined(__NetBSD__) || defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__APPLE__)
+ 	me->me_type = g_strdup (fsp->f_fstypename);
+ #else
+ 	me->me_type = g_strdup (fstype_to_string (fsp->f_type));
+--- a/sysdeps/darwin/Makefile.am	1673779394.000000000
++++ b/sysdeps/darwin/Makefile.am	1730883404.731012067
+@@ -2,7 +2,9 @@ AM_CPPFLAGS			= @AM_CPPFLAGS@ @LIBGTOP_I
+ 
+ noinst_LTLIBRARIES			= libgtop_sysdeps-2.0.la libgtop_sysdeps_suid-2.0.la
+ 
+-libgtop_sysdeps_2_0_la_SOURCES	= nosuid.c siglist.c sysinfo.c
++libgtop_sysdeps_2_0_la_SOURCES	= nosuid.c siglist.c sysinfo.c fsusage.c mountlist.c
++
++libgtop_sysdeps_2_0_la_LDFLAGS  = -Wl,-framework,CoreFoundation,-framework,IOKit
+ 
+ libgtop_sysdeps_suid_2_0_la_SOURCES = open.c close.c disk.c \
+ cpu.c mem.c swap.c uptime.c loadavg.c shm_limits.c msg_limits.c \
+--- a/sysdeps/darwin/netload.c	1480269903.000000000
++++ b/sysdeps/darwin/netload.c	1730888997.957911178
+@@ -1,5 +1,9 @@
+-/*
+-   This file is part of LibGTop 2.0.
++/* Copyright (C) 1998-99 Martin Baulig
++   Copyright (C) 2014 Gleb Smirnoff
++   This file is part of LibGTop 1.0.
++
++   Contributed by Martin Baulig <martin@home-of-linux.org>, October 1998.
++   Contributed by Gleb Smirnoff <glebius@FreeBSD.org>, September 2014
+ 
+    LibGTop is free software; you can redistribute it and/or modify it
+    under the terms of the GNU General Public License as published by
+@@ -18,26 +22,23 @@
+ */
+ 
+ #include <config.h>
+-#include <unistd.h>
+-
+ #include <glibtop.h>
+ #include <glibtop/error.h>
+ #include <glibtop/netload.h>
+ 
+ #include <glibtop_suid.h>
+ 
+-#include <sys/types.h>
+-#include <sys/sysctl.h>
+-#include <sys/socket.h>
++#include <sys/ioctl.h>
++#include <sys/sockio.h>
++#include <netinet/in.h>
+ #include <net/if.h>
+ #include <net/if_dl.h>
+-#include <net/route.h>
++#include <net/if_media.h>
++#include <ifaddrs.h>
+ 
+ static const unsigned long _glibtop_sysdeps_netload =
+ (1L << GLIBTOP_NETLOAD_IF_FLAGS) +
+ (1L << GLIBTOP_NETLOAD_MTU) +
+-/* (1L << GLIBTOP_NETLOAD_SUBNET) + */
+-/* (1L << GLIBTOP_NETLOAD_ADDRESS) + */
+ (1L << GLIBTOP_NETLOAD_PACKETS_IN) +
+ (1L << GLIBTOP_NETLOAD_PACKETS_OUT) +
+ (1L << GLIBTOP_NETLOAD_PACKETS_TOTAL) +
+@@ -47,119 +48,180 @@ static const unsigned long _glibtop_sysd
+ (1L << GLIBTOP_NETLOAD_ERRORS_IN) +
+ (1L << GLIBTOP_NETLOAD_ERRORS_OUT) +
+ (1L << GLIBTOP_NETLOAD_ERRORS_TOTAL) +
+-(1L << GLIBTOP_NETLOAD_COLLISIONS);
++(1L << GLIBTOP_NETLOAD_COLLISIONS) +
++(1L << GLIBTOP_NETLOAD_HWADDRESS);
++
++static const unsigned long _glibtop_sysdeps_netload_data =
++(1L << GLIBTOP_NETLOAD_SUBNET) +
++(1L << GLIBTOP_NETLOAD_ADDRESS);
++
++static const unsigned long _glibtop_sysdeps_netload6 =
++(1L << GLIBTOP_NETLOAD_ADDRESS6) +
++(1L << GLIBTOP_NETLOAD_PREFIX6) +
++(1L << GLIBTOP_NETLOAD_SCOPE6);
+ 
+ /* Init function. */
+ 
+ void
+ _glibtop_init_netload_p (glibtop *server)
+ {
+-	server->sysdeps.netload = _glibtop_sysdeps_netload;
++        server->sysdeps.netload = _glibtop_sysdeps_netload | _glibtop_sysdeps_netload_data | _glibtop_sysdeps_netload6;
++}
++
++void
++_glibtop_init_netload_s (glibtop *server)
++{
++	return _glibtop_init_netload_p (server);
+ }
+ 
+ /* Provides Network statistics. */
+ 
+ void
+ glibtop_get_netload_p (glibtop *server, glibtop_netload *buf,
+-		       const char *interface)
++                       const char *interface)
++{
++        struct ifaddrs *ifap, *ifa;
++
++        memset (buf, 0, sizeof (glibtop_netload));
++
++        if (server->sysdeps.netload == 0)
++                return;
++
++        if (getifaddrs(&ifap) != 0) {
++                glibtop_warn_io_r (server, "getifaddrs");
++                return;
++        }
++
++#define IFA_STAT(s)     (((struct if_data *)ifa->ifa_data)->ifi_ ## s)
++
++        for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
++                if (strcmp (ifa->ifa_name, interface) != 0)
++                        continue;
++
++                switch (ifa->ifa_addr->sa_family) {
++                case AF_LINK: {
++                        struct sockaddr_dl *sdl;
++                        struct ifmediareq ifmr;
++                        struct ifreq ifr;
++                        int s, flags;
++
++                        s = socket(AF_INET, SOCK_DGRAM, 0);
++                        if (s < 0) {
++                                glibtop_warn_io_r(server, "socket(AF_INET)");
++                                break;
++                        }
++
++                        memset(&ifmr, 0, sizeof(ifmr));
++                        (void)strlcpy(ifmr.ifm_name, ifa->ifa_name,
++                                sizeof(ifmr.ifm_name));
++                        if (ioctl(s, SIOCGIFXMEDIA, (caddr_t)&ifmr) < 0 &&
++                            ioctl(s, SIOCGIFMEDIA, (caddr_t)&ifmr) < 0) {
++                                glibtop_warn_io_r(server, "ioctl(SIOCGIFMEDIA)");
++                        } else {
++                                if (IFM_TYPE (ifmr.ifm_current) & IFM_IEEE80211)
++                                    buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_WIRELESS);
++                                if (IFM_TYPE (ifmr.ifm_active) & IFM_IEEE80211)
++                                    buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_WIRELESS);
++                        }
++
++                        memset(&ifr, 0, sizeof(ifr));
++                        (void)strlcpy(ifr.ifr_name, ifa->ifa_name,
++                                sizeof(ifr.ifr_name));
++                        if (ioctl(s, SIOCGIFFLAGS, (caddr_t)&ifr) < 0) {
++                                glibtop_warn_io_r(server, "ioctl(SIOCGIFFLAGS)");
++                                close(s);
++                                break;
++                        }
++
++                        close(s);
++
++                        flags = (ifr.ifr_flags & 0xffff);
++
++                        if (flags & IFF_UP)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_UP);
++                        if (flags & IFF_BROADCAST)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_BROADCAST);
++                        if (flags & IFF_DEBUG)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_DEBUG);
++                        if (flags & IFF_LOOPBACK)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_LOOPBACK);
++                        if (flags & IFF_POINTOPOINT)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_POINTOPOINT);
++                        if (flags & IFF_RUNNING)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_RUNNING);
++                        if (flags & IFF_NOARP)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_NOARP);
++                        if (flags & IFF_PROMISC)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_PROMISC);
++                        if (flags & IFF_ALLMULTI)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_ALLMULTI);
++                        if (flags & IFF_OACTIVE)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_OACTIVE);
++                        if (flags & IFF_SIMPLEX)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_SIMPLEX);
++                        if (flags & IFF_LINK0)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_LINK0);
++                        if (flags & IFF_LINK1)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_LINK1);
++                        if (flags & IFF_LINK2)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_LINK2);
++                        if (flags & IFF_ALTPHYS)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_ALTPHYS);
++                        if (flags & IFF_MULTICAST)
++                                buf->if_flags |= (1L << GLIBTOP_IF_FLAGS_MULTICAST);
++
++                        buf->packets_in = IFA_STAT(ipackets);
++                        buf->packets_out = IFA_STAT(opackets);
++                        buf->packets_total = buf->packets_in + buf->packets_out;
++
++                        buf->bytes_in = IFA_STAT(ibytes);
++                        buf->bytes_out = IFA_STAT(obytes);
++                        buf->bytes_total = buf->bytes_in + buf->bytes_out;
++
++                        buf->errors_in = IFA_STAT(ierrors);
++                        buf->errors_out = IFA_STAT(oerrors);
++                        buf->errors_total = buf->errors_in + buf->errors_out;
++
++                        buf->collisions = IFA_STAT(collisions);
++
++                        sdl = (struct sockaddr_dl *)(void *)ifa->ifa_addr;
++                        memcpy(buf->hwaddress, LLADDR(sdl),
++                                sizeof(buf->hwaddress));
++                        buf->mtu = IFA_STAT(mtu);
++                        buf->flags |= _glibtop_sysdeps_netload;
++                        break;
++                }
++                case AF_INET: {
++                        struct sockaddr_in *sin;
++
++                        sin = (struct sockaddr_in *)(void *)ifa->ifa_addr;
++                        buf->address = sin->sin_addr.s_addr;
++                        sin = (struct sockaddr_in *)(void *)ifa->ifa_netmask;
++                        buf->subnet = sin->sin_addr.s_addr & buf->address;
++                        buf->flags |= _glibtop_sysdeps_netload_data;
++                        break;
++                }
++                case AF_INET6: {
++                        struct sockaddr_in6 *sin6;
++
++                        sin6 = (struct sockaddr_in6 *)(void *)ifa->ifa_addr;
++                        memcpy(buf->address6, &sin6->sin6_addr,
++                                sizeof(buf->address6));
++                        buf->scope6 = (guint8 )sin6->sin6_scope_id;
++                        sin6 = (struct sockaddr_in6 *)(void *)ifa->ifa_netmask;
++                        memcpy(buf->prefix6, &sin6->sin6_addr,
++                                sizeof(buf->prefix6));
++                        buf->flags |= _glibtop_sysdeps_netload6;
++                        break;
++                }
++                } // switch() end
++        }
++        freeifaddrs(ifap);
++}
++
++void
++glibtop_get_netload_s (glibtop *server, glibtop_netload *buf,
++                       const char *interface)
+ {
+-	int mib[] = { CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST, 0 };
+-	size_t bufsize;
+-	char *rtbuf, *ptr, *eob;
+-	struct if_msghdr *ifm;
+-
+-	glibtop_init_p (server, (1 << GLIBTOP_SYSDEPS_NETLOAD), 0);
+-
+-	memset (buf, 0, sizeof (glibtop_netload));
+-
+-	if (sysctl (mib, 6, NULL, &bufsize, NULL, 0) < 0)
+-		return;
+-
+-	rtbuf = (char*)g_malloc (bufsize);
+-	if (rtbuf == NULL)
+-		return;
+-
+-	if (sysctl (mib, 6, rtbuf, &bufsize, NULL, 0) < 0) {
+-		g_free (rtbuf);
+-		return;
+-	}
+-
+-	eob = rtbuf + bufsize;
+-	ptr = rtbuf;
+-	while (ptr < eob) {
+-		struct sockaddr_dl *sdl;
+-
+-		ifm = (struct if_msghdr*) ptr;
+-
+-		if (ifm->ifm_type != RTM_IFINFO)
+-			break;
+-		ptr += ifm->ifm_msglen;
+-
+-		while (ptr < eob) {
+-			struct if_msghdr *nextifm = (struct if_msghdr*) ptr;
+-
+-			if (nextifm->ifm_type != RTM_NEWADDR)
+-				break;
+-			ptr += nextifm->ifm_msglen;
+-		}
+-
+-		sdl = (struct sockaddr_dl*) (ifm + 1);
+-		if (sdl->sdl_family != AF_LINK)
+-			continue;
+-		if (strlen (interface) != sdl->sdl_nlen)
+-			continue;
+-		if (strcmp (interface, sdl->sdl_data) == 0)
+-			goto FOUND;
+-	}
+-	g_free (rtbuf);
+-	return;
+-
+-FOUND:
+-	if (ifm->ifm_flags & IFF_UP)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_UP;
+-	if (ifm->ifm_flags & IFF_BROADCAST)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_BROADCAST;
+-	if (ifm->ifm_flags & IFF_DEBUG)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_DEBUG;
+-	if (ifm->ifm_flags & IFF_LOOPBACK)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_LOOPBACK;
+-	if (ifm->ifm_flags & IFF_POINTOPOINT)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_POINTOPOINT;
+-	if (ifm->ifm_flags & IFF_RUNNING)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_RUNNING;
+-	if (ifm->ifm_flags & IFF_NOARP)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_NOARP;
+-	if (ifm->ifm_flags & IFF_NOARP)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_PROMISC;
+-	if (ifm->ifm_flags & IFF_ALLMULTI)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_ALLMULTI;
+-	if (ifm->ifm_flags & IFF_OACTIVE)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_OACTIVE;
+-	if (ifm->ifm_flags & IFF_SIMPLEX)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_SIMPLEX;
+-	if (ifm->ifm_flags & IFF_LINK0)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_LINK0;
+-	if (ifm->ifm_flags & IFF_LINK1)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_LINK1;
+-	if (ifm->ifm_flags & IFF_LINK2)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_LINK2;
+-	if (ifm->ifm_flags & IFF_ALTPHYS)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_ALTPHYS;
+-	if (ifm->ifm_flags & IFF_MULTICAST)
+-		buf->if_flags |= GLIBTOP_IF_FLAGS_MULTICAST;
+-	buf->mtu		= ifm->ifm_data.ifi_mtu;
+-	buf->subnet		= 0; /* FIXME */
+-	buf->address		= 0; /* FIXME */
+-	buf->packets_in		= ifm->ifm_data.ifi_ipackets;
+-	buf->packets_out	= ifm->ifm_data.ifi_opackets;
+-	buf->packets_total	= buf->packets_in + buf->packets_out;
+-	buf->bytes_in		= ifm->ifm_data.ifi_ibytes;
+-	buf->bytes_out		= ifm->ifm_data.ifi_obytes;
+-	buf->bytes_total	= buf->bytes_in + buf->bytes_out;
+-	buf->errors_in		= ifm->ifm_data.ifi_ierrors;
+-	buf->errors_out		= ifm->ifm_data.ifi_oerrors;
+-	buf->errors_total	= buf->errors_in + buf->errors_out;
+-	buf->collisions		= ifm->ifm_data.ifi_collisions;
+-	buf->flags		= _glibtop_sysdeps_netload;
+-	g_free (buf);
++	return glibtop_get_netload_p (server, buf, interface);
+ }
+--- /dev/null	1730891526.892749000
++++ b/sysdeps/darwin/fsusage.c	1730884672.248507708
+@@ -0,0 +1,135 @@
++#include <config.h>
++#include <glibtop.h>
++#include <glibtop/error.h>
++#include <glibtop/fsusage.h>
++
++#include <glibtop_suid.h>
++
++#include <glib.h>
++
++#include <unistd.h>
++#include <sys/param.h>
++#include <sys/mount.h>
++#include <sys/statvfs.h>
++
++#include <IOKit/IOKitLib.h>
++#include <IOKit/storage/IOBlockStorageDriver.h>
++#include <CoreFoundation/CoreFoundation.h>
++
++#include <stdio.h>
++#include <string.h>
++#include <stdlib.h>
++
++static const unsigned long _glibtop_sysdeps_fsusage =
++(1L << GLIBTOP_FSUSAGE_BLOCKS) + (1L << GLIBTOP_FSUSAGE_BFREE)
+++ (1L << GLIBTOP_FSUSAGE_BAVAIL) + (1L << GLIBTOP_FSUSAGE_FILES)
+++ (1L << GLIBTOP_FSUSAGE_FFREE) + (1L << GLIBTOP_FSUSAGE_BLOCK_SIZE);
++
++static void
++_glibtop_get_fsusage_read_write (glibtop *server, glibtop_fsusage *buf, const char *path)
++{
++        int result;
++        struct statfs sfs;
++	const char* dev;
++
++	CFDictionaryRef disk_dict = NULL;
++	CFDictionaryRef stats_dict = NULL;
++
++        result = statfs (path, &sfs);
++
++        if (result == -1) {
++                glibtop_warn_io_r (server, "statfs");
++                return;
++        }
++
++	dev = strrchr(sfs.f_mntfromname, '/');
++	if (!dev) {
++		return;
++	}
++	dev++;
++
++	io_iterator_t disk_list;
++
++	CFMutableDictionaryRef match = IOBSDNameMatching(kIOMasterPortDefault, kNilOptions, dev);
++	if (!match) {
++		glibtop_warn_io_r (server, "IOBSDNameMatching");
++		return;
++	}
++
++	if (IOServiceGetMatchingServices(kIOMasterPortDefault, match, &disk_list) != kIOReturnSuccess) {
++		glibtop_warn_io_r (server, "IOServiceGetMatchingServices");
++		return;
++	}
++
++	io_registry_entry_t disk = IOIteratorNext(disk_list);
++	if (!disk) {
++		IOObjectRelease(disk_list);
++		return;
++	}
++
++	io_registry_entry_t tdisk = disk;
++	while (!IOObjectConformsTo(disk, "IOBlockStorageDriver")) {
++		IORegistryEntryGetParentEntry(disk, kIOServicePlane, &tdisk);
++		IOObjectRelease(disk);
++		disk = tdisk;
++	}
++
++	if (IORegistryEntryCreateCFProperties(disk, (CFMutableDictionaryRef*)&disk_dict, kCFAllocatorDefault, kNilOptions) != kIOReturnSuccess) {
++		glibtop_warn_io_r (server, "IORegistryEntryCreateCFProperties");
++		IOObjectRelease(disk);
++		IOObjectRelease(disk_list);
++		return;
++	}
++
++	stats_dict = (CFDictionaryRef)CFDictionaryGetValue(disk_dict, CFSTR(kIOBlockStorageDriverStatisticsKey));
++	if (stats_dict == NULL) {
++		glibtop_warn_io_r (server, "CFDictionaryGetValue");
++		CFRelease(disk_dict);
++		IOObjectRelease(disk);
++		IOObjectRelease(disk_list);
++		return;
++	}
++
++	CFNumberRef number;
++
++	if ((number = (CFNumberRef)CFDictionaryGetValue(stats_dict, CFSTR(kIOBlockStorageDriverStatisticsReadsKey)))) {
++		CFNumberGetValue(number, kCFNumberSInt64Type, &buf->read);
++	}
++
++	if ((number = (CFNumberRef)CFDictionaryGetValue(stats_dict, CFSTR(kIOBlockStorageDriverStatisticsWritesKey)))) {
++		CFNumberGetValue(number, kCFNumberSInt64Type, &buf->write);
++	}
++
++	CFRelease(disk_dict);
++	IOObjectRelease(disk);
++	IOObjectRelease(disk_list);
++
++	if (buf->read || buf->write) {
++	        buf->flags |= (1 << GLIBTOP_FSUSAGE_READ) | (1 << GLIBTOP_FSUSAGE_WRITE);
++	}
++}
++
++void
++glibtop_get_fsusage_s(glibtop *server, glibtop_fsusage *buf, const char *path)
++{
++	struct statvfs fsd;
++
++	glibtop_init_r (&server, 0, 0);
++
++	memset (buf, 0, sizeof (glibtop_fsusage));
++
++	if (statvfs (path, &fsd) < 0)
++		return;
++
++	buf->block_size = fsd.f_frsize;
++	buf->blocks = fsd.f_blocks;
++	buf->bfree  = fsd.f_bfree;
++	buf->bavail = (fsd.f_bavail > fsd.f_bfree) ? 0 : fsd.f_bavail;
++	buf->files  = fsd.f_files;
++	buf->ffree  = fsd.f_ffree;
++
++	buf->flags = _glibtop_sysdeps_fsusage;
++
++	_glibtop_get_fsusage_read_write(server, buf, path);
++}
++
+--- /dev/null	1730891531.320983000
++++ b/sysdeps/darwin/mountlist.c	1730882349.063733000
+@@ -0,0 +1,168 @@
++/* mountlist.c -- return a list of mounted filesystems
++   Copyright (C) 1991, 1992 Free Software Foundation, Inc.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2, or (at your option)
++   any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software Foundation,
++   Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.  */
++
++#include <config.h>
++
++#include <glib.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/types.h>
++#include <sys/param.h>
++#include <sys/mount.h>
++
++#include <string.h>
++
++#include <glibtop.h>
++#include <glibtop/mountlist.h>
++
++/* A mount table entry. */
++struct mount_entry
++{
++  char *me_devname;             /* Device node pathname, including "/dev/". */
++  char *me_mountdir;            /* Mount point directory pathname. */
++  char *me_type;                /* "nfs", "4.2", etc. */
++  dev_t me_dev;                 /* Device number of me_mountdir. */
++  struct mount_entry *me_next;
++};
++
++static struct mount_entry *read_filesystem_list (void);
++
++/* Return a list of the currently mounted filesystems, or NULL on error.
++   Add each entry to the tail of the list so that they stay in order.
++*/
++
++static struct mount_entry *
++read_filesystem_list (void)
++{
++  struct mount_entry *mount_list;
++  struct mount_entry *me;
++  struct mount_entry *mtail;
++
++  /* Start the list off with a dummy entry. */
++  me = g_new (struct mount_entry, 1);
++  me->me_next = NULL;
++  mount_list = mtail = me;
++  {
++    struct statfs *fsp;
++    int entries;
++
++    entries = getmntinfo (&fsp, MNT_NOWAIT);
++    if (entries < 0)
++      return NULL;
++    while (entries-- > 0)
++      {
++	me = (struct mount_entry *) g_malloc (sizeof (struct mount_entry));
++	me->me_devname = g_strdup (fsp->f_mntfromname);
++	me->me_mountdir = g_strdup (fsp->f_mntonname);
++	me->me_type = g_strdup (fsp->f_fstypename);
++	me->me_dev = (dev_t) -1;	/* Magic; means not known yet. */
++	me->me_next = NULL;
++
++	/* Add to the linked list. */
++	mtail->me_next = me;
++	mtail = me;
++	fsp++;
++      }
++  }
++
++  /* Free the dummy head. */
++  me = mount_list;
++  mount_list = mount_list->me_next;
++  g_free (me);
++  return mount_list;
++}
++
++static gboolean ignore_mount_entry(const struct mount_entry *me)
++{
++	/* keep sorted */
++	static const char ignored[][17] = {
++		"autofs",
++		"devfs",
++		"fusectl",
++		"linprocfs",
++		"linsysfs",
++		"mfs",
++		"none",
++		"nfs",
++		"nullfs",
++		"nwfs",
++		"portalfs",
++		"proc",
++		"procfs",
++		"smbfs",
++		"tmpfs",
++		"unionfs",
++		"unknown"
++	};
++
++	typedef int (*Comparator)(const void*, const void*);
++
++	return bsearch(me->me_type,
++		       ignored, G_N_ELEMENTS(ignored), sizeof ignored[0],
++		       (Comparator) strcmp) != NULL;
++}
++
++
++glibtop_mountentry *
++glibtop_get_mountlist_s (glibtop *server, glibtop_mountlist *buf, int all_fs)
++{
++	struct mount_entry *entries, *cur, *next;
++
++	GArray *mount_array = g_array_new(FALSE, FALSE,
++					  sizeof(glibtop_mountentry));
++
++	glibtop_init_r (&server, 0, 0);
++
++	memset (buf, 0, sizeof (glibtop_mountlist));
++
++	/* Read filesystem list. */
++
++	if((entries = read_filesystem_list ()) == NULL)
++		return NULL;
++
++	for (cur = &entries[0]; cur != NULL; cur = next) {
++
++		if(all_fs || !ignore_mount_entry(cur)) {
++			/* add a new glibtop_mountentry */
++			glibtop_mountentry e;
++
++			g_strlcpy(e.devname,  cur->me_devname,  sizeof e.devname);
++			g_strlcpy(e.mountdir, cur->me_mountdir, sizeof e.mountdir);
++			g_strlcpy(e.type,     cur->me_type,     sizeof e.type);
++			e.dev = cur->me_dev;
++
++			g_array_append_val(mount_array, e);
++		}
++
++		/* free current mount_entry and move to the next */
++		next = cur->me_next;
++		g_free(cur->me_devname);
++		g_free(cur->me_mountdir);
++		g_free(cur->me_type);
++		g_free(cur);
++	}
++
++	buf->size   = sizeof (glibtop_mountentry);
++	buf->number = mount_array->len;
++	buf->total  = buf->number * buf->size;
++
++	buf->flags  = (1 << GLIBTOP_MOUNTLIST_SIZE)
++	  | (1 << GLIBTOP_MOUNTLIST_NUMBER)
++	  | (1 << GLIBTOP_MOUNTLIST_TOTAL);
++
++	return (glibtop_mountentry*) g_array_free(mount_array, FALSE);
++}
