@@ -1,0 +1,289 @@
+--- a/Makefile.am	1665601329.000000000
++++ b/Makefile.am	1730799688.993226464
+@@ -2,12 +2,19 @@ ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
+ 
+ # Note: The order of directories in this list isn't arbitrary
+ SUBDIRS = \
+-	xfce4++ \
+-	xfce4++/util \
+ 	panel-plugin \
+ 	po \
+ 	icons
+ 
++if DARWIN
++# Darwin cctools ar cannot archive nothing, since xfce4++ contains nothing
++SUBDIRS +=
++else
++SUBDIRS += \
++	xfce4++ \
++	xfce4++/util
++endif
++
+ distclean-local:
+ 	rm -rf *.cache *~
+ 
+--- a/configure.ac	1667485472.000000000
++++ b/configure.ac	1730801613.075205447
+@@ -26,6 +26,7 @@ AC_COPYRIGHT([Copyright (c) 2006-2022 Th
+ AC_INIT([xfce4-systemload-plugin], [systemload_version], [https://gitlab.xfce.org/panel-plugins/xfce4-systemload-plugin/], [xfce4-systemload-plugin])
+ AC_PREREQ([2.69])
+ AC_CONFIG_MACRO_DIRS([m4])
++AC_CANONICAL_TARGET()
+ 
+ dnl Initialize automake
+ AM_INIT_AUTOMAKE([1.8 dist-bzip2 tar-ustar no-dist-gzip foreign])
+@@ -51,6 +52,15 @@ AC_CHECK_LIB([kvm], [kvm_open])
+ dnl Check for i18n support
+ XDT_I18N([])
+ 
++dnl Check if targeting Darwin
++case "$target_os" in
++    darwin*)
++        target_impl="darwin"
++    ;;
++esac
++
++AM_CONDITIONAL([DARWIN], [test x"$target_impl" = x"darwin"])
++
+ dnl Check for required packages
+ XDT_CHECK_PACKAGE([LIBXFCE4PANEL], [libxfce4panel-2.0], [4.16.0])
+ XDT_CHECK_PACKAGE([LIBXFCE4UI], [libxfce4ui-2], [4.16.0])
+--- a/panel-plugin/Makefile.am	1644840141.000000000
++++ b/panel-plugin/Makefile.am	1730800402.832990447
+@@ -18,7 +18,6 @@ libsystemload_la_CFLAGS = \
+ libsystemload_la_CXXFLAGS = $(libsystemload_la_CFLAGS)
+ 
+ libsystemload_la_LIBADD = \
+-	$(top_builddir)/xfce4++/util/libxfce4util_pp.la \
+ 	$(LIBXFCE4UI_LIBS) \
+ 	$(LIBXFCE4PANEL_LIBS) \
+ 	$(XFCONF_LIBS) \
+@@ -26,6 +25,10 @@ libsystemload_la_LIBADD = \
+ 	$(UPOWER_GLIB_LIBS) \
+ 	-lm
+ 
++if !DARWIN
++libsystemload_la_LIBADD += $(top_builddir)/xfce4++/util/libxfce4util_pp.la
++endif
++
+ libsystemload_la_SOURCES = \
+ 	cpu.cc \
+ 	cpu.h \
+--- a/panel-plugin/cpu.cc	1645037393.000000000
++++ b/panel-plugin/cpu.cc	1730798958.466381519
+@@ -238,6 +238,55 @@ gulong read_cpuload()
+ 
+     return cpu_used;
+ }
++
++#elif defined(__APPLE__)
++/*
++ * Darwin defines MAX and MIN in sys/param.h, so undef the glib macros first
++ */
++#ifdef MAX
++#undef MAX
++#endif
++#ifdef MIN
++#undef MIN
++#endif
++
++#include <mach/mach.h>
++
++/* user, nice, system, interrupt(Unused), idle */
++struct cpu_load_struct {
++    gulong load[5];
++};
++
++static gulong oldtotal, oldused;
++
++gulong read_cpuload()
++{
++    gulong cpu_used, used, total;
++    host_cpu_load_info_data_t cpuload;
++    mach_msg_type_number_t cpuload_count = HOST_CPU_LOAD_INFO_COUNT;
++
++    if (host_statistics(mach_host_self(), HOST_CPU_LOAD_INFO, (host_info_t)&cpuload, &cpuload_count) != KERN_SUCCESS) {
++        g_warning("Cannot get host_statistics(HOST_CPU_LOAD_INFO)");
++        return 0;
++    }
++
++    used = cpuload.cpu_ticks[CPU_STATE_USER] + cpuload.cpu_ticks[CPU_STATE_NICE] + cpuload.cpu_ticks[CPU_STATE_SYSTEM];
++    total = used + cpuload.cpu_ticks[CPU_STATE_IDLE];
++
++    if ((total - oldtotal) != 0)
++    {
++        cpu_used = (100 * (double)(used - oldused)) / (double)(total - oldtotal);
++    }
++    else
++    {
++        cpu_used = 0;
++    }
++    oldused = used;
++    oldtotal = total;
++
++    return cpu_used;
++}
++
+ #elif defined(__sun__)
+ 
+ #include <kstat.h>
+--- a/panel-plugin/memswap.cc	1645038865.000000000
++++ b/panel-plugin/memswap.cc	1730798134.433229259
+@@ -466,6 +466,96 @@ gint read_memswap(gulong *mem, gulong *s
+     return 0;
+ }
+ 
++#elif defined(__APPLE__)
++/*
++ * Darwin defines MAX and MIN in sys/param.h, so undef the glib macros first
++ */
++#ifdef MAX
++#undef MAX
++#endif
++#ifdef MIN
++#undef MIN
++#endif
++
++#include <fcntl.h>
++#include <limits.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/param.h>
++#include <sys/sysctl.h>
++#include <sys/types.h>
++#include <unistd.h>
++#include <mach/mach.h>
++
++static size_t MTotal = 0;
++static size_t MFree = 0;
++static size_t MUsed = 0;
++static size_t STotal = 0;
++static size_t SFree = 0;
++static size_t SUsed = 0;
++
++gint read_memswap(gulong *mem, gulong *swap, gulong *MT, gulong *MU, gulong *ST, gulong *SU)
++{
++    size_t len;
++    vm_size_t vm_pagesize;
++
++#define ARRLEN(X) (sizeof(X)/sizeof(X[0]))
++    /* hw.memsize won't change, avoid getting multiple times */
++    if (MTotal == 0)
++    {
++        static int mib[] = { CTL_HW, HW_MEMSIZE };
++        int64_t x;
++        len = sizeof(x);
++        sysctl(mib, ARRLEN(mib), &x, &len, NULL, 0);
++        MTotal = x >> 10;
++    }
++
++    {
++        struct xsw_usage x;
++        static int mib[] = { CTL_VM, VM_SWAPUSAGE };
++        len = sizeof(x);
++        STotal = SUsed = SFree = -1;
++        if (-1 < sysctl(mib, ARRLEN(mib), &x, &len, NULL, 0)) {
++            STotal = x.xsu_total >> 10;
++            SUsed = x.xsu_used >> 10;
++            SFree = x.xsu_avail >> 10;
++        }
++    }
++
++    {
++        vm_statistics64_data_t x;
++        mach_msg_type_number_t vm_count = HOST_VM_INFO64_COUNT;
++        MFree = MUsed = -1;
++        host_page_size(mach_host_self(), &vm_pagesize);
++        if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info_t)&x, &vm_count) == KERN_SUCCESS) {
++            if (MTotal != 0) {
++                /* When PhysMem is available, calculate free memory by substracting used VirtMem */
++                MUsed = ((x.internal_page_count - x.purgeable_count + x.wire_count + x.compressor_page_count) * vm_pagesize) >> 10;
++                MFree = MTotal - MUsed;
++            } else {
++                /* otherwise, we can only know how much VirtMem freed */
++                MFree = (x.free_count * vm_pagesize) >> 10;
++                MUsed = ((x.wire_count + x.inactive_count + x.active_count + x.compressor_page_count) * vm_pagesize) >> 10;
++            }
++        }
++    }
++
++    *mem = MUsed * 100 / MTotal;
++    if(STotal)
++        *swap = SUsed * 100 / STotal;
++    else
++        *swap = 0;
++
++    /* Return MT without affecting MTotal */
++    *MT = (MTotal == 0) ? (MFree + MUsed) : MTotal;
++    *MU = MUsed;
++    *ST = STotal;
++    *SU = SUsed;
++
++    return 0;
++}
++
+ #elif defined (__sun__)
+ 
+ #include <sys/stat.h>
+--- a/panel-plugin/network.cc	1645037825.000000000
++++ b/panel-plugin/network.cc	1730800311.581417229
+@@ -114,7 +114,7 @@ read_netload_proc (gulong *bytes)
+ gint
+ read_netload (gulong *net, gulong *NTotal)
+ {
+-    static guint64 bytes[2];
++    static gulong bytes[2];
+     static gint64 time[2];
+ 
+     *net = 0;
+--- a/panel-plugin/systemload.cc	1667483179.000000000
++++ b/panel-plugin/systemload.cc	1730966994.045477983
+@@ -49,6 +49,10 @@
+ #include <upower.h>
+ #endif
+ 
++#ifdef HAVE_LIBGTOP
++#include <glibtop.h>
++#endif
++
+ #include "cpu.h"
+ #include "memswap.h"
+ #include "network.h"
+@@ -896,6 +900,10 @@ systemload_construct (XfcePanelPlugin *p
+ {
+     xfce_textdomain(GETTEXT_PACKAGE, PACKAGE_LOCALE_DIR, "UTF-8");
+ 
++#ifdef HAVE_LIBGTOP
++glibtop_init();
++#endif
++
+     t_global_monitor *global = monitor_control_new (plugin);
+ 
+     create_monitor (global);
+--- a/panel-plugin/uptime.cc	1645038595.000000000
++++ b/panel-plugin/uptime.cc	1730795205.087704111
+@@ -59,11 +59,11 @@ gulong read_uptime()
+     return uptime;
+ }
+ 
+-#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__)
++#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__DragonFly__) || defined(__APPLE__)
+ 
+-#ifdef __NetBSD__
++#if defined(__NetBSD__) || defined(__APPLE__)
+ /*
+- * NetBSD defines MAX and MIN in sys/param.h, so undef the glib macros first
++ * NetBSD and Darwin defines MAX and MIN in sys/param.h, so undef the glib macros first
+  */
+ #ifdef MAX
+ #undef MAX
+@@ -71,7 +71,7 @@ gulong read_uptime()
+ #ifdef MIN
+ #undef MIN
+ #endif
+-#endif /* !__NetBSD__ */
++#endif /* !__NetBSD__ && !__APPLE__ */
+ 
+ #include <fcntl.h>
+ #include <limits.h>
