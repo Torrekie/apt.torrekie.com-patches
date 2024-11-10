@@ -53,7 +53,7 @@
 +
 +#endif
 --- /dev/null	1731220299.406804000
-+++ panel-plugin/wi_darwin.c	1731220284.000046441
++++ b/panel-plugin/wi_darwin.c	1731220284.000046441
 @@ -0,0 +1,238 @@
 +/* Copyright (c) 2024 Torrekie Gen <me@torrekie.dev>
 + *                    (Introduce Darwin support)
