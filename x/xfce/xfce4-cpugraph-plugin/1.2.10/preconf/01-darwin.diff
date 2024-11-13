@@ -1,0 +1,72 @@
+--- a/panel-plugin/os.cc	1701612194.000000000
++++ b/panel-plugin/os.cc	1731491486.144793194
+@@ -73,6 +73,11 @@ using namespace std;
+ #include <sys/sysctl.h>
+ #endif
+ 
++#if defined (__APPLE__)
++#include <mach/mach.h>
++#include <sys/sysctl.h>
++#endif
++
+ #if defined (__sun__)
+ #include <kstat.h>
+ static kstat_ctl_t *kc;
+@@ -328,6 +333,57 @@ read_cpu_data (unordered_map<guint, CpuD
+ 
+     data[0].load /= nb_cpu;
+     return true;
++}
++
++#elif defined (__APPLE__)
++static guint
++detect_cpu_number ()
++{
++    static gint mib[] = {CTL_HW, HW_NCPU};
++    gint ncpu;
++    gsize len = sizeof (gint);
++
++    if (sysctl (mib, 2, &ncpu, &len, NULL, 0) < 0)
++        return 0;
++    else
++        return ncpu;
++}
++
++static bool
++read_cpu_data (unordered_map<guint, CpuData> &data)
++{
++    if (G_UNLIKELY(data.size() == 0))
++        return false;
++
++    const size_t nb_cpu = data.size()-1;
++    natural_t ncpu;
++    processor_cpu_load_info_t cpu_load;
++    mach_msg_type_number_t cpu_msg_count;
++    data[0].load = 0;
++
++    if (host_processor_info (mach_host_self (), PROCESSOR_CPU_LOAD_INFO, &ncpu, (processor_info_array_t *) &cpu_load, &cpu_msg_count) != KERN_SUCCESS)
++        return false;
++
++    for (guint i = 1; i <= nb_cpu; i++)
++    {
++        guint64 used = cpu_load[i].cpu_ticks[CPU_STATE_USER] + cpu_load[i].cpu_ticks[CPU_STATE_NICE] + cpu_load[i].cpu_ticks[CPU_STATE_SYSTEM];
++        guint64 total = used + cpu_load[i].cpu_ticks[CPU_STATE_IDLE];
++
++        if (used >= data[i].previous_used && total > data[i].previous_total)
++            data[i].load = (gfloat) (used - data[i].previous_used) /
++                           (gfloat) (total - data[i].previous_total);
++        else
++            data[i].load = 0;
++
++        data[i].previous_used = used;
++        data[i].previous_total = total;
++        data[0].load += data[i].load;
++    }
++
++    vm_deallocate (mach_task_self (), (vm_address_t) cpu_load, (vm_size_t) (cpu_msg_count * sizeof (*cpu_load)));
++
++    data[0].load /= nb_cpu;
++    return true;
+ }
+ 
+ #elif defined (__sun__)
