@@ -1,0 +1,516 @@
+--- a/configure.ac	1681923041.000000000
++++ b/configure.ac	1731312728.821137038
+@@ -76,6 +76,11 @@ XDT_CHECK_PACKAGE([GTK], [gtk+-3.0], [3.
+ XDT_CHECK_PACKAGE([LIBXFCE4UTIL], [libxfce4util-1.0], [4.14.0])
+ XDT_CHECK_PACKAGE([LIBXFCE4UI], [libxfce4ui-2], [4.14.0])
+ XDT_CHECK_PACKAGE([LIBXFCE4PANEL], [libxfce4panel-2.0], [4.14.0])
++case "$target_os" in
++    darwin*)
++    LDFLAGS="-Wl,-dead_strip_dylibs -Wl,-framework,CoreFoundation -Wl,-framework,IOKit $LDFLAGS"
++    ;;
++esac
+ 
+ dnl ***********************************
+ dnl *** Check for debugging support ***
+--- a/panel-plugin/Makefile.am	1616501332.000000000
++++ b/panel-plugin/Makefile.am	1731312331.013409708
+@@ -14,7 +14,8 @@ plugin_LTLIBRARIES = libbattery.la
+ libbattery_la_SOURCES =						\
+ 	battery.c								\
+ 	libacpi.h								\
+-	libacpi.c
++	libacpi.c						\
++	libsmc.c
+ 
+ libbattery_la_CFLAGS =						\
+ 	$(LIBXFCE4PANEL_CFLAGS)					\
+--- a/panel-plugin/battery.c	1681841300.000000000
++++ b/panel-plugin/battery.c	1731481701.178794112
+@@ -33,6 +33,12 @@
+ #define APMDEVICE "/dev/apm"
+ #endif
+ 
++#if defined(__APPLE__)
++#include <CoreFoundation/CoreFoundation.h>
++#include <IOKit/ps/IOPSKeys.h>
++#include <IOKit/ps/IOPowerSources.h>
++#endif
++
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <fcntl.h>
+@@ -46,7 +52,11 @@
+ #include <gtk/gtk.h>
+ #include <libxfce4panel/libxfce4panel.h>
+ 
++#if defined(__APPLE__)
++#include "libsmc.h"
++#else
+ #include "libacpi.h"
++#endif
+ 
+ #include <sys/time.h>
+ #include <time.h>
+@@ -125,7 +135,7 @@ typedef struct
+ } t_battmon_dialog;
+ 
+ enum {BM_DO_NOTHING, BM_MESSAGE, BM_COMMAND, BM_COMMAND_TERM};
+-enum {BM_BROKEN, BM_USE_ACPI, BM_USE_APM};
++enum {BM_BROKEN, BM_USE_ACPI, BM_USE_APM, BM_USE_IOKIT};
+ enum {BM_MISSING, BM_CRITICAL, BM_CRITICAL_CHARGING, BM_LOW, BM_LOW_CHARGING, BM_OK, BM_OK_CHARGING, BM_FULL, BM_FULL_CHARGING};
+ 
+ static gboolean battmon_set_size(XfcePanelPlugin *plugin, int size, t_battmon *battmon);
+@@ -200,6 +210,85 @@ update_apm_status(t_battmon *battmon)
+     acline = apm.ac_state ? TRUE : FALSE;
+     method = BM_USE_APM;
+ 
++#elif defined(__APPLE__)
++    CFTypeRef ps_info = NULL;
++    CFArrayRef list = NULL;
++    CFStringRef ps_name;
++    CFDictionaryRef one_ps = NULL;
++    CFIndex count;
++    CFNumberRef number;
++    CFStringRef state;
++    char strbuf[255];
++    int current_cap, max_cap;
++    int i;
++
++    method = BM_USE_IOKIT;
++
++    ps_info = IOPSCopyPowerSourcesInfo();
++    if (!ps_info) {
++        DBG ("No power source info available");
++        return;
++    }
++
++    ps_name = IOPSGetProvidingPowerSourceType(ps_info);
++    if (!ps_name || !CFStringGetCString(ps_name, strbuf, 255, kCFStringEncodingUTF8)) {
++        DBG ("Unable to get power source type");
++        return;
++    } else {
++        DBG ("Power source type: '%s'\n", strbuf);
++    }
++
++    list = IOPSCopyPowerSourcesList(ps_info);
++    if (list != NULL) {
++        /* Normally there only have one battery present */
++        count = CFArrayGetCount(list);
++
++        for (i = 0; i < count; i++) {
++            one_ps = IOPSGetPowerSourceDescription(ps_info, CFArrayGetValueAtIndex(list, i));
++            if (!one_ps) break;
++
++            if ((number = (CFNumberRef)CFDictionaryGetValue(one_ps, CFSTR(kIOPSCurrentCapacityKey)))) {
++                CFNumberGetValue(number, kCFNumberIntType, &current_cap);
++            }
++            if ((number = (CFNumberRef)CFDictionaryGetValue(one_ps, CFSTR(kIOPSMaxCapacityKey)))) {
++                CFNumberGetValue(number, kCFNumberIntType, &max_cap);
++            }
++            if (current_cap != 0 && max_cap != 0)
++                charge = current_cap * 100 / max_cap;
++
++            state = CFDictionaryGetValue(one_ps, CFSTR(kIOPSPowerSourceStateKey));
++            if (state && (kCFCompareEqualTo == CFStringCompare(state, CFSTR(kIOPSBatteryPowerValue), 0))) {
++                number = CFDictionaryGetValue(one_ps, CFSTR(kIOPSTimeToEmptyKey));
++            } else {
++                number = CFDictionaryGetValue(one_ps, CFSTR(kIOPSTimeToFullChargeKey));
++            }
++            /* TimeToEmpty / TimeToFullCharge in minutes */
++            if (number) {
++                CFNumberGetValue(number, kCFNumberIntType, &time_remaining);
++            }
++
++            /* There's a confusion that, AC attached doesn't means the battery is charging,
++             * so it could have a status that "AC attached but not charging" */
++            acline = (kCFCompareEqualTo == CFStringCompare(state, CFSTR(kIOPSACPowerValue), 0)) ? TRUE : FALSE;
++
++            if ((number = (CFNumberRef)CFDictionaryGetValue(one_ps, CFSTR(kIOPSIsPresentKey)))) {
++                CFNumberGetValue(number, kCFNumberIntType, &present);
++            }
++
++#if TARGET_OS_EMBEDDED
++            /* For some reason, iOS powerd not writting kIOPSTimeToEmptyKey/kIOPSTimeToFullChargeKey */
++            if (time_remaining <= 0 && present) {
++                if (acline)
++                    time_remaining = estimate_time_to_full() * (100 - charge);
++                else
++                    time_remaining = get_time_to_empty();
++            }
++#endif
++        }
++    }
++
++    if (ps_info) CFRelease(ps_info);
++    if (list) CFRelease(list);
+ #else
+     DBG ("Updating battery status...");
+ 
+--- a/panel-plugin/libacpi.c	1616501332.000000000
++++ b/panel-plugin/libacpi.c	1731235196.215056765
+@@ -33,6 +33,8 @@
+ 
+ #include <libxfce4util/libxfce4util.h>
+ 
++#ifndef __APPLE__
++
+ #ifdef __FreeBSD__
+ #include <fcntl.h>
+ #include <sys/ioctl.h>
+@@ -747,3 +749,4 @@ get_temperature(void)
+ #endif
+ #endif
+ }
++#endif
+--- /dev/null	1731481788.710042000
++++ b/panel-plugin/libsmc.h	1731481566.772471185
+@@ -0,0 +1,86 @@
++#ifndef __libsmc_h__
++#define __libsmc_h__
++
++#include <CoreFoundation/CFBase.h>
++
++/* SMC operations */
++typedef CF_ENUM(UInt8, SMCIndex) {
++  /* the user client method name constants */
++  kSMCUserClientOpen,
++  kSMCUserClientClose,
++  kSMCHandleYPCEvent,
++
++  kSMCPlaceholder1, /* *** LEGACY SUPPORT placeholder */
++  kSMCNumberOfMethods,
++
++  /* other constants not mapped to individual methods */
++  kSMCReadKey,
++  kSMCWriteKey,
++  kSMCGetKeyCount,
++  kSMCGetKeyFromIndex,
++  kSMCGetKeyInfo,
++
++  kSMCFireInterrupt,
++  kSMCGetPLimits,
++  kSMCGetVers,
++  kSMCPlaceholder2, /* *** LEGACY SUPPORT placeholder */
++
++  kSMCReadStatus,
++  kSMCReadResult,
++
++  kSMCVariableCommand
++};
++
++typedef UInt32 SMCKey;
++typedef UInt32 SMCDataType;
++typedef UInt8 SMCDataAttributes;
++
++/* a struct to hold the SMC version */
++typedef struct SMCVersion {
++  unsigned char major;
++  unsigned char minor;
++  unsigned char build;
++  unsigned char reserved; // padding for alignment
++  unsigned short release;
++} SMCVersion;
++
++typedef struct SMCPLimitData {
++  UInt16 version;
++  UInt16 length;
++  UInt32 cpuPLimit;
++  UInt32 gpuPLimit;
++  UInt32 memPLimit;
++} SMCPLimitData;
++
++/* a struct to hold the key info data */
++typedef struct SMCKeyInfoData {
++  UInt32 dataSize;
++  SMCDataType dataType;
++  SMCDataAttributes dataAttributes;
++} SMCKeyInfoData;
++
++/* the struct passed back and forth between the kext and UC */
++/* sizeof(SMCParamStruct) should be 168 or 80, depending on whether uses
++ * bytes[32] or bytes[120] */
++typedef struct SMCParamStruct {
++  SMCKey key;
++  struct SMCParam {
++    SMCVersion vers;
++    SMCPLimitData pLimitData;
++    SMCKeyInfoData keyInfo;
++
++    UInt8 result;
++    UInt8 status;
++
++    UInt8 data8;
++    UInt32 data32;
++    UInt8 bytes[120];
++  } param;
++} SMCParamStruct;
++
++int get_fan_status(void);
++const char *get_temperature(void);
++int get_time_to_empty(void);
++int estimate_time_to_full(void);
++
++#endif
+--- /dev/null	1731481791.339590000
++++ b/panel-plugin/libsmc.c	1731481423.663239083
+@@ -0,0 +1,260 @@
++/* Copyright (c) 2024 Torrekie Gen <me@torrekie.dev>
++ *
++ * This library is free software; you can redistribute it and/or modify it
++ * under the terms of the GNU Library General Public License as published
++ * by the Free Software Foundation; either version 2 of the License, or (at
++ * your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful, but
++ * WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Library General Public License for more details.
++ *
++ * You should have received a copy of the GNU Library General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++ */
++
++#ifdef HAVE_CONFIG_H
++#include <config.h>
++#endif
++#ifndef __libsmc_c__
++#define __libsmc_c__
++#endif
++
++#include <libxfce4util/libxfce4util.h>
++
++#ifdef __APPLE__
++
++#include "libsmc.h"
++#include <CoreFoundation/CFBase.h>
++#include <IOKit/IOKitLib.h>
++
++static io_service_t gConn = 0;
++
++static IOReturn smc_open(void) {
++  IOReturn result;
++  mach_port_t masterPort;
++  io_service_t service;
++
++  if (IOMasterPort(MACH_PORT_NULL, &masterPort) != kIOReturnSuccess) {
++    DBG("IOMasterPort() failed");
++    return 1;
++  }
++
++  service =
++      IOServiceGetMatchingService(masterPort, IOServiceMatching("AppleSMC"));
++  result = IOServiceOpen(service, mach_task_self(), 0, &gConn);
++  if (result != kIOReturnSuccess) {
++    DBG("IOServiceOpen() failed (%d)", result);
++    return result;
++  }
++
++  return kIOReturnSuccess;
++}
++
++static IOReturn smc_call(int index, SMCParamStruct *inputStruct,
++                         SMCParamStruct *outputStruct) {
++  size_t inputSize, outputSize;
++
++  inputSize = sizeof(SMCParamStruct);
++  outputSize = sizeof(SMCParamStruct);
++
++  return IOConnectCallStructMethod(gConn, index, inputStruct, inputSize,
++                                   outputStruct, &outputSize);
++}
++
++static IOReturn smc_get_keyinfo(UInt32 key, SMCKeyInfoData *keyInfo) {
++  SMCParamStruct inputStruct;
++  SMCParamStruct outputStruct;
++  IOReturn result = kIOReturnSuccess;
++
++  memset(&inputStruct, 0, sizeof(inputStruct));
++  memset(&outputStruct, 0, sizeof(outputStruct));
++
++  inputStruct.key = key;
++  inputStruct.param.data8 = kSMCGetKeyInfo;
++
++  result = smc_call(kSMCHandleYPCEvent, &inputStruct, &outputStruct);
++  if (result == kIOReturnSuccess) {
++    *keyInfo = outputStruct.param.keyInfo;
++  }
++
++  return result;
++}
++
++static IOReturn smc_read(UInt32 key, void *bytes) {
++  IOReturn result;
++  SMCParamStruct inputStruct;
++  SMCParamStruct outputStruct;
++  SMCKeyInfoData keyInfo;
++
++  memset(&inputStruct, 0, sizeof(inputStruct));
++  memset(&keyInfo, 0, sizeof(keyInfo));
++
++  inputStruct.key = key;
++
++  result = smc_get_keyinfo(inputStruct.key, &keyInfo);
++  if (result != kIOReturnSuccess) {
++    return result;
++  }
++
++  inputStruct.param.keyInfo.dataSize = keyInfo.dataSize;
++  inputStruct.param.data8 = kSMCReadKey;
++
++  memset(&outputStruct, 0, sizeof(outputStruct));
++  result = smc_call(kSMCHandleYPCEvent, &inputStruct, &outputStruct);
++  if (result != kIOReturnSuccess) {
++    DBG("smc_call failed %d", result);
++    return result;
++  }
++
++  memcpy(bytes, outputStruct.param.bytes, keyInfo.dataSize);
++
++  return kIOReturnSuccess;
++}
++
++static UInt32 makeUInt32Key(char *keyString, int size, int base) {
++  UInt32 total = 0;
++  int i;
++
++  for (i = 0; i < size; i++) {
++    if (base == 16)
++      total += keyString[i] << (size - 1 - i) * 8;
++    else
++      total += ((unsigned char)(keyString[i]) << (size - 1 - i) * 8);
++  }
++  return total;
++}
++
++__attribute__((destructor)) void smc_close(void) {
++  if (gConn != 0)
++    IOServiceClose(gConn);
++}
++
++int get_fan_status(void) {
++  IOReturn result = kIOReturnSuccess;
++  SMCKey key;
++  char *keyStr = NULL;
++  uint8_t fan_num;
++  int i;
++
++  if (gConn == 0)
++    result = smc_open();
++
++  if (result != kIOReturnSuccess)
++    return 0;
++
++  key = makeUInt32Key("FNum", 4, 16);
++  result = smc_read(key, &fan_num);
++  /* No hardware fan support, or permission deined */
++  if (result != kIOReturnSuccess)
++    return 0;
++
++  /* FNum(ui8) = 0, no fans on device */
++  if (fan_num == 0)
++    return 0;
++
++  /* If have fans, check 'F*Ac', which is current speed */
++  for (i = 0; i < fan_num; i++) {
++    float retval;
++
++    sprintf(keyStr, "F%dAc", i);
++    key = makeUInt32Key(keyStr, 4, 16);
++    result = smc_read(key, &retval);
++    /* F*Ac(flt), return 1 if any fan working */
++    if (retval > 0.0)
++      return 1;
++  }
++
++  return 0;
++}
++
++const char *get_temperature(void) {
++  IOReturn result = kIOReturnSuccess;
++  float retval;
++  static char buf[BUFSIZ];
++  SMCKey key;
++
++  if (gConn == 0)
++    result = smc_open();
++
++  /* In Linux/BSD impl, they returns " C" nomatter if syscall succ,
++   * this is weird ig */
++  if (result != kIOReturnSuccess)
++    return "-";
++
++  /* TB*T(flt), but normally they are same one */
++  key = makeUInt32Key("TB0T", 4, 16);
++  result = smc_read(key, &retval);
++  if (result != kIOReturnSuccess)
++    return "-";
++
++  snprintf(buf, BUFSIZ, "%.1f C", retval);
++
++  return buf;
++}
++
++int get_time_to_empty(void) {
++  IOReturn result = kIOReturnSuccess;
++  SMCKey key;
++  uint16_t retval;
++
++  if (gConn == 0)
++    result = smc_open();
++
++  if (result != kIOReturnSuccess)
++    return 0;
++
++#if TARGET_OS_EMBEDDED
++  /* This is weird, why B0TF means TimeToEmpty on Embedded,
++   * but TimeToFullCharge on macOS? */
++  key = makeUInt32Key("B0TF", 4, 16);
++#else
++  key = makeUInt32Key("B0TE", 4, 16);
++#endif
++
++  result = smc_read(key, &retval);
++  if (result != kIOReturnSuccess)
++    return 0;
++
++  /* 0xFFFF, battery charging */
++  if (retval == 65535)
++    return 0;
++
++  return retval;
++}
++
++int estimate_time_to_full() {
++  IOReturn result = kIOReturnSuccess;
++  SMCKey key;
++  int16_t current;
++  uint16_t fullcap;
++
++  if (gConn == 0)
++    result = smc_open();
++
++  if (result != kIOReturnSuccess)
++    return 0;
++
++  /* B0FC(ui16) FullChargeCapacity (mAh) */
++  key = makeUInt32Key("B0FC", 4, 16);
++  result = smc_read(key, &fullcap);
++  if (result != kIOReturnSuccess)
++    return 0;
++
++  /* B0AC(si16) AverageCurrent (mA) */
++  key = makeUInt32Key("B0AC", 4, 16);
++  result = smc_read(key, &current);
++  if (result != kIOReturnSuccess)
++    return 0;
++
++  /* Not charging */
++  if (current < 0)
++    return 0;
++
++  /* TimeToFullCharge = FullChargeCapacity (mAh) / AverageCurrent (mA) */
++  return (fullcap / current);
++}
++
++#endif
