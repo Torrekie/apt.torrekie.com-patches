@@ -391,7 +391,7 @@
 +int get_fan_status(void) {
 +  IOReturn result = kIOReturnSuccess;
 +  SMCKey key;
-+  char *keyStr = NULL;
++  char keyStr[5];
 +  uint8_t fan_num;
 +  int i;
 +
