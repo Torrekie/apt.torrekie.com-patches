@@ -1,0 +1,1024 @@
+--- a/meson.build	1726629908.000000000
++++ b/meson.build	1732005576.171096020
+@@ -63,7 +63,7 @@ xsltproc = find_program('xsltproc', disa
+ os_backend = get_option('os_backend')
+ if os_backend == 'auto'
+   # Likely needs to be updated when options are added
+-  if host_machine.system() in ['linux', 'freebsd', 'openbsd']
++  if host_machine.system() in ['linux', 'freebsd', 'openbsd', 'darwin']
+     os_backend = host_machine.system()
+   else
+     os_backend = 'dummy'
+@@ -77,6 +77,9 @@ idevice_dep = dependency('', required: f
+ plist_dep = dependency('', required: false)
+ gobject_introspection = dependency('gobject-introspection-1.0', required: get_option('introspection'))
+ 
++if os_backend == 'darwin'
++  darwin_dep = dependency('appleframeworks', modules: ['CoreFoundation', 'IOKit'], required : true)
++endif
+ 
+ if os_backend == 'linux'
+   gudev_dep = dependency('gudev-1.0', version: '>= 238')
+--- a/meson_options.txt	1726629908.000000000
++++ b/meson_options.txt	1731925442.175936970
+@@ -29,7 +29,7 @@ option('systemdsystemunitdir',
+        description : 'Directory for systemd service files ("no" to disable)')
+ option('os_backend',
+        type : 'combo',
+-       choices : [ 'auto', 'linux', 'freebsd', 'openbsd', 'dummy'],
++       choices : [ 'auto', 'linux', 'freebsd', 'openbsd', 'darwin', 'dummy'],
+        value : 'auto',
+        description : 'Directory for systemd service files')
+ option('idevice',
+--- a/src/meson.build	1726629908.000000000
++++ b/src/meson.build	1731923595.101589200
+@@ -21,6 +21,7 @@ subdir('linux')
+ subdir('bsd')
+ subdir('openbsd')
+ subdir('freebsd')
++subdir('darwin')
+ 
+ # Everything that is also needed by the tests
+ upowerd_private = static_library('upowerd-private',
+--- /dev/null	1732008292.038556000
++++ b/src/darwin/meson.build	1732005647.981714763
+@@ -0,0 +1,10 @@
++upshared += { 'darwin': static_library('upshared',
++    sources: [
++        'up-backend.c',
++        'up-native.c',
++        'up-pmgr-native.h',
++    ],
++    c_args: [ '-DG_LOG_DOMAIN="UPower-Darwin"' ],
++    dependencies: [ gudev_dep, upowerd_deps, darwin_dep ],
++    build_by_default: false,
++)}
+--- /dev/null	1732008297.027609000
++++ b/src/darwin/up-backend.c	1732008180.424451823
+@@ -0,0 +1,672 @@
++/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
++ *
++ * Copyright (C) 2024 Torrekie Gen <me@torrekie.dev>
++ *
++ * Licensed under the GNU General Public License Version 2
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#include "up-pmgr-native.h"
++
++#include "config.h"
++
++#include <stdlib.h>
++#include <stdio.h>
++#include <math.h>
++#include <glib/gi18n.h>
++#include <gio/gio.h>
++
++#include "up-backend.h"
++#include "up-daemon.h"
++#include "up-device.h"
++
++static void	up_backend_class_init	(UpBackendClass	*klass);
++static void	up_backend_init	(UpBackend		*backend);
++static void	up_backend_finalize	(GObject		*object);
++
++static void	up_backend_update_pmgrbat_state(UpDevice* device, CFArrayRef list);
++static void	up_backend_update_lid_status(UpDaemon*);
++
++static gboolean		up_pmgr_device_get_on_battery	(UpDevice *device, gboolean *on_battery);
++static gboolean		up_pmgr_device_get_online		(UpDevice *device, gboolean *online);
++static gboolean		up_pmgr_device_refresh		(UpDevice *device, UpRefreshReason reason);
++
++struct UpBackendPrivate
++{
++	UpDaemon		*daemon;
++	UpDevice		*ac;
++	UpDevice		*battery;
++	gboolean		has_battery;
++};
++
++enum {
++	SIGNAL_DEVICE_ADDED,
++	SIGNAL_DEVICE_REMOVED,
++	SIGNAL_LAST
++};
++
++static guint signals [SIGNAL_LAST] = { 0 };
++
++G_DEFINE_TYPE_WITH_PRIVATE (UpBackend, up_backend, G_TYPE_OBJECT)
++
++/**
++ * functions called by upower daemon
++ **/
++
++
++/* those three ripped from freebsd/up-device-supply.c */
++static gboolean
++up_pmgr_device_get_on_battery (UpDevice *device, gboolean * on_battery)
++{
++	UpDeviceKind type;
++	UpDeviceState state;
++	gboolean is_present;
++
++	g_return_val_if_fail (on_battery != NULL, FALSE);
++
++	g_object_get (device,
++		      "type", &type,
++		      "state", &state,
++		      "is-present", &is_present,
++		      (void*) NULL);
++
++	if (type != UP_DEVICE_KIND_BATTERY)
++		return FALSE;
++	if (state == UP_DEVICE_STATE_UNKNOWN)
++		return FALSE;
++	if (!is_present)
++		return FALSE;
++
++	*on_battery = (state == UP_DEVICE_STATE_DISCHARGING);
++	return TRUE;
++}
++
++static gboolean
++up_pmgr_device_get_online (UpDevice *device, gboolean * online)
++{
++	UpDeviceKind type;
++	gboolean online_tmp;
++
++	g_return_val_if_fail (online != NULL, FALSE);
++
++	g_object_get (device,
++		      "type", &type,
++		      "online", &online_tmp,
++		      (void*) NULL);
++
++	if (type != UP_DEVICE_KIND_LINE_POWER)
++		return FALSE;
++
++	*online = online_tmp;
++
++	return TRUE;
++}
++
++/**
++ * up_backend_coldplug:
++ * @backend: The %UpBackend class instance
++ * @daemon: The %UpDaemon controlling instance
++ *
++ * Finds all the devices already plugged in, and emits device-add signals for
++ * each of them.
++ *
++ * Return value: %TRUE for success
++ **/
++gboolean
++up_backend_coldplug (UpBackend *backend, UpDaemon *daemon)
++{
++	UpDeviceClass *device_class;
++	gint64 current_time;
++
++	backend->priv = up_backend_get_instance_private (backend);
++	backend->priv->daemon = g_object_ref (daemon);
++	backend->priv->has_battery = up_native_has_battery();
++	g_debug("has_battery:%d",backend->priv->has_battery);
++	if (backend->priv->has_battery)
++	{
++		UpPmgrNative *acnative = NULL;
++		UpPmgrNative *battnative = NULL;
++
++		acnative = up_pmgr_native_new("/ac");
++		battnative = up_pmgr_native_new("/batt");
++
++		backend->priv->ac = UP_DEVICE(up_device_new (backend->priv->daemon, G_OBJECT(acnative)));
++		backend->priv->battery = UP_DEVICE(up_device_new (backend->priv->daemon, G_OBJECT(battnative)));
++
++		g_object_unref (acnative);
++		g_object_unref (battnative);
++
++		device_class = UP_DEVICE_GET_CLASS (backend->priv->battery);
++		device_class->get_on_battery = up_pmgr_device_get_on_battery;
++		device_class->get_online = up_pmgr_device_get_online;
++		device_class->refresh = up_pmgr_device_refresh;
++		device_class = UP_DEVICE_GET_CLASS (backend->priv->ac);
++		device_class->get_on_battery = up_pmgr_device_get_on_battery;
++		device_class->get_online = up_pmgr_device_get_online;
++		device_class->refresh = up_pmgr_device_refresh;
++
++		/* setup */
++		current_time = g_get_real_time () / G_USEC_PER_SEC;
++		/* TODO: Get vendor by serial */
++		g_object_set (backend->priv->battery,
++			      "type", UP_DEVICE_KIND_BATTERY,
++			      "power-supply", TRUE,
++			      "is-present", TRUE,
++			      "is-rechargeable", TRUE,
++			      "has-history", TRUE,
++			      "state", UP_DEVICE_STATE_UNKNOWN,
++			      "percentage", 0.0f,
++			      "time-to-empty", (gint64) 0,
++			      "update-time", (guint64) current_time,
++			      (void*) NULL);
++		g_object_set (backend->priv->ac,
++			      "type", UP_DEVICE_KIND_LINE_POWER,
++			      "online", TRUE,
++			      "power-supply", TRUE,
++			      "update-time", (guint64) current_time,
++			      (void*) NULL);
++
++		up_backend_update_lid_status(daemon);
++		if (!g_initable_init (G_INITABLE (backend->priv->ac), NULL, NULL))
++			g_warning ("failed to coldplug ac");
++		else
++			g_signal_emit (backend, signals[SIGNAL_DEVICE_ADDED], 0, backend->priv->ac);
++
++		if (!g_initable_init (G_INITABLE (backend->priv->battery), NULL, NULL))
++			g_warning ("failed to coldplug battery");
++		else
++			 g_signal_emit (backend, signals[SIGNAL_DEVICE_ADDED], 0, backend->priv->battery);
++	}
++	return TRUE;
++}
++
++/**
++ * up_backend_unplug:
++ * @backend: The %UpBackend class instance
++ *
++ * Forget about all learned devices, effectively undoing up_backend_coldplug.
++ * Resources are released without emitting signals.
++ */
++void
++up_backend_unplug (UpBackend *backend)
++{
++	if (backend->priv->daemon != NULL) {
++		g_object_unref (backend->priv->daemon);
++		backend->priv->daemon = NULL;
++	}
++}
++
++/**
++ * up_backend_get_critical_action:
++ * @backend: The %UpBackend class instance
++ *
++ * Which action will be taken when %UP_DEVICE_LEVEL_ACTION
++ * warning-level occurs.
++ **/
++const char *
++up_backend_get_critical_action (UpBackend *backend)
++{
++	return "PowerOff";
++}
++
++/**
++ * up_backend_take_action:
++ * @backend: The %UpBackend class instance
++ *
++ * Act upon the %UP_DEVICE_LEVEL_ACTION warning-level.
++ **/
++void
++up_backend_take_action (UpBackend *backend)
++{
++	/* TODO: Maybe we can implement one alternative pmcontrol */
++	g_debug ("Not taking any action, this shall be controlled directly by Darwin.");
++}
++
++/**
++ * up_backend_inhibitor_lock_take:
++ * @backend: The %UpBackend class instance
++ * @reason: Why the inhibitor lock is taken
++ * @mode: The mode of the lock ('delay' or 'block')
++ *
++ * Darwin does not support inhibitor locks so they are simply ignored.
++ */
++int
++up_backend_inhibitor_lock_take (UpBackend  *backend,
++                                const char *reason,
++                                const char *mode)
++{
++	g_debug ("Taking inhibitor locks are not supported in Darwin");
++	return -1;
++}
++
++/**
++ * Darwin specific code
++ **/
++
++static gboolean
++up_backend_update_power_state(UpDevice* device)
++{
++	gdouble percentage;
++	gboolean ret = FALSE;
++	UpDeviceState cur_state, new_state = UP_DEVICE_STATE_UNKNOWN;
++	gint64 cur_time_to_empty, new_time_to_empty;
++	gboolean new_is_online, cur_is_online;
++
++	CFBooleanRef charging_stat = NULL;
++	int time_to_empty, present, battery_life = 0;
++	gboolean acline = FALSE, absent = TRUE, finishing = FALSE, charged = FALSE, charging = FALSE;
++
++#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
++	CFTypeRef ps_info = NULL;
++	CFArrayRef list = NULL;
++	CFStringRef ps_name;
++	CFDictionaryRef one_ps = NULL;
++	CFIndex count;
++	CFNumberRef number;
++	CFStringRef state;
++	int current_cap, max_cap;
++	char strbuf[255];
++	int i;
++
++	ps_info = IOPSCopyPowerSourcesInfo();
++	if (!ps_info) {
++		g_error("failed to get power source info");
++		return ret;
++	}
++
++	ps_name = IOPSGetProvidingPowerSourceType(ps_info);
++	if (!ps_name || !CFStringGetCString(ps_name, strbuf, 255, kCFStringEncodingUTF8)) {
++		g_error("failed to get power source type");
++		goto done;
++	} else {
++		list = IOPSCopyPowerSourcesList(ps_info);
++		if (list != NULL) {
++			/* Normally there only have one battery present */
++			count = CFArrayGetCount(list);
++
++			for (i = 0; i < count; i++) {
++				one_ps = IOPSGetPowerSourceDescription(ps_info, CFArrayGetValueAtIndex(list, i));
++				if (!one_ps) break;
++
++				state = CFDictionaryGetValue(one_ps, CFSTR(kIOPSPowerSourceStateKey));
++				if (state && (kCFCompareEqualTo == CFStringCompare(state, CFSTR(kIOPSBatteryPowerValue), 0))) {
++					number = CFDictionaryGetValue(one_ps, CFSTR(kIOPSTimeToEmptyKey));
++					/* TimeToEmpty in minutes */
++					if (number) CFNumberGetValue(number, kCFNumberIntType, &time_to_empty);
++				}
++
++				if ((number = (CFNumberRef)CFDictionaryGetValue(one_ps, CFSTR(kIOPSCurrentCapacityKey)))) {
++					CFNumberGetValue(number, kCFNumberIntType, &current_cap);
++				}
++
++				if ((number = (CFNumberRef)CFDictionaryGetValue(one_ps, CFSTR(kIOPSMaxCapacityKey)))) {
++					CFNumberGetValue(number, kCFNumberIntType, &max_cap);
++				}
++
++				if (current_cap != 0 && max_cap != 0) percentage = (double)(current_cap * 100 / max_cap);
++
++				charging_stat = CFDictionaryGetValue(one_ps, CFSTR(kIOPSIsChargingKey));
++
++				/* (cond) : TRUE ? FALSE is for the scene if gboolean is not conpatible with boolean */
++				present = (kCFBooleanTrue == CFDictionaryGetValue(one_ps, CFSTR(kIOPSIsPresentKey))) ? TRUE : FALSE;
++				acline = (kCFCompareEqualTo == CFStringCompare(state, CFSTR(kIOPSACPowerValue), 0)) ? TRUE : FALSE;
++				absent = (kCFCompareEqualTo == CFStringCompare(state, CFSTR(kIOPSOffLineValue), 0)) ? TRUE : FALSE;
++				finishing = (kCFBooleanTrue == CFDictionaryGetValue(one_ps, CFSTR(kIOPSIsFinishingChargeKey))) ? TRUE : FALSE;
++				charged = (kCFBooleanTrue == CFDictionaryGetValue(one_ps, CFSTR(kIOPSIsChargedKey))) ? TRUE : FALSE;
++				charging = (kCFBooleanTrue == charging_stat) ? TRUE : FALSE;
++#if TARGET_OS_EMBEDDED
++				if (time_to_empty <= 0 && present) {
++					up_native_get_smc_data('B0TF', &time_to_empty);
++				}
++#endif
++			}
++		}
++	}
++#endif
++
++	g_object_get (device,
++		"state", &cur_state,
++		"percentage", &percentage,
++		"time-to-empty", &cur_time_to_empty,
++		"is-present", &present,
++		(void*) NULL);
++
++	// zero out new_time_to empty if we're not discharging or minutes_left is negative
++	new_time_to_empty = (new_state == UP_DEVICE_STATE_DISCHARGING && time_to_empty > 0 ? time_to_empty : 0);
++
++	/* set initial state, just like OpenBSD up_backend_apm_get_battery_state_value() */
++	if (charging_stat) {
++		if (finishing) new_state = UP_DEVICE_STATE_PENDING_DISCHARGE;	// Finishing
++		else if (charged) new_state = UP_DEVICE_STATE_FULLY_CHARGED;	// Fully Charged
++		else if (charging) new_state = UP_DEVICE_STATE_CHARGING;	// Charging
++		else if (acline) new_state = UP_DEVICE_STATE_PENDING_CHARGE;	// AC attached, Not Charging
++		else new_state = UP_DEVICE_STATE_DISCHARGING;			// Not Charging
++	}
++
++	if (!present || absent) {
++		/* Reset some known fields which remain untouched below. */
++		g_object_set(device,
++			     "is-rechargeable", FALSE,
++			     "energy", (gdouble) 0.0,
++			     "energy-empty", (gdouble) 0.0,
++			     "energy-full", (gdouble) 0.0,
++			     "energy-full-design", (gdouble) 0.0,
++			     "energy-rate", (gdouble) 0.0,
++			     NULL);
++		present = FALSE;
++		if (absent)
++			new_state = UP_DEVICE_STATE_EMPTY;
++		else
++			new_state = UP_DEVICE_STATE_UNKNOWN;
++	} else {
++		present = TRUE;
++	}
++
++	/* update AC state */
++	up_backend_update_lid_status(up_device_get_daemon(device));
++	g_object_get (device, "online", &cur_is_online, (void*) NULL);
++	new_is_online = acline;
++	if (cur_is_online != new_is_online)
++	{
++		g_object_set (device,
++			"online", new_is_online,
++			(void*) NULL);
++	}
++
++	/* update battery state */
++	if (cur_state != new_state ||
++		percentage != (gdouble) battery_life ||
++		cur_time_to_empty != new_time_to_empty)
++	{
++		g_object_set (device,
++			"state", new_state,
++			"percentage", (gdouble) battery_life,
++			"time-to-empty", new_time_to_empty * 60,
++			"is-present", present,
++			(void*) NULL);
++		up_backend_update_pmgrbat_state(device, list);
++		ret = TRUE;
++	}
++done:
++#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
++	if (ps_info) CFRelease(ps_info);
++	if (list) CFRelease(list);
++#endif
++	return ret;
++}
++
++/* update pmgr properties */
++static void
++up_backend_update_pmgrbat_state(UpDevice* device, CFArrayRef list)
++{
++#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
++	CFTypeRef ps_info = NULL;
++	CFDictionaryRef one_ps = NULL;
++	CFIndex count;
++	CFNumberRef number;
++	gdouble capacity;
++	/* All in milliamps */
++	int current_cap = 0, max_cap = 0, design_cap = 0, volt = 0, rate = 0;
++	int i;
++
++	ps_info = IOPSCopyPowerSourcesInfo();
++	if (!ps_info) {
++		g_error("failed to get power source info");
++		return;
++	}
++
++	if (list != NULL) {
++		/* Normally there only have one battery present */
++		count = CFArrayGetCount(list);
++
++		for (i = 0; i < count; i++) {
++			one_ps = IOPSGetPowerSourceDescription(ps_info, CFArrayGetValueAtIndex(list, i));
++			if (!one_ps) break;
++
++			if ((number = (CFNumberRef)CFDictionaryGetValue(one_ps, CFSTR(kIOPSCurrentCapacityKey)))) {
++				CFNumberGetValue(number, kCFNumberIntType, &current_cap);
++			}
++
++			if ((number = (CFNumberRef)CFDictionaryGetValue(one_ps, CFSTR(kIOPSMaxCapacityKey)))) {
++				CFNumberGetValue(number, kCFNumberIntType, &max_cap);
++			}
++
++			if ((number = (CFNumberRef)CFDictionaryGetValue(one_ps, CFSTR(kIOPSDesignCapacityKey)))) {
++				CFNumberGetValue(number, kCFNumberIntType, &design_cap);
++			}
++
++			if ((number = (CFNumberRef)CFDictionaryGetValue(one_ps, CFSTR(kIOPSVoltageKey)))) {
++				CFNumberGetValue(number, kCFNumberIntType, &volt);
++			}
++
++			if ((number = (CFNumberRef)CFDictionaryGetValue(one_ps, CFSTR(kIOPSCurrentKey)))) {
++				CFNumberGetValue(number, kCFNumberIntType, &rate);
++			}
++		}
++	}
++
++	capacity = 0.0f;
++	if (max_cap > 0 && design_cap > 0) {
++		capacity = (max_cap / design_cap) * 100.0f;
++		if (capacity < 0)
++			capacity = 0.0f;
++		if (capacity > 100.0)
++			capacity = 100.0f;
++	}
++
++	g_object_set (device,
++		"energy", (gdouble) current_cap / 1000.0f,
++		"energy-full", (gdouble) max_cap / 1000.0f,
++		"energy-full-design", (gdouble) design_cap / 1000.0f,
++		"energy-rate", (gdouble) rate / 1000.0f,
++		"energy-empty", (gdouble) 0.0f,
++		"voltage", (gdouble) volt / 1000.0f,
++		"capacity", capacity,
++		(void*) NULL);
++#endif
++}
++
++/* callback updating the device */
++static gboolean
++up_backend_pmgr_powerchange_event_cb(gpointer object)
++{
++	UpBackend *backend;
++
++	g_return_val_if_fail (UP_IS_BACKEND (object), FALSE);
++	backend = UP_BACKEND (object);
++	up_device_refresh_internal (backend->priv->ac, UP_REFRESH_EVENT);
++	up_device_refresh_internal (backend->priv->battery, UP_REFRESH_EVENT);
++	/* return false to not endless loop */
++	return FALSE;
++}
++
++static gboolean
++up_pmgr_device_refresh(UpDevice* device, UpRefreshReason reason)
++{
++	UpDeviceKind type;
++	gboolean ret;
++	g_object_get (device, "type", &type, NULL);
++
++	switch (type) {
++		case UP_DEVICE_KIND_LINE_POWER:
++		case UP_DEVICE_KIND_BATTERY:
++			ret = up_backend_update_power_state(device);
++			break;
++		default:
++			g_assert_not_reached ();
++			break;
++	}
++
++	if (ret)
++		g_object_set (device, "update-time", (guint64) g_get_real_time () / G_USEC_PER_SEC, NULL);
++
++	return ret;
++}
++
++/*
++ * Check the lid status, return TRUE if one was found, FALSE otherwise.
++ */
++static void
++up_backend_update_lid_status(UpDaemon *daemon) {
++#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
++	gboolean lid_found = FALSE;
++	gboolean lid_open = FALSE;
++
++#if TARGET_OS_EMBEDDED
++	CFArrayRef list = NULL;
++	CFIndex count = 0;
++	int token;
++	uint64_t displayState;
++	uint32_t ret;
++
++	CFArrayRef (*IOMobileFramebufferCreateDisplayList)(void);
++	/* Use dlopen to avoid linking IOMobileFramebuffer, since official SDK has no such tbd */
++	void *handle = dlopen("/System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer", RTLD_LAZY);
++	if (handle)
++		*(void **)(&IOMobileFramebufferCreateDisplayList) = dlsym(handle, "IOMobileFramebufferCreateDisplayList");
++
++	if (!dlerror()) {
++		/* On Embedded, Apple gives IOMobileFramebuffer but not CGDisplay */
++		list = IOMobileFramebufferCreateDisplayList();
++		count = CFArrayGetCount(list);
++	}
++
++	dlclose(handle);
++
++	/* This is the easiest way to check if display presents */
++	if (count >= 0) {
++		lid_found = TRUE;
++
++		/* Display sleeping represents device sleeping on Embedded, mostly. */
++		ret = notify_register_dispatch ("com.apple.iokit.hid.displayStatus",
++						&token, dispatch_get_main_queue(),
++						^(int token) {
++							uint64_t displayState;
++							notify_get_state (token, &displayState);
++						});
++
++		if (ret == NOTIFY_STATUS_OK) {
++			notify_get_state (token, &displayState);
++			lid_open = displayState ? FALSE : TRUE;
++		}
++	}
++#else
++	uint32_t count;
++	io_registry_entry_t service;
++	CFMutableDictionaryRef props = NULL;
++	CFDictionaryRef states = NULL;
++	CFNumberRef number = NULL;
++	unsigned long desired_state = 0;
++	CGDirectDisplayID displays[2];
++	CGError ret;
++
++	/* On macOS, we use SLGetActiveDisplayList to check if display presents */
++	ret = CGGetActiveDisplayList(10, displays, &count);
++	if ((ret == kCGErrorSuccess) && (count > 0)) {
++		lid_found = TRUE;
++
++		/* Display sleeping is not "lid closed", since macOS separates "sleep" and "display sleep" */
++		service = IOServiceGetMatchingService(MACH_PORT_NULL, IOServiceNameMatching("IOPMrootDomain"));
++		IORegistryEntryCreateCFProperties(service, &props, 0, 0);
++
++		if (props) {
++			states = CFDictionaryGetValue(props, CFSTR("IOPowerManagement"));
++			if (!states) goto done;
++
++			/* 1: restarting, 2: sleeping, 3: waking, 4: wake */
++			number = CFDictionaryGetValue(states, CFSTR("DesiredPowerState"));
++			if (number)
++				CFNumberGetValue(number, kCFNumberLongType, &desired_state);
++		}
++
++		lid_open = (desired_state > 2);
++	}
++done:
++	if (service) IOObjectRelease(service);
++	if (props) CFRelease(props);
++#endif
++
++	up_daemon_set_lid_is_present (daemon, lid_found);
++	up_daemon_set_lid_is_closed (daemon, !lid_open);
++#endif
++}
++
++
++/**
++ * up_backend_class_init:
++ * @klass: The UpBackendClass
++ **/
++static void
++up_backend_class_init (UpBackendClass *klass)
++{
++	GObjectClass *object_class = G_OBJECT_CLASS (klass);
++	object_class->finalize = up_backend_finalize;
++
++	signals [SIGNAL_DEVICE_ADDED] =
++		g_signal_new ("device-added",
++			      G_TYPE_FROM_CLASS (object_class), G_SIGNAL_RUN_LAST,
++			      G_STRUCT_OFFSET (UpBackendClass, device_added),
++			      NULL, NULL, NULL,
++			      G_TYPE_NONE, 1, UP_TYPE_DEVICE);
++	signals [SIGNAL_DEVICE_REMOVED] =
++		g_signal_new ("device-removed",
++			      G_TYPE_FROM_CLASS (object_class), G_SIGNAL_RUN_LAST,
++			      G_STRUCT_OFFSET (UpBackendClass, device_removed),
++			      NULL, NULL, NULL,
++			      G_TYPE_NONE, 1, UP_TYPE_DEVICE);
++}
++
++/**
++ * up_backend_init:
++ **/
++static void
++up_backend_init (UpBackend *backend)
++{
++	backend->priv = up_backend_get_instance_private (backend);
++}
++
++/**
++ * up_backend_finalize:
++ **/
++static void
++up_backend_finalize (GObject *object)
++{
++	UpBackend *backend;
++
++	g_return_if_fail (UP_IS_BACKEND (object));
++
++	backend = UP_BACKEND (object);
++
++	if (backend->priv->daemon != NULL)
++		g_object_unref (backend->priv->daemon);
++	if (backend->priv->battery != NULL)
++		g_object_unref (backend->priv->battery);
++	if (backend->priv->ac != NULL)
++		g_object_unref (backend->priv->ac);
++
++	G_OBJECT_CLASS (up_backend_parent_class)->finalize (object);
++}
++
++/**
++ * up_backend_new:
++ *
++ * Return value: a new %UpBackend object.
++ **/
++UpBackend *
++up_backend_new (void)
++{
++	return g_object_new (UP_TYPE_BACKEND, NULL);
++}
+--- /dev/null	1732008299.998025000
++++ b/src/darwin/up-native.c	1731925552.890093665
+@@ -0,0 +1,164 @@
++/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
++ *
++ * Copyright (C) 2024 Torrekie Gen <me@torrekie.dev>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ */
++
++#include <glib.h>
++
++#include "up-pmgr-native.h"
++#include "up-native.h"
++
++G_DEFINE_TYPE (UpPmgrNative, up_pmgr_native, G_TYPE_OBJECT)
++
++static void
++up_pmgr_native_class_init (UpPmgrNativeClass *klass)
++{
++}
++
++static void
++up_pmgr_native_init (UpPmgrNative *self)
++{
++	self->path = "/var/empty";
++}
++
++UpPmgrNative *
++up_pmgr_native_new(const gchar * path)
++{
++	UpPmgrNative *native;
++	native = UP_PMGR_NATIVE (g_object_new (UP_TYPE_PMGR_NATIVE, NULL));
++	native->path = g_strdup(path);
++	return native;
++}
++
++const gchar *
++up_pmgr_native_get_path(UpPmgrNative * native)
++{
++	return native->path;
++}
++
++/**
++ * up_native_get_native_path:
++ * @object: the native tracking object
++ *
++ * This converts a GObject used as the device data into a native path.
++ * This would be implemented on a Linux system using:
++ *  g_udev_device_get_sysfs_path (G_UDEV_DEVICE (object))
++ *
++ * Return value: The native path for the device which is unique, e.g. "/sys/class/power/BAT1"
++ **/
++const gchar *
++up_native_get_native_path (GObject *object)
++{
++	return up_pmgr_native_get_path (UP_PMGR_NATIVE (object));;
++}
++
++/**
++ * detect if device has internal battery attached
++ */
++gboolean
++up_native_has_battery(void)
++{
++#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
++	gboolean ret;
++
++	CFMutableDictionaryRef dict = IOServiceMatching("IOPMPowerSource");
++	if (!dict)
++        	return FALSE;
++
++	io_service_t service = IOServiceGetMatchingService(kIOMasterPortDefault, dict);
++	if (service == MACH_PORT_NULL)
++		return FALSE;
++
++	CFBooleanRef batteryInstalled = (CFBooleanRef)IORegistryEntryCreateCFProperty(service, CFSTR(kIOPMPSBatteryInstalledKey), kCFAllocatorDefault, 0);
++	ret = (batteryInstalled == kCFBooleanTrue) ? TRUE : FALSE;
++
++	if (service) IOObjectRelease(service);
++	if (batteryInstalled) CFRelease(batteryInstalled);
++
++	return ret;
++#else
++	return TRUE;
++#endif
++}
++
++#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
++static IOReturn
++up_native_smc_call(UInt8 index, SMCParamStruct *inputStruct, SMCParamStruct *outputStruct, io_service_t conn)
++{
++	size_t inputSize, outputSize;
++
++	inputSize = sizeof(SMCParamStruct);
++	outputSize = sizeof(SMCParamStruct);
++
++	return IOConnectCallStructMethod(conn, index, inputStruct, inputSize, outputStruct, &outputSize);
++}
++#endif
++
++gboolean
++up_native_get_smc_data(UInt32 key, void *bytes)
++{
++#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
++	IOReturn result = kIOReturnSuccess;
++	mach_port_t masterPort;
++	io_service_t service;
++	io_service_t conn;
++	SMCParamStruct inputStruct;
++	SMCParamStruct outputStruct;
++	SMCKeyInfoData keyInfo;
++
++	/* Open AppleSMC */
++	if (IOMasterPort(MACH_PORT_NULL, &masterPort) != kIOReturnSuccess)
++		goto fail;
++
++	service = IOServiceGetMatchingService(masterPort, IOServiceMatching("AppleSMC"));
++	result = IOServiceOpen(service, mach_task_self(), 0, &conn);
++	if (result != kIOReturnSuccess)
++		goto fail;
++
++
++	/* Get key info */
++	memset(&inputStruct, 0, sizeof(inputStruct));
++	memset(&outputStruct, 0, sizeof(outputStruct));
++	memset(&keyInfo, 0, sizeof(keyInfo));
++	inputStruct.key = key;
++	inputStruct.param.data8 = kSMCGetKeyInfo;
++	result = up_native_smc_call(kSMCHandleYPCEvent, &inputStruct, &outputStruct, conn);
++	if (result != kIOReturnSuccess)
++		goto fail;
++
++
++	/* Get key bytes */
++	inputStruct.param.keyInfo.dataSize = outputStruct.param.keyInfo.dataSize;
++	inputStruct.param.data8 = kSMCReadKey;
++	memset(&outputStruct, 0, sizeof(outputStruct));
++	result = up_native_smc_call(kSMCHandleYPCEvent, &inputStruct, &outputStruct, conn);
++	if (result != kIOReturnSuccess)
++		goto fail;
++
++	memcpy(bytes, outputStruct.param.bytes, outputStruct.param.keyInfo.dataSize);
++
++	if (conn) IOServiceClose(conn);
++	return TRUE;
++
++fail:
++	if (conn) IOServiceClose(conn);
++	return FALSE;
++#else
++	return TRUE;
++#endif
++}
+--- /dev/null	1732008303.638496000
++++ b/src/darwin/up-pmgr-native.h	1732006870.499526582
+@@ -0,0 +1,124 @@
++/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*-
++ *
++ * Copyright (C) 2024 Torrekie Gen <me@torrekie.dev>
++ *
++ * Licensed under the GNU General Public License Version 2
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
++ */
++
++#ifndef __UP_PMGR_NATIVE_H__
++#define __UP_PMGR_NATIVE_H__
++
++#ifndef UPOWER_CI_DISABLE_PLATFORM_CODE
++#include <notify.h>
++#include <CoreFoundation/CoreFoundation.h>
++#include <IOKit/IOKitLib.h>
++#include <IOKit/pwr_mgt/IOPM.h>
++#include <IOKit/pwr_mgt/IOPMLib.h>
++#include <IOKit/ps/IOPowerSources.h>
++#include <IOKit/ps/IOPSKeys.h>
++#if !TARGET_OS_EMBEDDED
++#include <CoreGraphics/CoreGraphics.h> // CGDisplay
++#else
++#include <dlfcn.h> // IOMobileFramebufferCreateDisplayList
++#endif
++#define kSMCHandleYPCEvent	2
++#define kSMCReadKey		5
++#define kSMCGetKeyInfo		9
++
++typedef UInt32 SMCKey;
++typedef UInt32 SMCDataType;
++typedef UInt8 SMCDataAttributes;
++
++typedef struct SMCVersion {
++  unsigned char major;
++  unsigned char minor;
++  unsigned char build;
++  unsigned char reserved;
++  unsigned short release;
++} SMCVersion;
++
++typedef struct SMCPLimitData {
++  UInt16 version;
++  UInt16 length;
++  UInt32 cpuPLimit;
++  UInt32 gpuPLimit;
++  UInt32 memPLimit;
++} SMCPLimitData;
++
++typedef struct SMCKeyInfoData {
++  UInt32 dataSize;
++  SMCDataType dataType;
++  SMCDataAttributes dataAttributes;
++} SMCKeyInfoData;
++
++typedef struct SMCParamStruct {
++  SMCKey key;
++  struct SMCParam {
++    SMCVersion vers;
++    SMCPLimitData pLimitData;
++    SMCKeyInfoData keyInfo;
++
++    UInt8 result;
++    UInt8 status;
++
++    UInt8 data8;
++    UInt32 data32;
++    UInt8 bytes[120];
++  } param;
++} SMCParamStruct;
++
++#else
++/* stub */
++typedef int CFArrayRef;
++typedef int CFBooleanRef;
++#endif
++
++#include <glib.h>
++#include <glib-object.h>
++
++G_BEGIN_DECLS
++
++#define UP_TYPE_PMGR_NATIVE		(up_pmgr_native_get_type ())
++#define UP_PMGR_NATIVE(o)		(G_TYPE_CHECK_INSTANCE_CAST ((o), UP_TYPE_PMGR_NATIVE, UpPmgrNative))
++#define UP_PMGR_NATIVE_CLASS(k)		(G_TYPE_CHECK_CLASS_CAST((k), UP_TYPE_PMGR_NATIVE, UpPmgrNativeClass))
++#define UP_IS_PMGR_NATIVE(o)		(G_TYPE_CHECK_INSTANCE_TYPE ((o), UP_TYPE_PMGR_NATIVE))
++#define UP_IS_PMGR_NATIVE_CLASS(k)	(G_TYPE_CHECK_CLASS_TYPE ((k), UP_TYPE_PMGR_NATIVE))
++#define UP_PMGR_NATIVE_GET_CLASS(o)	(G_TYPE_INSTANCE_GET_CLASS ((o), UP_TYPE_PMGR_NATIVE, UpPmgrNativeClass))
++
++typedef struct
++{
++	GObject	parent;
++	gchar*	path;
++} UpPmgrNative;
++
++typedef struct
++{
++	GObjectClass	parent_class;
++} UpPmgrNativeClass;
++
++
++// XX in .c ?
++//GType up_pmgr_native_get_type (void);
++//G_DEFINE_TYPE (UpPmgrNative, up_pmgr_native, G_TYPE_OBJECT)
++
++UpPmgrNative* up_pmgr_native_new (const char*);
++const gchar * up_pmgr_native_get_path(UpPmgrNative*);
++gboolean up_native_has_battery();
++gboolean up_native_get_smc_data(UInt32, void *);
++G_END_DECLS
++
++#endif
