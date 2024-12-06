@@ -1,0 +1,206 @@
+--- a/compat/getdtablecount.c	1650875113.000000000
++++ b/compat/getdtablecount.c	1733393167.287223836
+@@ -19,6 +19,10 @@
+ #include <glob.h>
+ #include <unistd.h>
+ 
++#ifdef __APPLE__
++#include <mach/mach.h>
++#endif
++
+ #include "compat.h"
+ 
+ void fatal(const char *, ...);
+@@ -39,6 +43,50 @@ getdtablecount(void)
+ 	globfree(&g);
+ 	return (n);
+ }
++#elif defined(HAVE_LIBPROC_H)
++#include <libproc.h>
++
++int
++getdtablecount(void)
++{
++	pid_t pid;
++	struct proc_bsdinfo bsdinfo;
++	struct proc_fdinfo *fds;
++	int nfiles;
++	kern_return_t kres;
++	int res;
++	size_t fds_size;
++
++	kres = pid_for_task(mach_task_self(), &pid);
++	if (kres != KERN_SUCCESS) {
++		fatal("pid_for_task failed");
++		return -1;
++	}
++
++	res = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsdinfo, PROC_PIDTBSDINFO_SIZE);
++	if (res <= 0) {
++		fatal("proc_pidinfo with PROC_PIDTBSDINFO failed");
++		return -1;
++	}
++
++	fds_size = bsdinfo.pbi_nfiles * sizeof(struct proc_fdinfo);
++	fds = malloc(fds_size);
++	if (fds == NULL) {
++		fatal("could not allocate space for file descriptors");
++		return -1;
++	}
++
++	res = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, fds_size);
++	if (res <= 0) {
++		free(fds);
++		fatal("proc_pidinfo failed for PROC_PIDLISTFDS");
++		return -1;
++	}
++	nfiles = res / sizeof(struct proc_fdinfo);
++	free(fds);
++
++	return nfiles;
++}
+ #else
+ int
+ getdtablecount(void)
+--- a/compat/queue.h	1733393318.375905281
++++ b/compat/queue.h	1733393056.222310306
+@@ -51,6 +51,10 @@
+ } while (0)
+ #    endif
+ #  endif
++
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wmacro-redefined"
++
+ #endif
+ 
+ #ifndef	_COMPAT_QUEUE_H_
+@@ -551,4 +555,6 @@ struct {								\
+ 	}								\
+ } while (0)
+ 
++#pragma clang diagnostic pop
++
+ #endif	/* !_COMPAT_QUEUE_H_ */
+--- a/compat/setproctitle.c	1713168414.000000000
++++ b/compat/setproctitle.c	1733391507.883805114
+@@ -45,6 +45,78 @@ setproctitle(const char *fmt, ...)
+ 	}
+ 	prctl(PR_SET_NAME, name);
+ }
++#elif defined(__APPLE__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__FreeBSD__)
++/* stolen from OpenSSH */
++static char *argv_start = NULL;
++static size_t argv_env_len = 0;
++
++void
++compat_init_setproctitle(int argc, char *argv[])
++{
++	extern char **environ;
++	char *lastargv = NULL;
++	char **envp = environ;
++	int i;
++
++	if (argc == 0 || argv[0] == NULL)
++		return;
++
++	for (i = 0; envp[i] != NULL; i++)
++		;
++	if ((environ = calloc(i + 1, sizeof(*environ))) == NULL) {
++		environ = envp;	/* put it back */
++		return;
++	}
++
++	for (i = 0; i < argc; i++) {
++		if (lastargv == NULL || lastargv + 1 == argv[i])
++			lastargv = argv[i] + strlen(argv[i]);
++	}
++	for (i = 0; envp[i] != NULL; i++) {
++		if (lastargv + 1 == envp[i])
++			lastargv = envp[i] + strlen(envp[i]);
++	}
++
++	argv[1] = NULL;
++	argv_start = argv[0];
++	argv_env_len = lastargv - argv[0] - 1;
++
++	for (i = 0; envp[i] != NULL; i++)
++		environ[i] = strdup(envp[i]);
++	environ[i] = NULL;
++}
++
++void
++setproctitle(const char *fmt, ...)
++{
++	va_list ap;
++	char buf[1024], ptitle[1024];
++	size_t len = 0;
++	int r;
++	extern char *__progname;
++
++	if (argv_env_len <= 0)
++		return;
++
++	strlcpy(buf, __progname, sizeof(buf));
++
++	r = -1;
++	va_start(ap, fmt);
++	if (fmt != NULL) {
++		len = strlcat(buf, ": ", sizeof(buf));
++		if (len < sizeof(buf))
++			r = vsnprintf(buf + len, sizeof(buf) - len , fmt, ap);
++	}
++	va_end(ap);
++	if (r == -1 || (size_t)r >= sizeof(buf) - len)
++		return;
++	strnvis(ptitle, buf, sizeof(ptitle),
++	    VIS_CSTYLE|VIS_NL|VIS_TAB|VIS_OCTAL);
++
++	len = strlcpy(argv_start, ptitle, argv_env_len);
++	for(; len < argv_env_len; len++)
++		argv_start[len] = '\0';
++}
+ #else
+ void
+ setproctitle(__unused const char *fmt, ...)
+--- a/compat.h	1733393315.313060915
++++ b/compat.h	1733391551.730806607
+@@ -377,6 +377,7 @@ const char	*getprogname(void);
+ #ifndef HAVE_SETPROCTITLE
+ /* setproctitle.c */
+ void		 setproctitle(const char *, ...);
++void		 compat_init_setproctitle(int argc, char *argv[]);
+ #endif
+ 
+ #ifndef HAVE_CLOCK_GETTIME
+--- a/tmux.c	1728107827.000000000
++++ b/tmux.c	1733391786.331888011
+@@ -346,6 +346,10 @@ getversion(void)
+ 	return (TMUX_VERSION);
+ }
+ 
++#ifndef HAVE_SETPROCTITLE
++static char **saved_argv;
++#endif
++
+ int
+ main(int argc, char **argv)
+ {
+@@ -369,6 +373,17 @@ main(int argc, char **argv)
+ 	setlocale(LC_TIME, "");
+ 	tzset();
+ 
++#ifndef HAVE_SETPROCTITLE
++	/* Prepare for later setproctitle emulation */
++	/* Save argv so it isn't clobbered by setproctitle() emulation */
++	saved_argv = xcalloc(argc + 1, sizeof(*saved_argv));
++	for (i = 0; i < argc; i++)
++		saved_argv[i] = xstrdup(argv[i]);
++	saved_argv[i] = NULL;
++	compat_init_setproctitle(argc, argv);
++	argv = saved_argv;
++#endif
++
+ 	if (**argv == '-')
+ 		flags = CLIENT_LOGIN;
+ 

@@ -1,0 +1,40 @@
+--- a/compat.h	1727858507.000000000
++++ b/compat.h	1733387189.457123190
+@@ -294,6 +294,14 @@ int		 getdtablecount(void);
+ int		 getdtablesize(void);
+ #endif
+ 
++#ifndef PATH_MAX
++#define PATH_MAX 4096
++#endif
++
++#ifndef IOV_MAX
++#define IOV_MAX	1024
++#endif
++
+ #ifndef HAVE_CLOSEFROM
+ /* closefrom.c */
+ void		 closefrom(int);
+--- a/input.c	1728107827.000000000
++++ b/input.c	1733387190.083502836
+@@ -1349,7 +1349,7 @@ input_csi_dispatch(struct input_ctx *ict
+ 	struct screen_write_ctx	       *sctx = &ictx->ctx;
+ 	struct screen		       *s = sctx->s;
+ 	struct input_table_entry       *entry;
+-	int				i, n, m, ek;
++	int				i, n, m, ek, set;
+ 	u_int				cx, bg = ictx->cell.cell.bg;
+ 
+ 	if (ictx->flags & INPUT_DISCARD)
+@@ -1596,6 +1596,11 @@ input_csi_dispatch(struct input_ctx *ict
+ 		if (~ictx->flags & INPUT_LAST)
+ 			break;
+ 
++		set = ictx->cell.set == 0 ? ictx->cell.g0set : ictx->cell.g1set;
++		if (set == 1)
++			ictx->cell.cell.attr |= GRID_ATTR_CHARSET;
++		else
++			ictx->cell.cell.attr &= ~GRID_ATTR_CHARSET;
+ 		utf8_copy(&ictx->cell.cell.data, &ictx->last);
+ 		for (i = 0; i < n; i++)
+ 			screen_write_collect_add(sctx, &ictx->cell.cell);
