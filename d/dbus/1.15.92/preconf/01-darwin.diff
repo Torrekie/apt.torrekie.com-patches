@@ -1,0 +1,376 @@
+--- a/bus/org.freedesktop.dbus-session.plist.in	1733923674.000000000
++++ b/bus/org.freedesktop.dbus-session.plist.in	1734261343.559490236
+@@ -5,15 +5,8 @@
+ 	<key>Label</key>
+ 	<string>org.freedesktop.dbus-session</string>
+ 
+-	<key>ServiceIPC</key>
+-	<true/>
+-
+-	<!-- Please uncomment on 10.4; OnDemand doesn't work properly there. -->
+-	<!--
+-	<key>OnDemand</key>
+-	<false />
+-	-->
+-
++	<key>Program</key>
++	<string>@DBUS_DAEMONDIR@/dbus-daemon</string>
+ 	<key>ProgramArguments</key>
+ 	<array>
+ 		<string>@DBUS_DAEMONDIR@/dbus-daemon</string>
+@@ -21,6 +14,25 @@
+ 		<string>--session</string>
+ 	</array>
+ 
++	<key>HardResourceLimits</key>
++	<dict>
++		<key>MemoryLock</key>
++		<integer>67092480</integer>
++		<key>NumberOfProcesses</key>
++		<integer>2000</integer>
++		<key>NumberOfFiles</key>
++		<integer>12288</integer>
++	</dict>
++
++	<!-- Compat env -->
++	<key>EnvironmentVariables</key>
++	<dict>
++		<key>DBUS_SESSION_SOCKET_DIR</key>
++		<string>/tmp</string>
++	</dict>
++
++	<!-- Finally I decided to use unix:tmpdir by default since nobody in D-Bus is using Darwin -->
++	<!-- But keep this anyway -->
+ 	<key>Sockets</key>
+ 	<dict>
+ 		<key>unix_domain_listener</key>
+--- a/bus/system.conf.in	1733923674.000000000
++++ b/bus/system.conf.in	1734248204.682493763
+@@ -26,9 +26,6 @@
+   <!-- This is a setuid helper that is used to launch system services -->
+   <servicehelper>@DBUS_LIBEXECDIR@/dbus-daemon-launch-helper</servicehelper>
+ 
+-  <!-- Write a pid file -->
+-  <pidfile>@DBUS_SYSTEM_PID_FILE@</pidfile>
+-
+   <!-- Enable logging to syslog -->
+   <syslog/>
+ 
+--- a/dbus/dbus-server-launchd.c	1733923674.000000000
++++ b/dbus/dbus-server-launchd.c	1734248284.614250828
+@@ -84,8 +84,19 @@ _dbus_server_new_for_launchd (const char
+ 
+     if (launchd_socket_path == NULL || *launchd_socket_path == '\0')
+       {
+-        dbus_set_error (error, DBUS_ERROR_BAD_ADDRESS,
+-                        "launchd's environment variable %s is empty, but should contain a socket path.\n", launchd_env_var);
++        if (strcmp (launchd_env_var, "DBUS_LAUNCHD_SESSION_BUS_SOCKET") != 0)
++          {
++            _dbus_warn ("launchd's environment variable %s is empty, fallback to DBUS_LAUNCHD_SESSION_BUS_SOCKET. "
++                        "This is a deprecated behavior, you should avoid relying on this.\n", launchd_env_var);
++            launchd_socket_path = _dbus_getenv ("DBUS_LAUNCHD_SESSION_BUS_SOCKET");
++          }
++
++        // Torrekie: Why not just use goto?
++        if (launchd_socket_path == NULL || *launchd_socket_path == '\0')
++          {
++            dbus_set_error (error, DBUS_ERROR_BAD_ADDRESS,
++                            "launchd's environment variable %s is empty, but should contain a socket path.\n", launchd_env_var);
++          }
+         return NULL;
+       }
+ 
+--- a/dbus/dbus-sysdeps-unix.c	1733923674.000000000
++++ b/dbus/dbus-sysdeps-unix.c	1734259054.731164959
+@@ -102,6 +102,10 @@
+ #include <pthread.h>
+ #endif
+ 
++#ifdef __APPLE__
++#include <libgen.h>
++#endif
++
+ #ifndef O_BINARY
+ #define O_BINARY 0
+ #endif
+@@ -1247,6 +1251,79 @@ _dbus_listen_unix_socket (const char
+           return s;
+         }
+ 
++#ifdef __APPLE__
++      /* Once we chosen to use unix:path=, we had to ensure the parent
++       * directory is exist, if not, create it then
++       */
++      {
++        struct stat sb;
++        char *ipc_dir = dirname ((char *)path);
++
++        if (stat (ipc_dir, &sb) < 0 && errno == ENOENT)
++          {
++            if (mkdir (ipc_dir, S_ISVTX | S_IRWXO | S_IRWXG | S_IRWXU) != 0)
++              {
++                dbus_set_error (error, _dbus_error_from_errno (errno),
++                                "Failed to create socket dir \"%s\": %s",
++                                ipc_dir, _dbus_strerror (errno));
++                _dbus_close (listen_fd, NULL);
++                return s;
++              }
++          }
++        /* Change path owner if we are doing dbus-system, current stage
++         * we only handle predefined DBUS_SYSTEM_SOCKET
++         */
++        if (geteuid () == 0 &&
++            stat (ipc_dir, &sb) == 0 &&
++            strcmp ((const char *) dirname (DBUS_SYSTEM_SOCKET), ipc_dir) == 0)
++          {
++            struct passwd *pwd = dbus_malloc (sizeof (struct passwd));
++            if (pwd == NULL)
++              {
++                dbus_set_error (error, DBUS_ERROR_NO_MEMORY,
++                                "Failed to allocate password file entry");
++                _dbus_close (listen_fd, NULL);
++                return s;
++              }
++            size_t buffer_len = sysconf (_SC_GETPW_R_SIZE_MAX) * sizeof (char);
++            char *buffer = dbus_malloc (buffer_len);
++            if (buffer == NULL)
++              {
++                dbus_set_error (error, DBUS_ERROR_NO_MEMORY,
++                                "Failed to allocate buffer");
++                _dbus_close (listen_fd, NULL);
++                return s;
++              }
++            if (getpwnam_r (DBUS_USER, pwd, buffer, buffer_len, &pwd) != 0)
++              {
++                dbus_set_error (error, _dbus_error_from_errno (errno),
++                                "Failed to get UID/GID of system bus user \"%s\": %s",
++                                DBUS_USER, _dbus_strerror (errno));
++                _dbus_close (listen_fd, NULL);
++                return s;
++              }
++            if (!pwd)
++              {
++                dbus_set_error (error, DBUS_ERROR_FAILED,
++                                "Message bus user \"%s\" does not exist",
++                                DBUS_USER);
++                _dbus_close (listen_fd, NULL);
++                return s;
++              }
++            if ((sb.st_uid != pwd->pw_uid || sb.st_gid != pwd->pw_gid) &&
++                chown (ipc_dir, pwd->pw_uid, pwd->pw_gid) != 0)
++              {
++                dbus_set_error (error, _dbus_error_from_errno (errno),
++                                "Failed to change owner of socket directory \"%s\": %s",
++                                ipc_dir, _dbus_strerror (errno));
++                _dbus_close (listen_fd, NULL);
++                return s;
++              }
++            dbus_free (pwd);
++            dbus_free (buffer);
++          }
++      }
++#endif
+       strncpy (addr.sun_path, path, sizeof (addr.sun_path) - 1);
+     }
+ 
+@@ -2472,6 +2549,19 @@ _dbus_read_credentials_socket  (DBusSock
+      */
+     uid_t euid;
+     gid_t egid;
++#if defined(LOCAL_PEERPID)
++    pid_t pid;
++    socklen_t pid_len = sizeof (pid);
++    if (getsockopt (client_fd.fd, SOL_SOCKET, LOCAL_PEERPID, &pid, &pid_len) == 0 ||
++        getsockopt (client_fd.fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &pid_len))
++      {
++        pid_read = pid;
++      }
++    else
++      {
++        _dbus_verbose ("Failed to getsockopt(LOCAL_PEERPID): %s\n", _dbus_strerror (errno));
++      }
++#endif
+     if (getpeereid (client_fd.fd, &euid, &egid) == 0)
+       {
+         uid_read = euid;
+@@ -2492,7 +2582,8 @@ _dbus_read_credentials_socket  (DBusSock
+ #if defined(__FreeBSD__) || defined(__FreeBSD_kernel__) || \
+     defined(__linux__) || \
+     defined(__OpenBSD__) || \
+-    defined(__NetBSD__)
++    defined(__NetBSD__) || \
++    defined(__APPLE__)
+ # error Credentials passing not working on this OS is a regression!
+ #endif
+ 
+--- a/dbus/dbus-sysdeps-util-unix.c	1733923674.000000000
++++ b/dbus/dbus-sysdeps-util-unix.c	1734259932.928016815
+@@ -54,6 +54,7 @@
+ #include <sys/socket.h>
+ #include <dirent.h>
+ #include <sys/un.h>
++#include <sys/sysctl.h>
+ 
+ #ifdef HAVE_SYS_PRCTL_H
+ #include <sys/prctl.h>
+@@ -1111,6 +1112,7 @@ _dbus_command_for_pid (unsigned long  pi
+                        int            max_len,
+                        DBusError     *error)
+ {
++#ifdef __linux__
+   /* This is all Linux-specific for now */
+   DBusString path;
+   DBusString cmdline;
+@@ -1128,7 +1130,7 @@ _dbus_command_for_pid (unsigned long  pi
+       _dbus_string_free (&path);
+       return FALSE;
+     }
+-  
++
+   if (!_dbus_string_append_printf (&path, "/proc/%ld/cmdline", pid))
+     goto oom;
+   
+@@ -1156,7 +1158,7 @@ _dbus_command_for_pid (unsigned long  pi
+   
+   if (!_dbus_close (fd, error))
+     goto fail;
+-  
++
+   string_squash_nonprintable (&cmdline);  
+ 
+   if (!_dbus_string_copy (&cmdline, 0, str, _dbus_string_get_length (str)))
+@@ -1171,6 +1173,77 @@ fail:
+   _dbus_string_free (&cmdline);
+   _dbus_string_free (&path);
+   return FALSE;
++#elif defined(__APPLE__)
++  DBusString cmdline;
++  int mib[3] = {CTL_KERN, KERN_ARGMAX, 0};
++  int nargs, argmax, c = 0;
++  char *args;
++  char *np, *sp, *cp;
++  size_t size = sizeof (argmax);
++
++  if (sysctl (mib, 2, &argmax, &size, NULL, 0) != 0)
++    argmax = max_len; /* fallback */
++  if ((args = malloc (argmax)) == NULL)
++    goto oom;
++
++  memset(args, 0, argmax);
++
++  mib[1] = KERN_PROCARGS2;
++  mib[2] = (pid_t)pid;
++  size = (size_t)argmax;
++  if (sysctl (mib, 3, args, &size, NULL, 0) == 0)
++    {
++      memcpy (&nargs, args, sizeof (nargs));
++      cp = args + sizeof (nargs);
++
++      for (; cp < &args[size]; cp++)
++        if (*cp == '\0') break;
++
++      if (cp == &args[size]) goto done;
++
++      sp = cp;
++
++      for (np = NULL; c < nargs && cp < &args[size]; cp++)
++        {
++          if (*cp == '\0')
++            {
++              c++;
++              if (np != NULL)
++                *np = ' ';
++              np = cp;
++            }
++        }
++      if (np == NULL || np == sp)
++        goto done;
++
++      _dbus_string_init_const (&cmdline, (const char *) strdup (sp));
++
++      free (args);
++      string_squash_nonprintable (&cmdline);
++
++      if (!_dbus_string_copy (&cmdline, 0, str, _dbus_string_get_length (str)))
++        goto done;
++
++      _dbus_string_free (&cmdline);
++      return TRUE;
++    }
++  else
++    {
++      dbus_set_error (error,
++                      _dbus_error_from_errno (errno),
++                      "Failed to get sysctl(KERN_PROCARGS2): %s",
++                      _dbus_strerror (errno));
++    }
++
++done:
++  if (args) free (args);
++oom:
++  _DBUS_SET_OOM (error);
++  return FALSE;
++#else
++#warning _dbus_command_for_pid() not implemented on this OS!
++  return FALSE;
++#endif
+ }
+ 
+ /**
+@@ -1496,6 +1569,9 @@ _dbus_get_local_system_servicedirs (DBus
+ {
+   static const char standard_search_path[] =
+     "/etc:"
++#ifdef __APPLE__
++    "/var"
++#endif
+     "/run";
+   DBusString servicedir_path;
+ 
+--- a/meson.build	1733923674.000000000
++++ b/meson.build	1734259274.079636111
+@@ -149,7 +149,8 @@ if platform_windows
+     data_config.set('DBUS_VER_ORIGINAL_NAME', 'libdbus-1-@0@.dll'   .format(soversion))
+ endif
+ 
+-if platform_windows
++# Torrekie: We are doing this for non macOS
++if platform_windows or host_os.contains('darwin')
+     conf_maybe_external = '<!--<auth>EXTERNAL</auth>-->'
+ else
+     conf_maybe_external = '<auth>EXTERNAL</auth>'
+@@ -908,7 +909,11 @@ runstatedir = get_option('runtime_dir')
+ 
+ if runstatedir == ''
+     if get_option('prefix') == '/usr'
+-        runstatedir = '/run'
++        if host_os.contains('darwin')
++            runstatedir = '/var/run'
++        else
++            runstatedir = '/run'
++        endif
+     else
+         runstatedir = get_option('localstatedir') / 'run'
+     endif
+@@ -966,6 +971,7 @@ if platform_unix and build_machine.syste
+ endif
+ 
+ data_config.set('DBUS_SYSTEM_SOCKET', system_socket)
++config.set_quoted('DBUS_SYSTEM_SOCKET', system_socket)
+ 
+ ## System bus only listens on local domain sockets, and never
+ ## on an abstract socket (so only root can create the socket).
+@@ -1083,9 +1089,10 @@ if session_bus_listen_address == ''
+         # On Windows, you can (and should) listen on autolaunch addresses,
+         # because autolaunching is not the same as X11 autolaunching.
+         session_bus_listen_address = 'autolaunch:'
+-    elif use_launchd
+-        # macOS default is to use launchd
+-        session_bus_listen_address = 'launchd:env=DBUS_LAUNCHD_SESSION_BUS_SOCKET'
++# Torrekie: I believe this is still buggy, fallback to general method
++#    elif use_launchd
++#        # macOS default is to use launchd
++#        session_bus_listen_address = 'launchd:env=DBUS_LAUNCHD_SESSION_BUS_SOCKET'
+     else
+         # The default on all other Unix platforms (notably Linux)
+         # is to create a randomly named socket in /tmp or similar
