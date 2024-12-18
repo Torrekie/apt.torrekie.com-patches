@@ -1,0 +1,41 @@
+--- a/main.c	1729828271.000000000
++++ b/main.c	1734511281.633418031
+@@ -35,9 +35,6 @@
+ #include <getopt.h>
+ #include <limits.h> /* INT_MAX */
+ #include <locale.h> /* set_locale() */
+-#if HAVE_SANDBOX_INIT
+-# include <sandbox.h>
+-#endif
+ #include <stdio.h>
+ #include <stdint.h>
+ #include <stdlib.h>
+@@ -73,28 +70,6 @@ sandbox_pre(void)
+ 		err(1, "pledge");
+ }
+ 
+-#elif HAVE_SANDBOX_INIT
+-
+-static void
+-sandbox_post(int fdin, int fddin, int fdout)
+-{
+-	char	*ep;
+-	int	 rc;
+-
+-	rc = sandbox_init
+-		(kSBXProfilePureComputation,
+-		 SANDBOX_NAMED, &ep);
+-	if (rc != 0)
+-		errx(1, "sandbox_init: %s", ep);
+-}
+-
+-static void
+-sandbox_pre(void)
+-{
+-
+-	/* Do nothing. */
+-}
+-
+ #elif HAVE_CAPSICUM
+ 
+ static void

@@ -1,0 +1,10 @@
+--- a/lowdown.in.pc
++++ b/lowdown.in.pc
+@@ -8,6 +8,7 @@ Description: simple markdown translator
+ URL: https://kristaps.bsd.lv/lowdown
+ Version: @VERSION@
+ Requires:
++Requires.private: libmd
+ Libs.private: 
+ Libs: -L${libdir} -llowdown -lm
+ Cflags: -I${includedir}

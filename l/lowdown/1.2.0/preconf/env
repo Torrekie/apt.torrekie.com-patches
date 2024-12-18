@@ -1,0 +1,4 @@
+PREFIX=/usr
+MANDIR=/usr/share/man
+LIBDIR=/usr/lib
+LINKER_SONAME=-install_name
